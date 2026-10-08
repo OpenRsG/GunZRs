@@ -59,6 +59,8 @@ builds Linux, Windows and macOS, but nobody has played it on Windows or macOS ye
 | Esc | Pause menu (resume, sensitivity, main menu, quit) |
 | T, F5-F9 | Taunt, emotes (bow, wave, cry, laugh, dance) |
 | F | Blitzkrieg upgrade panel (Up/Down, Enter buys) |
+| M | Blitzkrieg minimap on / off |
+| 1-6, arrows, Enter | Blitzkrieg class screen at the start of the match (30 s; click works too) |
 
 Dead in a round mode? Space or click cycles the player you spectate.
 
@@ -80,12 +82,13 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera |
-| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy, blitzkrieg, training |
-| Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards |
-| Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons) and state-machine AI |
-| Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs), weapon choice by range, guarding, butterfly, grenade throws, pickups, retreating, skill level |
+| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy (with tracker pings and spy items), blitzkrieg (classes, upgrades, minimap, announcer, rewards), clan war, training |
+| Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
+| Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards; sacrifice items unlock special scenarios, a random dice roll picks the route, quest items stay in your inventory, level limits and challenge time bonuses |
+| Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
+| Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs), weapon choice by range, guarding, butterfly, grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
-| Menus and HUD | Main menu with 3D character preview, scoreboard, kill feed, damage indicators, decals, end-of-match screen with XP and bounty earned |
+| Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, kill feed, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned |
 | Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades |
 
 ### Not done yet
@@ -93,12 +96,12 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Area | State |
 |---|---|
 | Online multiplayer | Not started; every match is local, with bots as the other players |
-| Clans | Need a server; skipped |
-| Blitzkrieg extras | The six classes, medals, minimap and announcer sounds are missing; the match is won by destroying the enemy radar |
-| Quest extras | Sacrifice items, random dice rolls and the Dungeon survival are missing |
+| Online clans | Clan chat, invitations, the war lobby and matchmaking need a server; rival clans are generated bots that never play each other |
+| Blitzkrieg extras | The six classes are playable, but the data has no class names, icons or weapons, so card texts and class guns are the port's guesses; three more stat rows (Hunter, Slaughter, Trickster) have no class book and are left out; medals show on the reward screen but are not stored |
+| Quest extras | Rental drops, the gacha reward item and quest-item selling are missing; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon uses a guessed skeleton set (the data has none) |
 | Music choice | The data does not say which track belongs to which map; the port picks one per map (fixed, by name) |
-| Korean-only names | 22 monster names exist only in Korean; the HUD font cannot draw them, so the model name shows instead |
-| Bots on Mansion | The top floors have no stairs in the collision, so bots never reach them |
+| Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
+| Bots on Mansion | The top floors are reachable only by one wall run up a pillar corner that needs about 5 cm precision; bots cannot do it reliably, so they never go up there |
 | Exact feel | Run speed, jump height, gravity and several timings are not in the data; they are estimates (listed as **inferred** in `docs/formats.md`) |
 
 ## More tools
@@ -117,9 +120,9 @@ cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked 
 <summary>All <code>gunz-play</code> options</summary>
 
 `--char man|woman`, `--outfit N`, `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
-`--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|training`,
-`--mode quest --scenario NAME [--dice N]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
-`"Challenge 101"`, `"Survival Prison"`), `--time-limit S`, `--kill-limit N` (0 = none),
+`--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|clanwar|training`,
+`--mode quest --scenario NAME [--dice N] [--sacrifice A,B]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
+`"Challenge 101"`, `"Survival Prison"`; without `--dice` the die is rolled), `--time-limit S`, `--kill-limit N` (0 = none),
 `--respawn S`, `--protect S`, `--round-time S`, `--ready S`. A match ends at the time or
 kill/round limit (defaults per mode from `gametypecfg.xml`) with victory, defeat or draw.
 

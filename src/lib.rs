@@ -5,6 +5,7 @@ pub mod audio;
 pub mod blitz;
 pub mod bot;
 pub mod character;
+pub mod clan;
 pub mod col;
 pub mod combat;
 pub mod effect;

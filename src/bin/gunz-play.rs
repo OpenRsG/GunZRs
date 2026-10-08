@@ -26,14 +26,21 @@
 //! `blitzkrieg` plays the map `blitzkrieg` only: soldiers march along the lanes, destroy the
 //! enemy barricades and radar; `F` opens the honor upgrade panel (Up/Down, Enter buys); the time
 //! limit is optional, headless checks may set `GUNZ_BLITZ_BUY=SECS:N,..` and `GUNZ_BLITZ_HP=K`.
+//! `clanwar` (retail game type 22, needs a clan made in the menu's CLAN tab): the clan and three
+//! bot members against a rival clan, 4 against 4, rounds; the kill limit counts round wins (3);
+//! the clan's points change when the match ends (`docs/formats.md`, "Clans").
 //! Rules (not in the menu): `--respawn S` (seconds dead before the respawn, default 5),
 //! `--protect S` (spawn protection, default 3), `--round-time S` (round limit, default 180),
 //! `--ready S` (countdown before a round, default 3).
-//! Quest: `--mode quest --scenario NAME [--dice N] [--bots N]` plays a retail quest (no MAP: the
-//! scenario's first sector is the map). NAME is a scenario title (`"Quest Mansion QL0"`,
+//! Quest: `--mode quest --scenario NAME [--dice N] [--sacrifice A,B] [--bots N]` plays a retail quest
+//! (no MAP: the scenario's first sector is the map). NAME is a scenario title (`"Quest Mansion QL0"`,
 //! `"Goblin King"`), `"Challenge 101"`, `"Survival Prison"` or a special id / challenge id;
-//! `--dice` picks the scenario's `<MAP dice>` (default the last, the longest route); the bots are
-//! allies. Clear a sector, then walk into its portal (or wait 30 s); see `docs/formats.md`, "Quest".
+//! `--dice` picks the scenario's `<MAP dice>` (default: rolled, 1..6; `GUNZ_SEED=N` fixes the roll
+//! and the NPC picks, headless runs use seed 1); `--sacrifice A,B` puts quest items from the
+//! profile into the two sacrifice slots (a special scenario's two items switch to it; standard
+//! quests of level 2+ need their Torn Page; the start spends them; `GUNZ_PROFILE=PATH` holds the
+//! items); the bots are allies. Clear a sector, then walk into its portal (or wait 30 s); see
+//! `docs/formats.md`, "Quest".
 //!
 //! Headless, reproducible runs (never opens a window):
 //! `gunz-play GAME_DIR [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z]
@@ -44,7 +51,7 @@
 //! degrees (0 = -Z, positive turns left), `--hp`/`--ap` the starting health/armour,
 //! `--pause-at` opens the pause menu when the match clock reaches S seconds, `--die-at` kills
 //! the player then (the match clock starts with the first frame, 1.5 s before the script).
-//! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player` picks the
+//! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player|shop|inventory|clan` picks the
 //! screen and the options above set what it shows.
 //! `--npc NAME[,NAME..]` spawns quest monsters (`system/npc.xml` ids such as `11`, `16`, or
 //! `npc2.xml` names such as `knifeman`, `tower`) in a row in front of the player, `--bots-ahead M`
@@ -70,6 +77,7 @@ use gunz::{
     menu::{self, Config, Mode, Page, take_arg},
     modes::DieAt,
     mrs::Vfs,
+    profile::Profile,
     quest::{Catalog, Quest},
     session::{EXIT_AGAIN, EXIT_MENU, PauseAt, Rules, StartVitals},
     view::{self, SCALE, Shot, to_bevy},
@@ -103,16 +111,49 @@ fn relaunch(game: &str, config: &Config, menu: bool) -> AppExit {
     AppExit::from_code(1)
 }
 
+/// Admits and plans the scenario `config` names, spends its sacrifice from the profile and
+/// returns the quest; `config.scenario` becomes the scenario actually played.
+fn start_quest(vfs: &Vfs, config: &mut Config, headless: bool) -> Result<Quest, String> {
+    let cat = Catalog::load(vfs).map_err(|e| format!("quest data: {e}"))?;
+    let mut profile = Profile::open(headless);
+    let name = config.scenario.as_deref();
+    let ok = cat.admit(
+        name,
+        config.sacrifice,
+        &profile.quest_items,
+        profile.level(),
+    )?;
+    if !ok.spend.is_empty() {
+        let names: Vec<_> = ok.spend.iter().map(|&i| cat.items.name(i)).collect();
+        println!("quest: sacrificed {}", names.join(" + "));
+        profile.spend_quest_items(&ok.spend);
+        profile.save();
+    }
+    // random from the clock; headless runs stay reproducible unless GUNZ_SEED says otherwise
+    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let seed = std::env::var("GUNZ_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(if headless {
+            1
+        } else {
+            clock.map_or(1, |t| t.subsec_nanos())
+        });
+    let plan = cat.plan(&ok.scenario, config.dice, seed)?;
+    config.scenario = Some(ok.scenario);
+    Quest::new(vfs, &cat, plan, config.bots, seed)
+}
+
 fn main() -> AppExit {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg]\n       \
+             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S]\n       \
-             [--mode quest --scenario NAME [--dice N]]\n       \
+             [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
-             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory] [--npc NAME[,NAME..]]\n\
+             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory|clan] [--npc NAME[,NAME..]]\n\
              (see the doc comment of src/bin/gunz-play.rs)"
         );
         AppExit::from_code(2)
@@ -149,9 +190,6 @@ fn main() -> AppExit {
     ) else {
         return usage();
     };
-    let Ok(dice) = take_arg::<u32>(&mut args, "--dice") else {
-        return usage();
-    };
     let mut config = match Config::parse(&mut args, shot.is_some()) {
         Ok(c) => c,
         Err(e) => {
@@ -183,21 +221,27 @@ fn main() -> AppExit {
     };
     let vfs = Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
     // Quest mode plays a scenario's sectors in turn: its first sector is the map. Without a
-    // scenario (or MAP) the menu picks one.
-    let quest = (config.mode == Mode::Quest && (config.scenario.is_some() || !args.is_empty()))
-        .then(|| {
-            let cat = Catalog::load(&vfs).unwrap_or_else(|e| panic!("quest data: {e}"));
-            let name = config
-                .scenario
-                .clone()
-                .unwrap_or_else(|| cat.names().remove(0));
-            let plan = cat.plan(&name, dice, 1).unwrap_or_else(|e| {
+    // scenario (or MAP) the menu picks one; `--menu-page` always shows the menu.
+    let wanted = page.is_none()
+        && (config.scenario.is_some() || config.sacrifice != [0; 2] || !args.is_empty());
+    let quest = if config.mode == Mode::Quest && wanted {
+        match start_quest(&vfs, &mut config, shot.is_some()) {
+            Ok(q) => Some(q),
+            Err(e) => {
                 eprintln!("{e}");
-                std::process::exit(2)
-            });
-            config.scenario = Some(name);
-            Quest::new(&vfs, plan, config.bots, 1).unwrap_or_else(|e| panic!("quest data: {e}"))
-        });
+                if shot.is_some() {
+                    return AppExit::from_code(2);
+                }
+                // e.g. "Play again" without the offering left: the menu says what is missing
+                return match menu::run(vfs, config, Page::Match, None) {
+                    Some(chosen) => relaunch(&game, &chosen, false),
+                    None => AppExit::Success,
+                };
+            }
+        }
+    } else {
+        None
+    };
     let first = quest.as_ref().map(|q| q.first_map().to_owned());
     let Some(map_name) = first.clone().or_else(|| args.first().cloned()) else {
         // No MAP: the main menu; Start leaves the choice behind, then the game starts.
@@ -256,11 +300,11 @@ fn main() -> AppExit {
     rules.protect = protect.unwrap_or(rules.protect);
     rules.round_secs = round_time.unwrap_or(rules.round_secs);
     rules.ready = ready.unwrap_or(rules.ready);
-    // The training range has no bots, only dummies.
-    let bots = if config.mode == Mode::Training {
-        0
-    } else {
-        config.bots
+    // The training range has no bots, only dummies; a clan war is 4 against 4 with the player.
+    let bots = match config.mode {
+        Mode::Training => 0,
+        Mode::ClanWar => 2 * gunz::clan::WAR_SIZE - 1,
+        _ => config.bots,
     };
     if hp.is_some() || ap.is_some() {
         app.insert_resource(StartVitals { hp, ap });

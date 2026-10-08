@@ -634,10 +634,10 @@ ids 15, 16, 18-21 appear nowhere). Status after this round, `--mode` is the CLI/
 | 10 | Duel match | `duel` | done |
 | 11 | Duel tournament (`dueltournament` channel only) | `tournament` | done (knockout bracket, **inferred**) |
 | 12 | Challenge quest | `quest` | the Quest slice |
-| 13 | Blitzkrieg (`GAME_MODE_BLITZKRIEG`, `system/blitzkrieg.xml`, map `blitzkrieg`) | `blitzkrieg` | done (`blitz.rs`; classes, medal / XP rewards and the minimap are not modelled: see below) |
+| 13 | Blitzkrieg (`GAME_MODE_BLITZKRIEG`, `system/blitzkrieg.xml`, map `blitzkrieg`) | `blitzkrieg` | done (`blitz.rs`, `blitz/ui.rs`: six classes, class screen, medal / XP / bounty reward, minimap, announcer; class weapons **inferred**, medals have no currency, see below) |
 | 14 | Spy (`GAME_MODE_SPY`, `spymode.xml`, `spymaplist.xml`) | `spy` | done: spy case, frost bullets, stun grenades and mines (stats **inferred**, see below) |
 | 17 | Gunman (`GAME_MODE_RANDOM_WEAPON`) | `gunman` | done (weapon pool **inferred**) |
-| 22 | clan scrim | - | not offline-meaningful: a match between two clans' teams (3 rounds, 8 players, no time limit); its rules are `elimination --kill-limit 3`, the clan part has no offline counterpart |
+| 22 | clan scrim (`GAMETYPE_CLAN_SCRIM`, "Clan War") | `clanwar` | done offline, see "Clans": 4 against 4 (`MAXPLAYERS` 8), `ROUNDS` 3, no time limit = elimination rounds between the player's clan and a generated rival clan |
 | - | "matching-only" deathmatch / team deathmatch (`GAME_MODE_MATCHING_*`), `league.xml` | - | not offline-meaningful: ranked matchmaking (`league*.xml`: Elo `elo_define`, `leaguekfactorsetting.xml` K = 50 / 30 / 20 by games played, 25 `leaguetier.xml` tiers of 100 points, one league "Classic Elimination": `deathmatch_team`, 5 rounds, 8 players, `team_kill` 0, 30 min, rating gap 300, `leaguemodule.xml` modifiers revolver damage +10 %, revolver ammo +50 %, AP +10 %); played offline it is `elimination --kill-limit 5`, the ladder and modifiers are not modelled |
 
 Not game modes: `mvptable.xml` (17 post-match MVP awards: damage, multi kill, melee dash, jump count, ...)
@@ -737,21 +737,34 @@ Bombs", "Trackers are provided with Stun Grenades and Antipersonnel Mines", "You
 compromised; avoid the Trackers to survive!", "The Spies' locations have been successfully triangulated; you
 must hurry!", "Spy's Identity:", "You will join the game at the start of the next round". **Implemented**:
 rounds; the round time is the map's `limitTime` (`spymaplist.xml` via the `map.xml` id; a map not listed keeps
-180 s, `--round-time` overrides); at round start the spies are drawn; a spy carries the spy case (`BAG`),
+180 s, `--round-time` overrides); the first spies are drawn `selectSpyTime` (10 s) into the match, later rounds
+draw at their start; a spy carries the spy case (`BAG`),
 frost bullets, smoke bombs and flashbangs (counts from the table, HP = AP = `HPAP`) and no conventional
 weapon, a tracker the normal loadout plus `STUN` stun grenades and `MINE` mines; everybody is one team until
-the spies are located one fifth of the round in (nobody can be hurt, stunned or slowed before: bots do not
+the spies are located `spyOpenTime` into the round (the map's row; a fifth of `limitTime` in every row, the same
+ratio is kept when `--round-time` changes it; nobody can be hurt, stunned or slowed before: bots do not
 find the spies early), then the spies turn Blue, get a "[SPY]" tag and both sides see the two retail banners;
+the **triangulation hint** (`spy.rs` `ping`): the tracker player gets a red "name distance" marker per living
+spy, pinned where it stood at the last ping and refreshed every 3 s (**inferred** period: messages 2201/2202
+only say the locations were "triangulated"); a spy off screen sits on the left or right edge; a spy player
+gets no marker (it only hears 2201);
 the trackers win by killing every spy, the spies by surviving to the limit; the round result lists "Spy's
 Identity". The match ends when the player's side has won or lost `--kill-limit` rounds (default 3). **Inferred**:
 the spy draw (ratings start at `DefaultRating`; after a round the last spies drop to `SelectedRating`, the
-rest rise half way to `MaximumRating`; the highest ratings are the next spies, ties by a hash), the
-one-fifth reveal time as a rule for unlisted maps, survive-to-win, the 3 s result screen
-(`RounFinishWaitTime`). **Not implemented**: the triangulated positions are a banner and tag, not a map
-marker; `selectSpyTime` (spies picked 10 s into the match) is not modelled (they are drawn when the round
-starts). Check: `gunz-play GAME Factory --mode spy --bots 3 --skill 1 --round-time 10 --ready 1
---kill-limit 6 --time 120 --script wait:120` logs `round 3: spies ["Player"] of 4`, `spies located`, `SPIES
-win the round`.
+rest rise half way to `MaximumRating`, never below `MinimumRating`; the highest ratings are the next spies,
+ties by a hash), reading `selectSpyTime` as a one-off delay from the start of the match (the file comment
+says spies are picked `selectSpyTime` seconds after the game starts), the one-fifth reveal time for unlisted
+maps, survive-to-win, the 3 s result screen (`RounFinishWaitTime`).
+Attribute status: `BASE minPlayer` used; `SELECT_SPY` `selectSpyTime`, `DefaultRating`, `SelectedRating`,
+`MinimumRating`, `MaximumRating`, `RounFinishWaitTime` used; `SPY_ITEM_DESC` used (ids); `SPY_TABLE`
+`TotalCount`, `SpyCount`, `HPAP`, `LIGHT`, `ICE`, `SMOKE` used, `BAG` read as always 1 (the file says so);
+`TRACER_TABLE` `STUN`, `MINE` used; `spymaplist.xml` `id`, `limitTime`, `spyOpenTime` used,
+`minPlayers`/`maxPlayers` only as a warning when the actor count is outside them (matchmaking, no
+offline meaning), `name` ignored (`map.xml` gives it). Nothing unused. Check: `gunz-play GAME Factory --mode spy
+--bots 3 --skill 1 --ready 1 --shot OUT.png --script wait:24 --time 24.5` logs `round 1: spies ["Bot 1"] of 4`
+10 s after the start (selectSpyTime), `spies located` 10 s into the round and `spy ping`
+every 3 s; `--bots 3 --skill 1 --round-time 10 --ready 1 --kill-limit 6 --time 120 --script wait:120` plays whole
+rounds to `SPIES win the round`.
 
 **Spy items** (`item::SPY_*` and `Items::load`, `src/spy.rs`, `src/projectile.rs`, `src/bot.rs`). The ids are
 **observed** (`SPY_ITEM_DESC`: 601001 `LIGHT` and 601002 `SMOKE` are the zitem flashbang 2200001 and smoke
@@ -796,7 +809,7 @@ bots lay mines, a tracker's stun grenade stuns the located spy, frost bullets sl
 the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu picks the map). **Observed**:
 
 - `system/blitzkrieg.xml`, all of it read by `blitz::parse` (test `rule_book_parses`): honor start 470, +2 every
-  1 s (`LEAVE_AUTO_INC_HONOR`, the faster income when players quit, is ignored), first kill +50,
+  1 s (`LEAVE_AUTO_INC_HONOR`: 3 / 4 / 8 with 3 / 2 / 1 players left), first kill +50,
   `RESPAWN baseTime 8 invincibleTime 5`, `FINISH_DELAY_TIME 8`, `ENHANCE_PLAYER apHp 75 dps 60`, `ENHANCE_NPC`
   (every 90 s, 20 times, +6 %), `BUILDING reduceDamageRatioFromPlayer 0.93` (a building takes 7 % of what players
   deal; message 2121 says "94 %"), `BARRICADE dist 800 reduceDamageRatio 0.5` (message 2124: "only half the damage")
@@ -808,9 +821,13 @@ the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu 
   0.5 / 0.7), `WEAPON` (per kind DPS factor and shot delay ms), `HONOR_LIST` (player kill 50 + victim's total honor
   / 50, assist 25 + total / 100 within 5 s; per actor `type`: barricade 30 / team 60, honor_item 20 / 35, knifeman
   5, throwman 10, zealot 40, cleric 50, knight 60, terminator 50 / 150), `SPAWN_LIST` (radar 1, barricade 12,
-  guardian 1 per side, team 2 red / 3 blue), `ROUTE_LIST` (8 routes). Not used: `CLASS_TABLE` / `CLASS_BOOK` (six
-  classes chosen with book items 900000-900005, which `zitem.xml` does not have), `REWARD` (medals, XP), `PENALTY`,
-  `CLASS_SELECT_TIME`, `EVENT_MESSAGE`, `HELP_MESSAGE`.
+  guardian 1 per side, team 2 red / 3 blue), `ROUTE_LIST` (8 routes), `CLASS_TABLE` (9 rows) and `CLASS_BOOK`
+  (gladiator, duelist, incinerator, combatofficer, assassin, terrorist), `CLASS_SELECT_TIME 30`,
+  `LEAVE_AUTO_INC_HONOR` 3 / 4 / 8 (income with 3 / 2 / 1 players left), `REWARD`, `EVENT_MESSAGE viewTime 4
+  delayTime 1 damagedRadarCoolDown 2 sound_Benefit/Loss`, `HELP_MESSAGE viewTime 4 dist 500 honor 300 sound`. Only
+  `PENALTY` (120 / 300 / 600 s lock-out after quitting) is unused. Messages 2100-2130 (`system/messages.xml`, English)
+  carry the texts: 2100 class countdown, 2113 / 2120 reward bonuses, 2115 / 2116 class limits, 2119 respawn
+  protection, 2121-2128 the help sentences.
 - Map `blitzkrieg.rs.xml` dummies: `spawn_blitz_radar_{red,blue}` (x = +/-72 m), `spawn_blitz_barricade_{red,blue}_0..11`
   (x 21-53 m: three rows across the lanes), `spawn_blitz_guardian_*` (x +/-82 m, on the spawn platform 8 m up),
   `spawn_blitz_honoritem_0..3` (centre of the map), `route_{top,mid1,mid2,bot}_1..8` (the lanes run from x +72 m to
@@ -857,14 +874,69 @@ the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu 
   scale the spare ammunition (again after every respawn; the radar / barricade refill uses `max_bullet` as the
   reserve cap, **inferred**), **medics** shorten the respawn by the table value at the step reached (the table is
   read as cumulative, **inferred**).
-- HUD: the kill counter's line shows `HONOR n   [F] upgrades`, the panel lists the six attributes with the next
-  step's value and cost, a banner shows reinforcements, purchases and honor gains, the header shows `BARRICADES RED
-  n : m BLUE`. Headless hooks: `GUNZ_BLITZ_BUY="SECS:N,.."` buys upgrade N (1-6) for the player and opens the
-  panel, `GUNZ_BLITZ_HP=K` scales radar, barricade and guardian health.
+- **Classes** (`CLASS_SELECT_TIME 30`; screen in `src/blitz/ui.rs`, test `rule_book_parses`): the match starts held
+  (`game::Hold`: frozen like a pause but without the pause menu, Esc does not resume) with six cards, the countdown of
+  message 2100 and the highlighted class taken when it runs out (30 s of real time); 1-6 / arrows choose, Enter / Space
+  or a click confirms. Bots pick a random class with at most 3 per side (message 2116; its Korean text reads "3 or
+  more", the English and Chinese "more than 3"). `--shot` runs skip the screen (no class, the default katana /
+  revolver / rifle) unless `GUNZ_BLITZ_SELECT=1`; `GUNZ_BLITZ_CLASS=N` picks N without it. Effects (**observed**
+  numbers, **inferred** reading): Gladiator +60 AP and HP, +60 DPS with a blade (as `ENHANCE_PLAYER dps`); Duelist
+  +3 shotgun magazines and shotgun damage x2 (`enhanceShotgunDamage="1"`, read as a share like the file's other
+  0..1 values and like the Terrorist's `1.0`); Incinerator 7 fire damage per second for 4 s on every hit and -20 DPS;
+  Combat Officer: allies in 8 m (himself included) take 15 % less (`checkDelay` ignored, evaluated every frame);
+  Assassin +15 % damage; Terrorist +100 % damage to buildings (`Mods.vs_buildings` against `Mods.building`, applied
+  in `combat::apply_damage`). **Weapons are inferred** (the data gives no loadout): Gladiator katana + revolver,
+  Duelist dagger + shotgun, Incinerator katana + the machine gun the data names "Incinerator" (2110008), Combat
+  Officer katana + rifle, Assassin dagger + SMG, Terrorist katana + rocket; every actor spawns with all of them
+  (`ModesPlugin::finish` -> `blitz::arsenal`, as Gunman) and an `Equip` picks the two. A Blitzkrieg actor therefore
+  ignores the profile's loadout.
+- **Honor income and `LEAVE_AUTO_INC_HONOR`**: with 3 / 2 / 1 players left on a side (alive or dead, players and
+  bots) each of them earns 3 / 4 / 8 honor per second instead of 2; offline "left" means the side never had more
+  (`--bots 2` gives 2 : 2 and the faster income).
+- **Reward** (`REWARD`, `blitz::payout`, test `rule_book_parses`; the panel is `ui::reward_ui`): nothing is paid
+  under `minTime` 420 s or `minHonor` 2000 total honor (**observed**); medals are 15 (win) / 5 (loss) plus 1 per
+  minute up to 20, the MVP of a side gets +15 % (winners) / +45 % (losers) of XP, bounty and medals (**observed**;
+  message 2120 "You have won additional $1% of XP/BP/Medal" is its text). **Inferred**: XP and bounty are
+  `baseExp` / `baseBounty` (50 each) per full minute played, the same for both sides; a draw pays like a loss;
+  the MVP is the player with the most honor earned on the side. XP and bounty are paid once through `game::Reward`
+  (the profile also pays its usual match result on top), the medals are shown and logged only: the profile has no
+  medal currency (the retail medal shop, `interface/default/medalshop.xml`, sells for it). `minPlayCount`
+  (a newcomer bonus counted in games played), the waiting medals (matchmaking) and `PENALTY` / message 2112 (a
+  quit is the application closing) have no offline counterpart.
+- **Minimap** (`ui::floor_plan`, `ui::minimap`, test `plan_fills_the_floor`): no retail minimap texture exists
+  (`interface/` has only `map_blitzkrieg.bmp`, an 800 x 92 street banner, and an empty `blitzkrieginterface.xml`;
+  messages 2111 / 2118 say a key switches the board between status, minimap and help), so the plan is drawn from the
+  map's own upward-facing polygons (highest per pixel, shaded by height) at the right edge above the ammunition
+  (`M` hides it), the Red base on the left; dots: the player (white), players and bots, soldiers (green allies / red
+  enemies), barricades (squares) and radars (large) tinted blue for the player's side and orange for the other.
+- **Announcer** (`EVENT_MESSAGE`, `HELP_MESSAGE`, `blitz::events` / `helps` / `feedback`): messages queue and show
+  for `viewTime` 4 s (`delayTime` 1 s while another waits); a radar under attack (at most every
+  `damagedRadarCoolDown` 2 s per side), a destroyed barricade and a reinforcement wave play `Blitzkrieg/EventBenefit`
+  when they favour the player's side and `EventLoss` otherwise (**inferred** pairing; the texts are mine, message 2126
+  is the enemy wave's); the help messages 2121-2128 play `Blitzkrieg/Help` once each when their situation arises
+  (`honor` 300 for 2123, `dist` 500 for 2121 / 2122; the other triggers are **inferred** from the wording). Honor
+  gains of the player play `ef_Blitz_{Less,Legular,More}Honor_Gain` and `{less,regular,more}gainhonor.wav` below 30 /
+  below 100 / above (**inferred** thresholds); the buff effects `ef_Blitz_RadarBuff` / `BarricadeBuff` /
+  `CombatOfficerBuff` replay every 1.5 s while the player stands in the radar zone, a barricade zone or an officer's
+  reach, `ef_Blitz_HonorItem` plays where a crate comes back. The data has no effect for an upgrade purchase (the
+  seven `ef_blitz_*` models are those), so a purchase has only the banner. `hit_rader`, `hit_barricade`, `radar_die`
+  and `radar_work` were already played by `npc.rs` (`neverblasted.sound`, `sound.die`, the radar actions).
+- HUD: the kill counter's line shows `HONOR n   [F] upgrades   CLASS`, the panel lists the six attributes with the
+  next step's value and cost, a banner shows purchases and honor gains, the line below it the announcer's messages,
+  the header shows `BARRICADES RED n : m BLUE`. Headless hooks: `GUNZ_BLITZ_BUY="SECS:N,.."` buys upgrade N (1-6) for
+  the player and opens the panel, `GUNZ_BLITZ_HP=K` scales radar, barricade and guardian health,
+  `GUNZ_BLITZ_SKIP=SECS` starts the match SECS seconds in (clock, enhancement of the waves and the honor income of
+  those seconds), so a short run can reach the reward's 420 s / 2000 honor minimums.
+- **Guardian**: `guardian.elu` has no node, so the actor has no model: it stays an invisible 60 000 HP spawn guard
+  (observed: `npc: spawned guardian ... hp 60000` at x = +/-82 m, 8 m up; the guardian's death would end the match like
+  a radar's, but a 1 cm capsule cannot practically be hit) and is not drawn on the minimap.
 
-**Not modelled**: the six classes and their books, medal / XP / bounty rewards of `REWARD` (the profile pays the
-usual match result), the minimap, the event / help sounds and the `ef_blitz_*` effects, `LEAVE_AUTO_INC_HONOR`,
-`CLASS_SELECT_TIME`; a soldier's `suffer*` states react to damage only as far as `npc.rs` models groggy.
+**Not modelled**: the class books (900000-900003 are in `globbyuseableitem.xml` / `gshop.xml` as the bounty coins
+"Bounty Pack ... Chest" worth 10 / 100 / 1000 / 10 000, 900004 a 5 000 chest, so the class books named by `CLASS_BOOK`
+are not in this build: every class is free to pick), the three classes without a book (`HUNTER`, `SLAUGHTER`,
+`TRICKSTER` have `CLASS_TABLE` rows but no book and no description anywhere), class names and descriptions in the
+data (none: the names are the `CLASS_BOOK` keys, the card texts are written from the table), class icons (none), the
+medal currency, `PENALTY`; a soldier's `suffer*` states react to damage only as far as `npc.rs` models groggy.
 
 **Checks** (headless, logs and shots in `.local/shots/Blitz/`; `GAME` is the Steam install directory):
 
@@ -884,6 +956,26 @@ usual match result), the minimap, the event / help sounds and the `ef_blitz_*` e
   later the VICTORY scoreboard (`radar_down.png`).
 - A natural game does not end in three minutes: the 93 % resistance of the buildings and the symmetric waves leave
   the front near the centre until players, bots and the reinforcements tip it (the retail `REWARD minTime` is 420 s).
+- Classes, minimap, announcer and reward (logs and shots in `.local/shots/BlitzMore/`; `GUNZ_PROFILE` a throwaway
+  file, `RUST_LOG=off,gunz::blitz=info`):
+  - `GUNZ_BLITZ_SELECT=1 gunz-play GAME blitzkrieg --mode blitzkrieg --bots 5 --shot select.png --time 2`: the held
+    class screen, "Please select your class in 27 second(s)" (`select.png`, the minimap behind it).
+  - `GUNZ_BLITZ_CLASS=2 ... --bots 5 --time 3` (`class2.png`): `blitz: classes: Player (RED) Duelist; Bot 1 (BLUE)
+    Terrorist; Bot 2 (BLUE) Combat Officer; Bot 3 (RED) Incinerator; Bot 4 (BLUE) Gladiator; Bot 5 (RED)
+    Terrorist;`, the player holds the Duelist's shotgun with 6/42 (24 spare + 3 x 6), `DUELIST` on the honor line,
+    the minimap with the Red base on the left.
+  - Announcer (`GUNZ_BLITZ_CLASS=4 GUNZ_BLITZ_HP=0.08 ... --bots 6 --skill 0.8 --die-at 50 --time-limit 120`):
+    `announce [Blitzkrieg/EventBenefit] ALLIED REINFORCEMENTS: zealot`, `[Blitzkrieg/EventLoss] YOUR BARRICADE WAS
+    DESTROYED`, `[Blitzkrieg/EventBenefit] ENEMY BARRICADE DESTROYED`, `[Blitzkrieg/EventLoss] The enemy's
+    reinforcements have arrived. ...`; the announcer run ends at the time limit with `blitz: reward DEFEAT: +0 XP,
+    +0 bounty, +0 medals (needs 420 s of play)`.
+  - Reward: `GUNZ_BLITZ_CLASS=6 GUNZ_BLITZ_SKIP=800 GUNZ_BLITZ_HP=0.005 ... --bots 0 --hp 5000 --ap 5000 --at
+    -6000,0,20 --yaw 90 --npc blitz_terminator_red --bots-ahead 7 --script wait:26 --time 26` (`reward2.png`; with
+    `gunz::audio=info` the log shows `announce [Blitzkrieg/EventBenefit] ENEMY RADAR UNDER ATTACK` followed by
+    `sfx eventbenefit`, and `announce [Blitzkrieg/Help] ...` by `sfx help`): the radar falls, `blitz: reward VICTORY
+    (MVP): +748 XP, +748 bounty, +32 medals` (13 minutes, 15 + 13 medals, MVP +15 %), the panel beside the
+    scoreboard and the profile's `LEVEL UP 1 -> 4  +798 XP`. With bots (`reward.png`, `--bots 5 --time 110`) the
+    player is not the MVP: +650 XP, +28 medals.
 
 ### Sounds (**observed**)
 
@@ -1090,6 +1182,13 @@ Checks (Mansion, `--bots 0 --hp 400 --ap 200 --script "wait:12;w:3;wait:10"`, `R
 `--npc 15` (goblin chief) `slow x0.50 ... for 7.0 s`; `--npc 44` (palmpou) `root true, dot 35 for 3.0 s` and
 six 6-point `damage` lines 0.5 s apart. With `--bots 2 --skill 1 --npc 145,15 --bots-ahead 10` the bots are
 stunned and slowed, keep fighting and kill both (`RUST_LOG=gunz::bot=debug`: no `stuck` growth).
+- **HUD** (`hud.rs`, `Label::Status`, above the HP bar): one line per running effect of the player with the
+  seconds left (`STUNNED 1.8s`, `ROOTED`, `SLOWED 50% 5.8s`, `BURNING 2/s 2.5s`), blue text. **Observed**: the
+  retail `interface/default/` has no status icon (`ingame_statusboundary.png` is a 4x72 frame strip,
+  `buffevent_0x.png` event banners), so labelled text stands in. `zbuff.xml` buffs stay unwired (nothing
+  references an id, see below), so the HUD shows none. Check: `GUNZ_AFFLICT="24.8:stun,24.8:slow"` (afflicts the
+  player at that match second, kinds `stun|slow|root|burn`) with the Spy command of that section gives
+  `.local/shots/SpyMore/ping.png` (stunned and slowed).
 
 ## World items (`src/pickup.rs`)
 
@@ -1264,6 +1363,17 @@ the executable is packed).
   from the thrower wins. Then it equips the grenade (`Intent::slot`), turns to the enemy, clicks once
   (`Intent::attack` for a frame, at the planned pitch, re-planned at the click) and stands still until
   the fuse is out; the throw itself is `projectile::launch`, exactly the player's path.
+- **Smoke** (inferred, `bot.rs`): bots carry a smoke bomb (zitem 2200002, slot 4) beside the frag. A
+  bot below 30 % + 30 % x skill of its health that sees its enemy at 4-20 m throws it (at most once per
+  10-16 s): `plan_throw` picks the pitch that lands it within 1.8 m of the point 4 m towards the enemy,
+  so the cloud (`projectile.rs`: 0.6 x the item's radius, `state_time` s) stands between them and
+  `smoke_blocks` cuts the sight line; it holds still only for the throw delay + 0.3 s, not the fuse.
+  Check (Mansion, `gunz-play GAME Mansion --at -2430,-3150,5 --yaw 270 --hp 400 --ap 200 --bots 3
+  --bots-ahead 9 --script "3:0.1;attack:0.75;wait:10"`, `RUST_LOG=gunz::bot=debug,gunz::projectile=info`):
+  `damage: Player -> Bot 2 ... hp 52 -> 30`, `bot Bot 2: smoke slot 4 at 11.5 m (hp 6)`,
+  `t=5.35 detonation: Smoke of Bot 2 at -18.3, 0.2, -30.6` (`.local/shots/BotsMansion/smoke.log`).
+  Perf with 8 bots (`--bots 8 --mode tdm --script wait:40`, `GUNZ_FRAMETIMES=1`): `[perf] play:
+  frames=2459 p50=16.7 p99=16.8 max=222.0` (one load hitch, the graph build is 1.0 s).
 - **Butterfly** (inferred, `bot.rs`): after its own `attack1..4` has reached `Acting::cancel_from` (the
   hit frame), a melee bot rolls 15 % + 50 % x skill once per blow and raises the guard for 0.1 s
   (`melee.rs` takes it as the guard cancel of the recovery, and the 0.1 s ends before the weapon's next
@@ -1298,11 +1408,30 @@ Verification (headless, `.local/shots/bots/`, all `gunz-play GAME MAP ... --time
   `side wall run from [-18.0, 6.0, -28.3] heading [-0.94, 0.00, 0.34]` and were in the west wing 4.5 s
   later (`pos [-43.1, 6.0, -22.9]`); a 3-bot run with the player in the wing (`--at -5500,-1290,610`)
   ended with a bot killing the player there at t=19 s.
-  The y=13 floors (6 spawns; most of the 18 remaining failed pairs) stay out of reach: the collision has
-  no stair to them (no nodes between y=7.3 and 12.9 except on the wing roofs and statue tops), the lip
-  is 7.0 m above the y=6 gallery, a wall climb gains 4.4 m, and a wall kick (`actor.rs`: `n * WALL_OUT +
-  Y * WALL_UP`) throws the actor *away* from the wall for 1.9 m more.
-  Battle arena: 8 spawns sit in 6 m deep pits; Blitzkrieg: the team bases at y=9 have no way up.
+  The y=13 floors (6 spawns; most of the 18 remaining failed pairs) are **not** a nav link, though the
+  player can reach them. Numbers (**observed** controller constants of `actor.rs`, replayed in a
+  throwaway `Pawn` at 1/60 s): wall run up 3.3 m + 0.45 m coast, `n * WALL_OUT + Y * WALL_UP` kick = +0.96 m, a kick clip lasts
+  1.0-1.33 s (`man_jump_wallB` 30 frames, `jump_wallL/R`, `run_wall_down` 40, at 30 fps) during which no
+  second kick is possible, and the wall run is once per jump): the best height gain from a floor is
+  about 5.8 m, the lip is 7.0 m above the y=6 gallery, so no wall/pillar of the hall (double wall kicks
+  between pillars are impossible: 1.0 s per kick falls 4.5 m) and no prop (statue tops reach y=8.5, 10 m
+  from the shelves) gets there. A 16-direction beam search over the controller (150-500 states, 0.1 s
+  inputs, from 348 floor nodes y 5.5-8 in x,z +-32) found exactly one way: the north platform
+  (`-9.8, 6.0, -26.8`), outside the hall's north wall z=-24. Run at yaw 67.5 deg (toward +x,+z), jump
+  0.1 s in, wall-run up the corner of the pillar at x=-8.7 (up to y=10.9), kick at ~1.4 s after the
+  jump (y=10.85), land on the pillar capital `(-8.3, 11.7, -25.3)`, walk its moulding steps (12.2,
+  12.9) onto the y=13 floor at `(-9.4, 13.0, -27.3)`, which links to all six y=13 spawns. Real
+  controller check (`gunz-play GAME Mansion --at -980,-2680,600 --yaw -157.5 --script
+  "yaw=-157.5;w:0.1;yaw=-157.5;w+jump:0.017;w:0.083;...;yaw=-90.0;w+jump:0.017;w:0.083;..."`, 34 steps,
+  `.local/shots/BotsMansion/script1.txt`, shot `climb2.png`): feet `y 6.0 -> 7.1 (run starts, t=0.4 s) ->
+  10.86 -> kick -> 11.72 -> 13.00`, standing at `(-9.38, 13.00, -27.34)`. It is **not** usable by bots: the
+  contact is the pillar's corner (the wall normal is slanted `(-0.25, -0.97)`), a takeoff 0.06 m
+  earlier/later or 0.05 m aside loses the wall run before the kick, and a search for an aim point
+  robust to those misses found none (Mansion routing stays 124/142). A link kind that fragile
+  was not added; the experiment is kept in `.local/shots/BotsMansion/nav_kick_experiment.rs.txt`.
+  The nav graph's wall climb link still reaches 4.4 m.
+  Battle arena: 8 spawns sit in 6 m deep pits; Blitzkrieg: the team bases at y=9 have no way up. The
+  other failing maps (castle, high haven, island, towns) were not re-searched with the controller beam.
   Tried 0.25 m cells (door alignment): same Mansion result, 4x nodes, 1.7x slower routes; kept 0.5 m.
 
 Routing table (`cargo test --release routing_pairs -- --ignored --nocapture` with `GUNZ_GAME=<install>`;
@@ -1395,8 +1524,8 @@ translation; forward is -Z. All numbers **observed** from keys except where mark
 ## Profile, shop and ranks (`src/profile.rs`, `src/shop.rs`)
 
 An offline profile replaces the server account. **Observed** = read from the named retail file,
-**inferred** = chosen by us (the executable is packed, nothing in the data fixes it). Clans are not
-implemented: without a server there is nothing for them to be.
+**inferred** = chosen by us (the executable is packed, nothing in the data fixes it). The clan a profile
+can hold is described in "Clans" below.
 
 ### Data files
 
@@ -1453,9 +1582,91 @@ implemented: without a server there is nothing for them to be.
 `~/.local/share/...`; `%APPDATA%\gunzrs\profile.txt` on Windows), `GUNZ_PROFILE=PATH` overrides it.
 Keys: `name` (default `$USER`), `woman`, `outfit` (`none` or a part-set index), `xp` (total, the level is
 derived), `bounty`, `owned` (zitem ids), `equipped` (9 ids: melee, primary, secondary, item, head,
-chest, hands, legs, feet; 0 = empty). A corrupt file stops the game instead of being overwritten.
+chest, hands, legs, feet; 0 = empty), `quest_items` (`zquestitem.xml` `id:count,..`), `clan` (see "Clans"). A corrupt file stops the game instead of being overwritten.
 Headless `--shot` runs use a throwaway default profile unless `GUNZ_PROFILE` is set. The file is
 rewritten whenever the profile changes (a kill, a purchase, Start).
+
+## Clans (`src/clan.rs`)
+
+The retail server owns clans; offline the profile holds one, and a "clan war" plays it against a generated
+rival. **Observed** = read from the named retail file, **inferred** = ours.
+
+### Data files
+
+- `system/claniconinfo.xml` (**observed**): 120 `<CLANICONINFO><ICONID><SOURCE><OFFSET><EMBLEM><NAME><VISIBLE>`.
+  100 emblems (`ICONID C1000000`..`C1000099`, `SOURCE ClanIcon_00.png`, `EMBLEM TRUE`) and 20 backgrounds
+  (`C2000000`..`C2000019`, `ClanBG_00.png`, `EMBLEM FALSE`); `VISIBLE` is TRUE for 52 emblems and 9 backgrounds,
+  the rest are empty atlas cells. `NAME` is `STR:CLAN_ICON_n` / `STR:CLAN_BG_n` of `strings.xml`. The 52 emblems are
+  13 designs in 4 colours (REX, FLEX, VICS, MIZ, NICO, RIONIX, Urike, Renaut, ARES, L#, WALCOM, CANOX, MAXWELL; brown,
+  gold, white, black); the backgrounds are Velvet (brown, gray, purple), Brushed Steel (silver, blue, red) and Slate
+  (white, brown, green).
+- Pictures (**observed**): `interface/loadable/clanicon_00.png` and `clanbg_00.png`, 1024 x 1024 RGBA, the pictures
+  on a grid of 10 columns, `OFFSET` = row x 10 + column (so brown 0-12, gold 20-32, white 40-52, black 60-72; the
+  100 px cell is **inferred** from the pictures, no file states it). `interface/default/clanicon_00.png` is a 114 px
+  stub with one logo and is not used.
+- `strings.xml` / `messages.xml` / `cserror.xml` (**observed**, English): clan page `UI_SOCIAL_CLAN_TAB_01..12`
+  ("CLAN", "Create Clan", "Clan Leader", "Clan Officer", "Clan Member", "Clan Chat", "Clan Info", "Win/Lose :",
+  "Point :", "Total Point :", "Ranking :", "Clan War Invitation"); `CLAN_MARK_EDIT_01..03` ("Emblem", "Background",
+  "only once per minute"); `CLANWAR_UI_01..05` ("MATCHMAKING QUEUE", "Form Team", "Clan War", "Action Required",
+  "Leave Team"); messages 1105-1127 (create, leave, kick, rank change prompts), 1301-1303, 1510-1515 (win-streak
+  announcements) and 8007-8012; `cserror.xml` 30011-30054 (the refusals: name in use, not enough members, not
+  the leader, level 10, bounty, emblem change). The port shows those texts verbatim where it needs one.
+- `interface/default/clan.xml` (**observed**): the create dialog's name box `ClanCreate_ClanName` has
+  `MAXLENGTH` 12. The comment on its text (Korean) says the dialog needs level 10, 1000 BP, a unique name of up to 12
+  English letters (6 Korean) and 4 more founding members. The shipped text `UI_CLAN_12` says "level 10 or higher
+  and 20,000 BT" while `cserror.xml` 30050 still says 1000 BT. The port takes level 10 and 20,000 BT.
+- `interface/default/clanwar.xml` (**observed**): the war lobby, four `ClanWar_UserPannel_0..3` (level, win `승`,
+  loss `패`, `KD`), region select, "balanced matching" check box, arranged-team dialog, matchmaking queue. All of it
+  is server matchmaking; the four panels are the 4 against 4.
+- `system/gametypecfg.xml` id 22 `GAMETYPE_CLAN_SCRIM` (**observed**): `ROUNDS` 3 (the only choice), `LIMITTIME` -1
+  (unlimited, the only choice), `MAXPLAYERS` 8 (the only choice). `channelrule.xml` lists it only in rule 5
+  `champion`, with the deathmatch maps (24 names, Mansion to Shower Room; any map works offline).
+- `tips.xml` (**observed**, a Korean tip that is commented out): "in clan wars the EXP gain is 1.5 times and there is
+  no EXP loss from level differences".
+- Rating: `leaguekfactorsetting.xml` (K 50 from 0 games, 30 from 11, 20 from 51), `league.xml` `rating_gap` 300 and
+  `leaguetier.xml` (25 tiers, 0..2400 in steps of 100) are **observed** for the ranked league; reusing them for clans
+  is **inferred**.
+- `interface/default/combat/ef_clan_win|lose|draw.elu` (**observed**) are the war's end banners; not used.
+
+### Rules
+
+- **Profile**: `clan=NAME|EMBLEM|BG|POINTS|WINS|LOSSES|a,b,c` in `profile.txt` (absent = no clan): the name, the
+  `ICONID` numbers of the emblem and background, clan points, wins, losses and the bot members' handles. The player is
+  the Clan Leader, the first bot the Clan Officer, the others Clan Members (ranks **observed** strings, assignment
+  **inferred**). Name: 2..12 of letters, digits, space, `-`, `_` (the 12 is **observed**, the rest **inferred**).
+- **Create** (menu CLAN tab): level 10 and 20,000 BT (**observed**, see above), a name no rival uses (`cserror` 30032)
+  and 4 founding members; offline bots found the clan (12 handles that no rival wears, **inferred**). The tab also
+  renames (`RENAME`), picks the emblem and background from the 52 + 9 visible ones (stepping them edits the clan
+  at once), recruits and kicks bots (at most 11 **inferred**, at least 3 for a war) and leaves. `messages.xml` 1117 says
+  the leader cannot leave a clan (only disband it, 1108); the player is always the leader, so `LEAVE` (asks twice,
+  1123) deletes the clan and its points. The name box takes typing once clicked (Enter ends it).
+- **Rivals** (**inferred**): one per retail emblem design, 13 in all, named after it (REX 700 points, FLEX 750, ...
+  MAXWELL 1300), wearing that design in colour `index mod 4` on background `index mod 9`, four handles each. They
+  are static. The ranking table lists them with the player's clan (`Ranking : n / 14`).
+- **Match-up** (**inferred**): of the rivals within the league's `rating_gap` 300 of the clan's points, the one
+  `games played mod count` picks (so wars rotate); none within the gap: the nearest.
+- **Clan war** (`--mode clanwar`, the menu's "Clan War"): game type 22. 4 against 4 (`MAXPLAYERS` 8): the player and the
+  first 3 bot members (Red) against the rival's 4 (Blue), 7 bots whatever `--bots` says. The rules are Elimination's
+  (`Mode::rounds` + `teams`): no respawn until the round ends; the kill limit counts round wins, default 3 (`ROUNDS`),
+  no time limit. A war needs a clan: `gunz-play --mode clanwar` without one exits with a message, the menu's
+  Start opens the CLAN tab instead.
+- **Presentation**: actors are named `Clan.Handle` (scoreboard and everything that prints names); the HUD header has
+  each clan's emblem and name beside the clock; the kill feed is redrawn with both clans' emblems (the stock text
+  feed is silent in a war); the scoreboard (Tab, match end) gets a strip with both clans' emblems, names and points,
+  and the player's clan's gain once the war is settled.
+- **Settlement** (`clan::settle`, once, when the match is over and `profile::finish` paid its result): Elo with the K
+  factor above, expected score `1 / (1 + 10^((rival - mine) / 400))` (400 **inferred**), `delta = round(K x (score -
+  expected))`, score 1 / 0.5 / 0 for VICTORY / DRAW / DEFEAT (a draw needs a time limit; the war has none by default),
+  points never below 0, wins and losses counted. The XP bonus is **observed** (the 1.5x tip): the match's XP (kills
+  and result) gets half again through `game::Reward`; bounty is not mentioned and is paid as in any match. One log
+  line, e.g. `gunz::clan: clan war VICTORY: Phoenix 1000 -> 1025 points (+25) against REX (700) ...`.
+
+### Not modelled
+
+Everything that needs other people: clan chat, invitations and joining (`messages` 1105-1114), delegating the leader,
+changing member grades, the war lobby, matchmaking queue and regions, win-streak announcements (1510-1515), the
+one-per-minute mark edit, the 48 hour disband delay, "Total Point" (no seasons, so it would equal "Point"), the end
+banners `ef_clan_*`. Rival clans do not play each other, so their points never move.
 
 ## Install discovery and platforms (`src/steam.rs`, `src/bin/gunz-play.rs`)
 
@@ -1484,9 +1695,9 @@ distance: small enough to be invisible, inside the frustum so they are drawn).
 
 ## Quest (`src/quest.rs`)
 
-Offline `gunz-play --mode quest --scenario NAME [--dice N]` (no MAP: the first sector is the map). Labels as
-above: **observed** = read from the named retail file, **inferred** = ours (the server-side NPC-set file and
-all rules are not in the data).
+Offline `gunz-play --mode quest --scenario NAME [--dice N] [--sacrifice A,B]` (no MAP: the first sector is the map).
+Labels as above: **observed** = read from the named retail file, **inferred** = ours (the server-side NPC-set
+file and all rules are not in the data).
 
 ### Data files
 
@@ -1494,19 +1705,34 @@ all rules are not in the data).
   QL 0-5; XP 45..2880 / 90..5760, BP 17..600) and 8 `<SPECIAL_SCENARIO id title QL ... >` (Mansion 11 Goblin
   King, 12 Fake Goblin King, 13 Thunder Goblin King, 14 Dwarf Goblin King, 41 Captain Pampow; Prison 21 Lizard
   King, 22 Golem, 42 Palmpow) with two `<SACRI_ITEM itemid>` (the offering a special quest costs). Every
-  scenario has 6 `<MAP dice key_sector [key_npc boss]>` with `<NPCSET_ARRAY>G11/G12/..</NPCSET_ARRAY>`; the
+  scenario has 6 `<MAP dice key_sector [key_npc boss]>` (`dice` 1..6 in all 20 scenarios) with
+  `<NPCSET_ARRAY>G11/G12/..</NPCSET_ARRAY>`; the
   four `JACO` bosses (11, 12, 21, 22) add `<JACO count tick min_npc max_npc>` with `<NPC npcid rate>`
-  reinforcements. There are no Dungeon scenarios.
+  reinforcements. There are no Dungeon scenarios. `DC` (1 everywhere) has no explained meaning.
+- `system/sacrificetable.xml` (**observed**): 10 `<ITEM map ql default_item_id special_item_id1/2
+  significant_npc sdc ScenarioID>` rows. `default_item_id` is 0 at level 1 and 200001..200004 (the Torn Pages
+  I-IV) at levels 2..5; the other rows give special items and the boss they draw (`200008` "goblin chief",
+  `200018` "goblin king", `200022` "palmpow", `200024` "palmpoa commander", `200025`+`200027` "cursed palmow").
+  `map` and `ScenarioID` are empty/0 in every row, so the table does not name the scenarios: the pairs of
+  `scenario.xml` `SACRI_ITEM`s do (they are not the same pairs as the table's rows).
 - `system/questmap.xml` (**observed**): 3 `<MAPSET>` (Mansion, Prison, Dungeon) of 9 `<SECTOR id title
-  melee_spawn range_spawn>` (`melee_spawn=range_spawn=15`), each with `<LINK name><TARGET sector=title/>..`.
+  melee_spawn range_spawn>` (`melee_spawn=range_spawn=15` in every sector of both files), each with `<LINK
+  name><TARGET sector=title/>..`.
   `title` lower-cased is the directory under `quest/maps/` (27 of 27 resolve, `map::find_rs`); `LINK name` is
-  the portal dummy `linkNN` of that map. `quest/maps/*/spawn.xml` is an empty `<GAMETYPE id="solo"/>` stub.
+  the portal dummy `linkNN` of that map. `quest/maps/*/spawn.xml` (all 27 checked) is `<GAMETYPE id="solo"/>`
+  and `<GAMETYPE id="team"/>` with no children: there is nothing in it to use.
 - Quest map dummies (**observed**): `spawn_solo_101..104` (the player's), `link01..`, `spawn_npc_melee_NN`,
-  `spawn_npc_range_NN`, `spawn_npc_boss_NN`, `wait_pos_NN` (a camera spot, unused). Mansion_Hall1: 4 solo,
+  `spawn_npc_range_NN`, `spawn_npc_boss_NN`, `wait_pos_01` (one per map). Mansion_Hall1: 4 solo,
   12 melee, 10 range, 1 boss, 1 link. `Level::spawn_points` leaves out `spawn_npc_*`.
+- `quest/maps/*/*.rs.nav` (**observed**, all 27 maps, the layout accounts for every byte): `u32` magic
+  `0x8888888f`, `u32` version 2, `u32 nv`, `nv` x (x y z `f32`, map cm), `u32 nt`, `nt` x 3 `u16` vertex ids,
+  `nt` x 3 `i32` neighbour triangle across each edge (-1 = border): a walkable triangle mesh (12..507
+  triangles, 222..2 439 m2 per map). Not used, see "Not supported".
 - `system/scenario2.xml` (**observed**, the challenge quest, `GAMETYPE_QUEST_CHALLENGE` id 12): 8
   `<SCENARIO map_id name reward_item players level_limit good_time_sec>` (101/201/301/401 for 4 players,
-  102/202/302/402 for 3), 6 `<SECTOR map xp bp>` each with `<SPAWN postag num actor drop [adjustplayernum]>`:
+  102/202/302/402 for 3; `level_limit` 1, 21, 41, 61 / 11, 31, 51, 71; `good_time_sec` 480, 960 for 401, 720
+  for 402; the file's comment calls it the recommended clear time), 6 `<SECTOR map xp bp>` each with `<SPAWN postag
+  num actor drop [adjustplayernum]>`:
   `num` NPCs `actor` (27 distinct `npc2.xml` `<ACTOR name>`s) at the dummies `spawn_npc_<postag>` of
   `challengequest/maps/<map>/` (the name repeats for many dummies; `boss` = `spawn_npc_boss`), `drop` is
   `C1`, `C2` or empty. Maps repeat inside a scenario (`R_Normal` x5).
@@ -1521,46 +1747,88 @@ all rules are not in the data).
   `P41`..).
 - `system/zquestitem.xml` (**observed**): 45 `<ITEM id=200001..210001 name=STR:QITEM_NAME_<id> type level
   unique price secrifice param grade>`, type `page skull fresh ring necklace doll book object sword monbible`.
-  The names are `QITEM_NAME_<id>` in `strings.xml` (some are Korean only).
+  `secrifice="1"` marks what may be sacrificed (all but the `fresh` ore/scrap/emblem and the monster bible);
+  `level` is 5/10/15/20 on the four pages and 0 otherwise. Names: `QITEM_NAME_<id>` in `strings.xml`; in 20 cases
+  (19 items and 210001, which has no string) they are Korean or missing in `strings.xml` and in all ten locale
+  directories (`chn deu esp fra jpn kor pol prt rus spn twn` carry the same Korean), so `quest::KOREAN_NAMES` has
+  **inferred** English translations (200005 Small Skull, 200006 Large Skull, 200007 Mysterious Skull, 200010
+  Giant Remains, 200019 Skeleton Doll, 200023 Rabbit Doll, 200024 Teddy Bear, 200025 Cursed Teddy Bear, 200028
+  Devil's Dictionary, 200029/30 Scryder's Roster Part 1/2, 200031 Blessed Cross, 200032 Cursed Cross, 200034
+  Talking Pebble, 200035 Ice Crystal, 200040 Superion's Sword, 200041 Aneramon's Sword, 200042 Lich's Tail, 200043
+  Pampow's Ice Sword, 210001 Monster Bible). The 25 others use the retail English names. Icons: `itemicon.xml`
+  has `S2000NN` entries (atlas `itemicon_Quest_s_00.png`) for a few.
 - `system/npc.xml` (**observed**): `<NPC id grade offensetype>`; ids 11..19 goblins, 21..26 kobolds/golem,
-  31..39 skeletons, 41..48 palmpoas, 15x / 16x / 17x copies with a third of the HP (used below for QL 0).
+  31..39 skeletons (no scenario or `droptable.xml` set uses them), 41..48 palmpoas, 15x / 16x / 17x copies with a
+  third of the HP (used below for QL 0).
 
 ### Rules (**inferred** unless noted)
 
 - Plan: a standard/special quest starts at the first `SECTOR` of its map set and walks the shortest `LINK`
-  route (breadth first over titles) to `key_sector`; the map's `dice` picks the `<MAP>` (default: the last
-  one, the longest route). The last sector holds `key_npc` (specials) at `spawn_npc_boss_01`; clearing it
+  route (breadth first over titles) to `key_sector`; the `<MAP>` is the **dice roll**: `--dice N` picks the
+  `dice` N, otherwise one is rolled uniformly over the scenario's maps (seed: the clock, or `GUNZ_SEED=N`;
+  headless `--shot` runs use seed 1, so they repeat). The roll is logged (`quest: dice roll 4 of 6: ...`) and on the
+  HUD (`DICE 4` in the sector line). `--dice` survives "Play again" (`Config.dice`); a rolled one is
+  rolled again on every start. The last sector holds `key_npc` (specials) at `spawn_npc_boss_01`; clearing it
   ends the quest. A challenge quest chains its `SECTOR`s with `link01`. Survival plays 10 sectors of the loop
-  with the NPC sets of standard quest levels 1, 1, 2, 2, ... 5 (**Survival Dungeon is not offered**: the data
-  has no Dungeon NPC sets). `scenario_names()` lists the 30 names: the 20 scenario titles, `Challenge <map_id>`,
-  `Survival Mansion|Prison`; a bare scenario id / `map_id` also selects.
+  with the NPC sets of standard quest levels 1, 1, 2, 2, ... 5. **Survival Dungeon** (re-checked: no scenario,
+  `questmap.xml` quest, `droptable.xml` set or `npc.xml` entry names a Dungeon NPC set, but `survivalmap.xml`
+  does have a Dungeon loop of 5 sectors and the skeleton family 31..36 is the one family no scenario uses) is
+  offered with **inferred** sets `S<ql>1..` = skeletons 31..34 (35 from level 2, 36 the Lich from level 4), the
+  XP/BP of the first map set's standard quest of that level / 4; skeleton drop tables `S31`.. do not exist, so
+  the challenge fallback below applies. `Catalog::names()` lists the 31 names: the 20 scenario titles,
+  `Challenge <map_id>`, `Survival Mansion|Prison|Dungeon`; a bare scenario id / `map_id` also selects.
 - NPC sets: the sets are not in the data. `Xqn` (family letter `G`/`K`/`S`/`P`, level digit, member) is NPC id
   `10/20/30/40 + n` (`G14` -> 14); at level 0 the weak copy `150/160/170 + n`. `grade="boss"` NPCs never come
   from a set (the 5th member of the kobold sets would be the Lizard King). Sector size `8 + 2 x QL` NPCs
   drawn uniformly from the sets (half as many next to a boss), `offensetype="2"` NPCs (gunners, wizards) at the
-  `spawn_npc_range_*` dummies, the rest at `spawn_npc_melee_*`; HP/AP `x (1 + 0.25 (QL-1))`. At most 8 NPCs
-  live at once, the queue spawns one every 0.4 s after a 3 s "SECTOR n" intro. `JACO`: while the boss lives and
+  `spawn_npc_range_*` dummies, the rest at `spawn_npc_melee_*`; HP/AP `x (1 + 0.25 (QL-1))`. Per sector at
+  most `melee_spawn` melee and `range_spawn` ranged NPCs live at once (the attributes' meaning is **inferred**;
+  15 each, so it only binds on the biggest sectors; challenge maps have none), the queue spawns one every 0.4 s
+  after a 3 s "SECTOR n" intro. `JACO`: while the boss lives and
   fewer than `max_npc` NPCs are alive, `count` NPCs picked by `rate` appear every `tick` s at melee dummies.
   `adjustplayernum` bosses get HP `x (player + bots) / players`.
+- Sacrifice: the two sacrifice slots (`--sacrifice A,B`, or the menu's "Sacrifice 1/2" steppers over the
+  profile's `secrifice="1"` quest items) pick the scenario. **Observed**: a pair that is a special scenario's
+  two `SACRI_ITEM`s (either order) is that scenario (Goblin King = Goblin Skull 200008 + Grimsk's Necklace
+  200018); standard quests of level 0 and 1 have no `default_item_id`. **Inferred**: a standard quest of level 2..5
+  needs the Torn Page of the table row of its level in a slot; a page needs the character level in its `level`
+  (5/10/15/20); a challenge quest needs `level_limit` as the character level; the start spends one of each
+  needed item (also on "Play again", so a replay of a special quest needs new items and the menu opens with the
+  reason when they are gone). The menu's line under the steppers says "ready", what is missing or the level
+  needed, and `sacrificetable.xml`'s `significant_npc` as a hint ("Goblin Skull draws a goblin chief"); Start
+  does nothing while it is not ready. Items come from drops; the pages 200001..200003 drop nowhere and no shop
+  sells any, so edit `quest_items=` in the profile to try them.
+- Waiting room (**inferred** from the name `wait_pos_01`, the one such dummy of a quest map, standing on a gallery
+  above the hall, e.g. Mansion_Hall1 (-525, -1495, 405) against the `spawn_solo`s at (1116, -163..159, 225)): in
+  the 3 s "SECTOR n" intro the player waits there, facing the dummy's direction, and then drops to the first
+  `spawn_solo` as the NPCs start to come (not with `--at`/`--yaw`). The log lines `quest: <npc> dropped <item> at
+  (x, z) t=<s>` and `sector n cleared at m:ss` carry the quest time.
+- Headless checks of the quest screens: `--mode quest --scenario NAME --sacrifice A,B --menu-page match` shows
+  the picker (a `--menu-page` never starts a quest); `GUNZ_INV_SLOT=9 --menu-page inventory` opens the
+  inventory on the quest-item category.
 - Clear: no NPC alive and none queued. The `linkNN` portal opens (a cyan cylinder); walking within 1.2 m
   (or 30 s later) swaps the map in-process (despawn map entities, NPCs, drops and bots; reload `Level`,
   `MapCollision`, props, spawn table, `PostStartup`: bots with a new `Nav`), the player (keeping HP/AP/ammo)
   stands on the first `spawn_solo`. Dead actors do not respawn; the quest fails 2.5 s after the player dies.
 - Rewards: `Reward{xp, bounty}` = the scenario `XP`/`BP` when the last sector falls; challenge sectors pay their
   `xp`/`bp` on each clear (survival: the standard quest's of that level / 4); a cleared challenge adds its
-  `reward_item` to the loot. `QuestLoot{items}` carries every quest/shop item picked up, once at the end.
-- Drops: a dead NPC rolls its `drop` table (empty = `npc.xml`'s) at the quest level of the plan, one roll over
-  the cumulative rates. `hp1`/`ap1`/`mag1` become `worlditem.xml` `hp01`/`ap01`/`bullet01` pickups (red/green/
-  yellow orbs picked by the existing `pickup.rs` rules); numeric ids become cyan orbs the player collects by
-  walking within 0.9 m. The challenge tables `C1`/`C2` are not in `droptable.xml`: hp, ap or ammo with equal
-  chance and nothing a quarter of the time.
+  `reward_item` to the loot. A challenge cleared within `good_time_sec` (HUD `TIME m:ss/m:ss`) pays a further
+  25% of the XP/BP its sectors paid (**inferred**: the data gives only the recommended time).
+  `QuestLoot{items}` carries every quest/shop item picked up, once at the end; the profile keeps the quest items
+  (`zquestitem.xml` ids, `quest_items=id:count,..` in `profile.txt`; the inventory page has a "Quest items"
+  category with names, counts and descriptions, English where the data has them) and drops the rest (shop items
+  of the drop tables are rentals, the challenge `reward_item` 3000xxx is a gacha package id that is not in
+  `zitem.xml`).
 
 ### Not supported
 
-Sacrifice items (`SACRI_ITEM`) are not required; quest items are not kept between runs besides the
-`QuestLoot` message; `melee_spawn`/`range_spawn`, `wait_pos`, `good_time_sec`, `level_limit`, `DC`, per-NPC
-`dc`, `rent_period`, the `.nav` files of the quest maps and the quest `spawn.xml` are not used; no random dice
-roll (use `--dice`); online party/lobby behaviour.
+- `.nav` triangle meshes: decoded above and measured against the dummies, but a mesh holds only 843 of 914
+  (92%) spawn/link dummies (Dungeon_Cavern3 and Nest2 about 57%), so `nav.rs`'s floor graph, which covers every
+  map, has to stay as the fallback; one source is simpler, so the quest NPCs keep using it.
+- The quest `spawn.xml`: empty stubs. Scenario `DC`, `sdc` (sacrificetable) and per-NPC `dc`: no meaning in
+  the data. `rent_period` of drops: rentals are not modelled. The gacha `reward_item` (3000xxx) of the
+  challenge quest and the quest-item shop (no shop in the data sells quest items). Online party/lobby behaviour.
+  Selling quest items (`price` is in the data, the inventory page has no sell button).
 
 ## Quest monsters (`src/npc.rs`, `src/npc/data.rs`, `src/npc/fsm.rs`)
 
@@ -1582,7 +1850,7 @@ height [tremble pick]` (cm, absolute: the Lich has `scale 0.17` and radius 120),
 has `damage`, `range`, `angle`, no model), `SPEED default [rotate]` (cm/s, rad/s), `SKILL id` (110 uses of 48 skills),
 `DROP table` (`droptable.xml` set name). Grades: boss 26, regular 23, elite 15, veteran 12; `offensetype` 1 melee 61,
 2 caster/gunner 15; `dyingtime` 0, 5 or 8 s. `name` resolves through `strings.xml` `NPC_NAME_n`; 22 of the 34 distinct
-names (47 NPCs) exist only in Korean, those show the mesh name.
+names (47 NPCs) exist only in Korean in every locale: see "Closed gaps" below for the English table.
 Use (**inferred**): `int` indexes the `INTELLIGENCE` table, `agility` the `AGILITY` table = seconds between two melee
 blows; `view_angle` is the facing tolerance before a blow (>= 25 deg); `offensetype 2` casters stop 7 m away when they
 own a missile skill; `dc` and `tremble` are not used. A melee blow lands at 45 % of the `melee_attack` clip with the
@@ -1659,8 +1927,14 @@ The parser rejects anything outside this list. Semantics (**inferred**), execute
 - A step every 0.1 s (`SHAKING attack_update`): `func`s that choose the target, then the first `TRANS` whose terms
   all hold and whose target state is off cooldown (`cooltime` ms since that state was last entered); turning,
   running, orbiting and `speedAccel` act every frame.
-- `dice:N` is true with probability N/1000 each time it is evaluated (the knifeman `combat` table: 200+300+300+100
-  +100+100 = 1 100 but never more than 900 at once because of the distance windows).
+- `dice:N` (replaces the first reading, "true with probability N/1000 per step", which let the Research Lab disposer
+  shoot 3 times in 100 s): all 104 states with a `dice` row (29 `func="dice"`, 75 `enterfunc="dice"`, none without; all
+  have 2 or more rows) hold one stored random number, rolled on entering (`enterfunc`) or every step (`func`). The
+  state's `dice` values sum to 50..1 300 (18 states 100, 24 states 225 = 75+75+25+25+25, three above 1 000), so
+  they are neither percent nor permille: each row owns the next `N` of the sum, in file order, and the roll picks
+  the row (`waitrandom`: four equal waits; `orbit`: three equal orbit radii; the disposer's `orbit1`: "orbit" 2/3,
+  "shoot" 1/3 once it sees the target, the 4 s timeout is only the fallback). A row whose other terms fail still
+  keeps its share, so the roll finds nothing that step. Measured on the disposer: "Closed gaps" below.
 - `groggy` rises by the damage taken and decays by `groggyRecoverPerSec`; `groggyGreater:20/30/40` pick
   `suffer1/2/3` and `reduceGroggy` clears it (`9999` = all). `hpEqual:0` is `Vitals.hp <= 0`; `__die` plays `die`
   and removes the corpse after 4 s (a dead actor stuck in a state with no death row is put down after 1.5 s).
@@ -1677,5 +1951,39 @@ The parser rejects anything outside this list. Semantics (**inferred**), execute
 
 ### Not supported
 
-`pick` meshpicking and `tremble`; the `.nav` files of the quest maps
-(the floor graph of `nav.rs` is used); Korean-only monster names.
+`pick` meshpicking and `tremble` (no use found: the shake of the boss skills is `camera.*`); the `.nav` files of the quest
+maps (the floor graph of `nav.rs` is used); `resisttype` resistances and `surfacemount`.
+
+### Closed gaps (NpcPolish; labels as above)
+
+- **Names**: `NPC_NAME_n` of 22 monsters (21-26, 31-39, 41, 42, 44-48) is Korean in `strings.xml` and in all eleven
+  locale directories (`chn deu esp fra jpn kor pol prt rus twn` carry the English strings of the other 12 and the same
+  Korean for these; `spn` is all Korean); `interface/monsterillust/*.jpg` are pictures with no text. `data::ENGLISH_NAMES`
+  holds **inferred** English names translated from the Korean (리쟈드 Lizard, 샤만 Shaman, 대장 Captain, 왕 King, 고장난
+  골렘 Broken Golem, 스켈레톤 메이지 Skeleton Mage, 거대 Giant, 저주받은 시신 Cursed Corpse, 리치 폰 Lich Pawn, 슈페리온 Superion,
+  아네라몬 Anelamon, 팜포우/팜포아 Pampow/Pampoa, 저주 받은 Cursed); `(보스)` is kept as "(Boss)". They fill in only where no
+  Latin string exists, so the HUD, kill feed and `Missile` / `Damage` names show them.
+- **`mod.criticalrate`** (0-90 per cent, **observed** in `zskill.xml`): chance of a critical hit on a missile's direct hit
+  and on each target of an area skill; the multiplier `CRIT` 1.5 is **inferred** (not in the data). Seen: Goblin King
+  Massive Swing (100 -> 150), his Fire Missile (80 -> 120), golem rocket (40 -> 60).
+- **`camera.power/duration/range`** (**observed** on 15 skills: Massive Swing 3.0 / 1.5 s / 1500 cm, the stun fist 1.0 /
+  0.7 s / 600 cm): an area skill sends `game::CameraShake { at, trauma, range }`; `hud::track` raises the same trauma
+  shake as explosions, scaled to zero at `range`. `trauma = power * duration / 4.5` (clamped to 1) is **inferred**.
+- **`SUMMON route`**: already parsed (`Ev::Summon.route`), copied into the `SpawnNpc` of the summoned soldier and walked by
+  `runWaypointsAlongRoute` (Blitzkrieg's radar summons); nothing was missing.
+- **Orb size**: the glow of a missile is scaled by `colradius` (golem rocket 261: 90 cm = a 1.8 m ball) but never wider than
+  the trail effect (`traileffectscale / 2`, 3.5 for 261). `colradius` stays the hit test. **Inferred.**
+- **`dice`**: see the `dice:N` paragraph under `aifsm.xml`. Disposer, Mansion, `--npc disposer --bots-ahead 10`, 60 s:
+  14 `shoot` entries (was 3 in 100 s).
+- **`lab_chaser_summon`** (actions `chaser_summon`, `chaser_summon2`) has no wav in `sound/effect/challenge_quest/researchlab`
+  (there are `lab_chaser_{arrive,run,runfast,dash,launch,suffer1-3,die}`, `lab_tower_summon`, `lab_assasin_summon`):
+  `npc.rs::play` plays `lab_tower_summon` instead (**inferred**, the same three-minion summon with a dust puff).
+- **Goblin stuck on Mansion** (`gunz-play Mansion --bots 0 --bots-ahead 4 --npc 11`, player at the spawn on the y = 6 m
+  floor): the goblin walked to 2 m from the player and stopped for good. `MapCollision::slide_move` returned no movement
+  there although every ray (heights 0.2-1.5 m, both ways) and a downward ray line show open, continuous floor, and
+  slides of the same length in the other seven directions move freely (a sweep-only snag, cause not found in `col.rs`).
+  `npc.rs::locomote` now retries a blocked step (less than 30 % of the intended length) at +-30, 60 and 90 degrees and
+  takes the first that makes half the headway (**inferred** remedy). Result: the goblin reaches 1.05 m and hits. A
+  monster that falls to another floor now also notices a player within 12 m (`HEARING`, **inferred**) and keeps its
+  target within 67 m without sight, so it follows the nav graph instead of idling; the demo spawn 8 m ahead lands
+  over the gap in front of that spawn, so the goblin falls to the ground floor (a different, expected, effect).

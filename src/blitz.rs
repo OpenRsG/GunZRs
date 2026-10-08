@@ -7,34 +7,43 @@
 //! reinforcements and ends the match. Rules *inferred* rather than read are marked; the long form
 //! is `docs/formats.md` "Blitzkrieg".
 //!
+//! At the start of the match (`CLASS_SELECT_TIME`) the player picks one of the six classes of
+//! `CLASS_BOOK`; bots pick for themselves. The screens (class select, minimap, reward) are
+//! `blitz/ui.rs`.
+//!
 //! Controls: `F` opens the upgrade panel, Up/Down choose, Enter buys (the honor is spent per step
-//! of [`Cfg::up`]); bots buy by themselves. `GUNZ_BLITZ_BUY="SECS:N,.."` buys upgrade N (1-6) for
-//! the player at match second SECS and `GUNZ_BLITZ_HP=K` scales the objectives' health (headless
-//! checks).
+//! of [`Cfg::up`]); bots buy by themselves. Headless checks: `GUNZ_BLITZ_BUY="SECS:N,.."` buys
+//! upgrade N (1-6) for the player at match second SECS, `GUNZ_BLITZ_HP=K` scales the objectives'
+//! health, `GUNZ_BLITZ_CLASS=N` (1-6) picks the player's class without the screen,
+//! `GUNZ_BLITZ_SELECT=1` shows the class screen in a `--shot` run (which otherwise skips it, with
+//! no class and the default weapons) and `GUNZ_BLITZ_SKIP=SECS` starts the match SECS seconds
+//! in (clock, honor income and soldier enhancement), to reach the reward's minimum time.
+
+mod ui;
 
 use crate::{
-    actor::{ActorData, PlayerSetup},
+    actor::{ActorData, DEFAULT_LOADOUT, PlayerSetup},
     bot::BotAhead,
     col::MapCollision,
-    combat::yaw_of,
+    combat::{Vfx, is_melee, rnd, yaw_of},
     game::{
-        Afflict, Bot, Damage, Dead, Frozen, Killed, Loadout, Mods, Npc, NpcState, Player, Routes,
-        Score, SpawnNpc, Team, Vitals,
+        Afflict, Bot, Damage, Dead, Equip, Frozen, Hold, Killed, Loadout, Mods, Npc, NpcState,
+        PlaySound, Player, Reward, Routes, Score, SpawnNpc, Team, Vitals,
     },
-    item::WeaponKind,
+    item::{Items, WeaponKind},
     level::Level,
     menu::Mode,
     session::{Clock, PROTECT_SECS, RESPAWN_SECS, Rules, freeze},
-    view::{SCALE, to_bevy},
+    view::{SCALE, Shot, to_bevy},
 };
 use bevy::{
     prelude::*,
     ui::{GlobalZIndex, UiTargetCamera},
 };
 use roxmltree::{Document, Node as Xml};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-/// Seconds a banner (reinforcements, a purchase, an honor gain) stays up. *Inferred* from the
+/// Seconds a banner (a purchase, an honor gain) stays up. *Inferred* from the
 /// `EVENT_MESSAGE viewTime="4"`.
 const BANNER_SECS: f32 = 4.0;
 /// Seconds a fire enchant burns (`UPGRADE fireDamageDuration`, observed 4.0).
@@ -43,6 +52,56 @@ const FIRE_SECS: f32 = 4.0;
 const ZONE_HEIGHT: f32 = 6.0;
 /// What a bot buys first, as indices into [`UPGRADES`] (*inferred*: toughness, then damage).
 const BOT_ORDER: [usize; 6] = [2, 0, 1, 4, 3, 5];
+/// Most players of one side that may share a class (message 2116 "You cannot select more than 3
+/// of the same classes"; the Korean text reads "3 or more", so the limit is 3 or 2).
+const SAME_CLASS: u8 = 3;
+/// The six classes: name, `CLASS_TABLE` element and `CLASS_BOOK` attribute (all observed; the
+/// names are the book keys, no string names them).
+const CLASSES: [(&str, &str, &str); 6] = [
+    ("Gladiator", "GLADIATOR", "gladiator"),
+    ("Duelist", "DUELIST", "duelist"),
+    ("Incinerator", "INCINERATOR", "incinerator"),
+    ("Combat Officer", "COMBATOFFICER", "combatofficer"),
+    ("Assassin", "ASSASSIN", "assassin"),
+    ("Terrorist", "TERRORIST", "terrorist"),
+];
+/// Each class's weapons (*inferred* from the class names and the stats: the data has no loadout):
+/// a blade and a gun, the first of the two selected. The Incinerator's gun is the item the
+/// data names "Incinerator" (2110008, a machine gun).
+const KITS: [(WeaponKind, WeaponKind); 6] = [
+    (WeaponKind::Katana, WeaponKind::Revolver),
+    (WeaponKind::Dagger, WeaponKind::Shotgun),
+    (WeaponKind::Katana, WeaponKind::MachineGun),
+    (WeaponKind::Katana, WeaponKind::Rifle),
+    (WeaponKind::Dagger, WeaponKind::Smg),
+    (WeaponKind::Katana, WeaponKind::Rocket),
+];
+const INCINERATOR: u32 = 2110008;
+/// Honor gains below / above these get the less / more effect and sound (*inferred*: the effects
+/// are named Less / Legular / More, `HONOR_LIST` pays 5..150).
+const GAIN_LESS: f32 = 30.0;
+const GAIN_MORE: f32 = 100.0;
+/// Index of the Combat Officer in [`CLASSES`].
+const OFFICER: usize = 3;
+/// Soldiers of `npc2.xml` (`type`): what the radars send and the terminator.
+const SOLDIERS: [&str; 6] = [
+    "knifeman",
+    "throwman",
+    "zealot",
+    "cleric",
+    "knight",
+    "terminator",
+];
+/// Buff effects of the radar, barricade and combat-officer zones (`effect_list.xml`: looped
+/// models) and the honor crate's; the loops are re-spawned every [`AURA_SECS`] while the player
+/// stands inside (*inferred*: the effect list has no duration).
+const AURAS: [&str; 3] = [
+    "ef_Blitz_RadarBuff",
+    "ef_Blitz_BarricadeBuff",
+    "ef_Blitz_CombatOfficerBuff",
+];
+const HONOR_ITEM_FX: &str = "ef_Blitz_HonorItem";
+const AURA_SECS: f32 = 1.5;
 
 pub struct BlitzPlugin;
 
@@ -51,6 +110,7 @@ impl Plugin for BlitzPlugin {
         app.add_systems(Startup, setup.run_if(on)).add_systems(
             Update,
             (
+                classes,
                 tag,
                 income,
                 scoring,
@@ -61,16 +121,21 @@ impl Plugin for BlitzPlugin {
                 rearm,
                 zones,
                 reinforce,
+                events,
+                helps,
                 crates,
                 finish,
+                feedback,
                 hud,
+                ui::select_ui,
+                ui::minimap,
+                ui::reward_ui,
             )
                 .chain()
                 .run_if(live),
         );
     }
 }
-
 fn on(rules: Option<Res<Rules>>) -> bool {
     rules.is_some_and(|r| r.mode == Mode::Blitzkrieg)
 }
@@ -116,8 +181,40 @@ pub struct Upgrades {
     pub revive: [f32; 4],
 }
 
-/// The parts of `system/blitzkrieg.xml` this mode plays by (the class table, the medal rewards,
-/// the quit penalty and the event messages are not modelled).
+/// `REWARD`: what a finished match pays (see [`payout`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RewardCfg {
+    pub bounty: f32,
+    pub exp: f32,
+    /// Match seconds and honor a player needs to be paid at all.
+    pub min_time: f32,
+    pub min_honor: f32,
+    pub win_medal: f32,
+    pub lose_medal: f32,
+    pub minute_medal: f32,
+    pub minute_medal_max: f32,
+    /// The MVP's extra share of (XP, bounty, medals) on the winning / losing side.
+    pub mvp_win: [f32; 3],
+    pub mvp_lose: [f32; 3],
+}
+
+/// `EVENT_MESSAGE` and `HELP_MESSAGE`: seconds a message stays, the pause when another waits,
+/// the radar-attack cooldown, the help distance (m) and honor, and the sounds.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Messages {
+    pub view: f32,
+    pub delay: f32,
+    pub radar_cooldown: f32,
+    pub benefit: String,
+    pub loss: String,
+    pub help_view: f32,
+    pub help_dist: f32,
+    pub help_honor: f32,
+    pub help: String,
+}
+
+/// The parts of `system/blitzkrieg.xml` this mode plays by (only the quit penalty is not
+/// modelled).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cfg {
     pub start_honor: f32,
@@ -150,6 +247,35 @@ pub struct Cfg {
     pub spawns: Vec<(String, usize, u32)>,
     /// `ROUTE`: id -> the dummy names, in order.
     pub routes: Vec<(u32, Vec<String>)>,
+    /// `CLASS_SELECT_TIME`: seconds the class screen lasts.
+    pub class_select: f32,
+    /// `LEAVE_AUTO_INC_HONOR`: the income per interval with 3, 2, 1 players left on a side.
+    pub leave: Vec<f32>,
+    /// `CLASS_TABLE`: element -> attributes.
+    pub class: HashMap<String, HashMap<String, f32>>,
+    /// `CLASS_BOOK`: class -> the book item id.
+    pub book: Vec<(String, u32)>,
+    pub reward: RewardCfg,
+    pub msg: Messages,
+}
+
+impl Cfg {
+    /// `CLASS_TABLE` value `attr` of class `class` (index into [`CLASSES`]); 0 without a class.
+    fn class_val(&self, class: Option<usize>, attr: &str) -> f32 {
+        class
+            .and_then(|c| self.class.get(CLASSES[c].1)?.get(attr))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Honor a side gains per `income_secs` with `players` players: `LEAVE_AUTO_INC_HONOR` lists
+    /// 3, 2 and 1 remaining.
+    fn income_for(&self, players: usize) -> f32 {
+        match players {
+            1..=3 => self.leave.get(3 - players).copied().unwrap_or(self.income),
+            _ => self.income,
+        }
+    }
 }
 
 fn attr(n: Xml, a: &str) -> f32 {
@@ -218,6 +344,7 @@ pub fn parse(xml: &str) -> Result<Cfg, String> {
             )
         })
         .collect();
+    let (reward, event, help) = (tag("REWARD")?, tag("EVENT_MESSAGE")?, tag("HELP_MESSAGE")?);
     Ok(Cfg {
         start_honor: attr(honor, "startHonor"),
         income_secs: attr(honor, "autoIncHonorSec"),
@@ -292,18 +419,65 @@ pub fn parse(xml: &str) -> Result<Cfg, String> {
             })
             .collect(),
         routes,
+        class_select: attr(tag("CLASS_SELECT_TIME")?, "ClassSelectTime"),
+        leave: honor
+            .children()
+            .filter(|c| c.has_tag_name("LEAVE_AUTO_INC_HONOR"))
+            .map(|c| attr(c, "autoIncHonor"))
+            .collect(),
+        class: kids("CLASS_TABLE")?
+            .into_iter()
+            .map(|c| {
+                let vals = c
+                    .attributes()
+                    .map(|a| (a.name().to_string(), a.value().parse().unwrap_or(0.0)))
+                    .collect();
+                (c.tag_name().name().to_string(), vals)
+            })
+            .collect(),
+        book: tag("CLASS_BOOK")?
+            .attributes()
+            .map(|a| (a.name().to_string(), a.value().parse().unwrap_or(0)))
+            .collect(),
+        reward: RewardCfg {
+            bounty: attr(reward, "baseBounty"),
+            exp: attr(reward, "baseExp"),
+            min_time: attr(reward, "minTime"),
+            min_honor: attr(reward, "minHonor"),
+            win_medal: attr(reward, "winnerMedal"),
+            lose_medal: attr(reward, "loserMedal"),
+            minute_medal: attr(reward, "minuteBonusMedal"),
+            minute_medal_max: attr(reward, "minuteBonusMedalMax"),
+            mvp_win: ["XP", "BP", "Medal"].map(|k| attr(reward, &format!("Win{k}BonusMVP"))),
+            mvp_lose: ["XP", "BP", "Medal"].map(|k| attr(reward, &format!("Lose{k}BonusMVP"))),
+        },
+        msg: Messages {
+            view: attr(event, "viewTime"),
+            delay: attr(event, "delayTime"),
+            radar_cooldown: attr(event, "damagedRadarCoolDown"),
+            benefit: event.attribute("sound_Benefit").unwrap_or_default().into(),
+            loss: event.attribute("sound_Loss").unwrap_or_default().into(),
+            help_view: attr(help, "viewTime"),
+            help_dist: attr(help, "dist") * 0.01,
+            help_honor: attr(help, "honor"),
+            help: help.attribute("sound").unwrap_or_default().into(),
+        },
     })
 }
 
 // ---------------------------------------------------------------------------------------------
 // State
 
-/// Honor an actor holds, what it earned in all (the kill formula uses it) and its upgrade steps.
+/// Honor an actor holds, what it earned in all (the kill formula uses it), its upgrade steps, its
+/// class (index into [`CLASSES`]) and which buffs it stands in (bit 0 radar, 1 barricade, 2
+/// combat officer).
 #[derive(Component, Debug)]
 struct Honor {
     points: f32,
     total: f32,
     level: [u8; 6],
+    class: Option<usize>,
+    aura: u8,
 }
 
 /// The six upgrades of the panel, in `UPGRADE`'s order: name and the sentence of messages
@@ -316,6 +490,13 @@ const UPGRADES: [(&str, &str); 6] = [
     ("Big magazines", "+{}% bullets"),
     ("Field medics", "-{}% respawn time"),
 ];
+
+/// The class screen: seconds left, the highlighted class, confirmed.
+struct Select {
+    left: f32,
+    sel: usize,
+    done: bool,
+}
 
 #[derive(Resource)]
 struct Blitz {
@@ -341,6 +522,40 @@ struct Blitz {
     banner: (f32, String),
     /// (victim, attacker, match second) of recent hits between players, for the assists.
     recent: Vec<(Entity, Entity, f32)>,
+    /// The class screen while it is up; `assign`: the classes are still to be handed out.
+    select: Option<Select>,
+    assign: bool,
+    /// `GUNZ_BLITZ_CLASS`: the player's class when there is no screen.
+    pick: Option<usize>,
+    /// Blade and gun item of each class.
+    kit: [[u32; 2]; 6],
+    /// Frames until the class weapons are in hand (the ammunition bonus follows).
+    settle: u8,
+    /// `GUNZ_BLITZ_SKIP`: the match starts this many seconds in.
+    skip: f32,
+    /// Announcements waiting (sound, text, seconds on screen) and the one showing.
+    msgs: VecDeque<(String, String, f32)>,
+    event: (f32, String),
+    /// Match second each side's radar was last reported under attack.
+    radar_hit: [f32; 2],
+    /// Help messages already shown (bit = message id - 2121).
+    helped: u16,
+    /// Honor the player just gained, for the effect and sound.
+    gains: Vec<f32>,
+    /// Seconds until each buff effect (radar, barricade, officer) is spawned again.
+    aura_t: [f32; 3],
+    /// What the match paid the player once it ended.
+    payout: Option<Payout>,
+    /// The minimap picture and the map area it shows (Bevy x, z).
+    plan: Handle<Image>,
+    bounds: (Vec2, Vec2),
+}
+
+impl Blitz {
+    /// Queues an event message: the sound plays and the text shows when its turn comes.
+    fn say(&mut self, sound: &str, text: impl Into<String>, view: f32) {
+        self.msgs.push_back((sound.into(), text.into(), view));
+    }
 }
 
 fn side(t: Team) -> usize {
@@ -361,12 +576,18 @@ fn word(t: Team) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     level: Res<Level>,
     col: Res<MapCollision>,
+    data: Res<ActorData>,
+    shot: Option<Res<Shot>>,
     mut rules: ResMut<Rules>,
     mut routes: ResMut<Routes>,
+    mut clock: ResMut<Clock>,
+    mut images: ResMut<Assets<Image>>,
+    mut vtime: ResMut<Time<Virtual>>,
     mut spawn: MessageWriter<SpawnNpc>,
 ) {
     let xml = level
@@ -450,15 +671,32 @@ fn setup(
                 .collect()
         })
         .unwrap_or_default();
+    let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
+    // The class screen holds the match (`Hold`); a `--shot` run skips it unless asked, and
+    // `GUNZ_BLITZ_CLASS` picks the player's class without it.
+    let pick = env("GUNZ_BLITZ_CLASS")
+        .map(|n| n as usize)
+        .filter(|n| (1..=CLASSES.len()).contains(n))
+        .map(|n| n - 1);
+    let screen =
+        pick.is_none() && (shot.is_none() || std::env::var_os("GUNZ_BLITZ_SELECT").is_some());
+    if screen {
+        commands.insert_resource(Hold);
+        freeze(&mut commands, &mut vtime, true);
+    }
+    let skip = env("GUNZ_BLITZ_SKIP").unwrap_or(0.0);
+    clock.elapsed = skip;
+    let (plan, bounds) = ui::floor_plan(&level.map);
     info!(
-        "blitz: {} routes, {} crates, respawn {} s, protection {} s, honor {} +{}/{} s",
+        "blitz: {} routes, {} crates, respawn {} s, protection {} s, honor {} +{}/{} s, class screen {} s",
         routes.paths.len(),
         crate_at.len(),
         rules.respawn,
         rules.protect,
         cfg.start_honor,
         cfg.income,
-        cfg.income_secs
+        cfg.income_secs,
+        cfg.class_select
     );
     commands.insert_resource(Blitz {
         income_t: 0.0,
@@ -476,6 +714,25 @@ fn setup(
         sel: 0,
         banner: (0.0, String::new()),
         recent: Vec::new(),
+        select: screen.then_some(Select {
+            left: cfg.class_select,
+            sel: 0,
+            done: false,
+        }),
+        assign: true,
+        pick,
+        kit: kits(&data.items),
+        settle: 0,
+        skip,
+        msgs: VecDeque::new(),
+        event: (0.0, String::new()),
+        radar_hit: [f32::MIN; 2],
+        helped: 0,
+        gains: Vec::new(),
+        aura_t: [0.0; 3],
+        payout: None,
+        plan: images.add(plan),
+        bounds,
         cfg,
     });
 }
@@ -495,10 +752,13 @@ fn tag(
     buildings: Query<(Entity, &Npc), (Added<Npc>, Without<Mods>)>,
 ) {
     let cfg = &blitz.cfg;
+    // `GUNZ_BLITZ_SKIP`: the income of the seconds skipped.
+    let skipped = blitz.skip / cfg.income_secs.max(0.1) * cfg.income;
     for (e, n) in &buildings {
         if matches!(n.kind.as_str(), "barricade" | "radar") {
             commands.entity(e).insert(Mods {
                 vs_actors: cfg.building_takes,
+                building: true,
                 ..default()
             });
         }
@@ -511,9 +771,11 @@ fn tag(
         let mut me = commands.entity(e);
         me.insert((
             Honor {
-                points: cfg.start_honor,
-                total: cfg.start_honor,
+                points: cfg.start_honor + skipped,
+                total: cfg.start_honor + skipped,
                 level: [0; 6],
+                class: None,
+                aura: 0,
             },
             Mods::default(),
         ));
@@ -535,15 +797,23 @@ fn income(
     clock: Res<Clock>,
     mut blitz: ResMut<Blitz>,
     mut routes: ResMut<Routes>,
-    mut q: Query<&mut Honor, Without<Dead>>,
+    mut q: Query<(&mut Honor, &Team, Has<Dead>)>,
 ) {
     blitz.income_t += time.delta_secs();
     let every = blitz.cfg.income_secs.max(0.1);
+    // `LEAVE_AUTO_INC_HONOR`: a side with 3, 2 or 1 players left earns faster.
+    let mut players = [0usize; 2];
+    for (_, t, _) in &q {
+        players[side(*t)] += 1;
+    }
     while blitz.income_t >= every {
         blitz.income_t -= every;
-        for mut h in &mut q {
-            h.points += blitz.cfg.income;
-            h.total += blitz.cfg.income;
+        for (mut h, t, dead) in &mut q {
+            if !dead {
+                let g = blitz.cfg.income_for(players[side(*t)]);
+                h.points += g;
+                h.total += g;
+            }
         }
     }
     let c = &blitz.cfg;
@@ -578,9 +848,10 @@ fn scoring(
         if !sides.contains_key(&d.attacker) || d.amount <= 0.0 || by == foe {
             continue;
         }
-        let fire = honors
-            .get(d.attacker)
-            .map_or(0.0, |h| sum(&blitz.cfg.up.fire, h.1.level[3]));
+        let fire = honors.get(d.attacker).map_or(0.0, |h| {
+            sum(&blitz.cfg.up.fire, h.1.level[3])
+                + blitz.cfg.class_val(h.1.class, "enchantFireDamage")
+        });
         if fire > 0.0 {
             burn.write(Afflict {
                 target: d.target,
@@ -646,6 +917,7 @@ fn scoring(
                 gains += &format!(" {name} +{g:.0}");
                 if player {
                     blitz.banner = (now + BANNER_SECS / 2.0, format!("+{g:.0} HONOR"));
+                    blitz.gains.push(g);
                 }
             }
         }
@@ -785,42 +1057,83 @@ fn table_key(k: WeaponKind) -> Option<&'static str> {
     })
 }
 
-/// What upgrades and buildings do to an actor's blows, shots and wounds: the extra DPS (the base
-/// `ENHANCE_PLAYER dps` plus the steps) becomes `dps * factor * delay` more per hit of the
-/// current weapon (*inferred* reading of `WEAPON`), a rapid-fire step shortens the gun delay,
-/// and inside a friendly barricade's zone damage is cut (message 2124: "only half").
+/// What upgrades, classes and buildings do to an actor's blows, shots and wounds: the extra DPS
+/// (the base `ENHANCE_PLAYER dps` plus the steps and the class's) becomes `dps * factor * delay`
+/// more per hit of the current weapon (*inferred* reading of `WEAPON`), a rapid-fire step
+/// shortens the gun delay, inside a friendly barricade's zone damage is cut (message 2124: "only
+/// half"), and a combat officer's allies in reach take `reduceDamageRatioForMyTeam` less
+/// (*inferred*: the officer counts too). Class numbers are read as `CLASS_TABLE` gives them:
+/// `enhanceMeleeDPS` / `reduceDPS` are DPS like `ENHANCE_PLAYER dps`, the `*Ratio` ones and
+/// `enhanceShotgunDamage="1"` (the file says shares are 0..1) are shares of the damage.
 fn buffs(
     blitz: Res<Blitz>,
     data: Res<ActorData>,
     walls: Query<(&Npc, &Team, &GlobalTransform), Without<Dead>>,
-    mut q: Query<(&Honor, &mut Mods, &Loadout, &Transform, Option<&Team>), Without<Dead>>,
+    mut q: Query<(&mut Honor, &mut Mods, &Loadout, &Transform, Option<&Team>), Without<Dead>>,
 ) {
     let cfg = &blitz.cfg;
-    for (h, mut m, load, tf, team) in &mut q {
-        let extra = cfg.enhance_dps + sum(&cfg.up.dps, h.level[0]);
-        let slot = load.slots.get(load.current);
-        let w = slot
+    let officer = (
+        cfg.class_val(Some(OFFICER), "reduceDamageRatioForMyTeam"),
+        { cfg.class_val(Some(OFFICER), "distance") * 0.01 },
+    );
+    let officers: Vec<(Team, Vec3)> = q
+        .iter()
+        .filter(|(h, ..)| h.class == Some(OFFICER))
+        .filter_map(|(_, _, _, tf, t)| Some((*t?, tf.translation)))
+        .collect();
+    for (mut h, mut m, load, tf, team) in &mut q {
+        let c = h.class;
+        let w = load
+            .slots
+            .get(load.current)
             .and_then(|s| data.items.get(s.item))
             .and_then(|i| i.weapon.as_ref());
+        let melee = w.is_some_and(|w| is_melee(w.kind));
+        let shotgun = w.is_some_and(|w| w.kind == WeaponKind::Shotgun);
+        let extra = cfg.enhance_dps
+            + sum(&cfg.up.dps, h.level[0])
+            + if melee {
+                cfg.class_val(c, "enhanceMeleeDPS")
+            } else {
+                0.0
+            }
+            - cfg.class_val(c, "reduceDPS");
         m.dealt = w
             .and_then(|w| {
                 let (factor, delay) = cfg.weapon.get(table_key(w.kind)?)?;
                 Some(1.0 + extra * factor * delay * 0.001 / (w.damage as f32).max(1.0))
             })
-            .unwrap_or(1.0);
+            .unwrap_or(1.0)
+            * (1.0 + cfg.class_val(c, "enhanceDamageRatio"))
+            * if shotgun {
+                1.0 + cfg.class_val(c, "enhanceShotgunDamage")
+            } else {
+                1.0
+            };
+        m.vs_buildings = 1.0 + cfg.class_val(c, "enhanceDamageRatioAtBuilding");
         m.shot_delay = 1.0 / (1.0 + sum(&cfg.up.delay, h.level[1]));
-        let near = team.is_some_and(|t| {
-            walls.iter().any(|(n, wt, g)| {
-                n.kind == "barricade"
-                    && wt == t
-                    && within(g.translation(), tf.translation, cfg.barricade.dist)
+        let near = |kind: &str, dist: f32| {
+            team.is_some_and(|t| {
+                walls.iter().any(|(n, wt, g)| {
+                    n.kind == kind && wt == t && within(g.translation(), tf.translation, dist)
+                })
             })
+        };
+        let (radar, barricade) = (
+            near("radar", cfg.radar.dist),
+            near("barricade", cfg.barricade.dist),
+        );
+        let guarded = team.is_some_and(|t| {
+            officers
+                .iter()
+                .any(|(ot, p)| ot == t && within(*p, tf.translation, officer.1))
         });
-        m.taken = if near {
+        m.taken = if barricade {
             1.0 - cfg.barricade.reduce
         } else {
             1.0
-        };
+        } * if guarded { 1.0 - officer.0 } else { 1.0 };
+        h.aura = radar as u8 | (barricade as u8) << 1 | (guarded as u8) << 2;
     }
 }
 
@@ -841,18 +1154,48 @@ fn faster_respawn(time: Res<Time>, blitz: Res<Blitz>, mut q: Query<(&Honor, &mut
     }
 }
 
-/// A respawn refills the guns from scratch: the magazine steps stretch the spare rounds again.
+/// Spare rounds of a fresh set of guns: the magazine steps stretch each gun's reserve and the
+/// Duelist's `addShotgunMagazine` adds magazines to the shotgun. Sets rather than adds, so a
+/// second call changes nothing.
+fn restock(cfg: &Cfg, data: &ActorData, h: &Honor, load: &mut Loadout) {
+    let k = 1.0 + sum(&cfg.up.magazine, h.level[4]);
+    let mags = cfg.class_val(h.class, "addShotgunMagazine");
+    for s in &mut load.slots {
+        let Some(w) = data.items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
+            continue;
+        };
+        let base = w
+            .max_bullet
+            .unwrap_or(w.magazine * 4)
+            .saturating_sub(w.magazine);
+        let extra = if w.kind == WeaponKind::Shotgun {
+            mags * w.magazine as f32
+        } else {
+            0.0
+        };
+        s.reserve = (base as f32 * k + extra).round() as u32;
+    }
+}
+
+/// A respawn refills the guns from scratch ([`restock`]); so do the classes' new weapons a few
+/// frames after they were handed out ([`Equip`] has to land first).
 fn rearm(
     mut back: RemovedComponents<Dead>,
-    blitz: Res<Blitz>,
+    mut blitz: ResMut<Blitz>,
+    data: Res<ActorData>,
     mut q: Query<(&Honor, &mut Loadout)>,
 ) {
+    if blitz.settle > 0 {
+        blitz.settle -= 1;
+        if blitz.settle == 0 {
+            for (h, mut load) in &mut q {
+                restock(&blitz.cfg, &data, h, &mut load);
+            }
+        }
+    }
     for e in back.read() {
         if let Ok((h, mut load)) = q.get_mut(e) {
-            let k = 1.0 + sum(&blitz.cfg.up.magazine, h.level[4]);
-            for s in &mut load.slots {
-                s.reserve = (s.reserve as f32 * k).round() as u32;
-            }
+            restock(&blitz.cfg, &data, h, &mut load);
         }
     }
 }
@@ -860,16 +1203,22 @@ fn rearm(
 // ---------------------------------------------------------------------------------------------
 // Buildings
 
-/// Restores `ratio` of each gun's ammunition cap (`max_bullet`, raised by the magazine steps).
-fn refill(data: &ActorData, load: &mut Loadout, ratio: f32, bonus: f32) {
+/// Restores `ratio` of each gun's ammunition cap (`max_bullet`, raised by the magazine steps and
+/// the shotgun's class magazines).
+fn refill(data: &ActorData, load: &mut Loadout, ratio: f32, bonus: f32, mags: f32) {
     for s in &mut load.slots {
-        if let Some(cap) = data
+        if let Some((cap, w)) = data
             .items
             .get(s.item)
             .and_then(|i| i.weapon.as_ref())
-            .and_then(|w| w.max_bullet)
+            .and_then(|w| Some((w.max_bullet?, w)))
         {
-            let cap = cap as f32 * (1.0 + bonus);
+            let extra = if w.kind == WeaponKind::Shotgun {
+                mags * w.magazine as f32
+            } else {
+                0.0
+            };
+            let cap = cap as f32 * (1.0 + bonus) + extra;
             s.reserve = (s.reserve as f32 + (cap * ratio).ceil()).min(cap) as u32;
         }
     }
@@ -900,6 +1249,7 @@ fn zones(
     }
     for (h, team, tf, mut v, mut load) in &mut q {
         let bonus = sum(&blitz.cfg.up.magazine, h.level[4]);
+        let mags = blitz.cfg.class_val(h.class, "addShotgunMagazine");
         for (n, wt, g) in &walls {
             if wt != team {
                 continue;
@@ -908,10 +1258,10 @@ fn zones(
                 "radar" if heal && within(g.translation(), tf.translation, radar.dist) => {
                     v.hp = (v.hp + radar.ap_hp * v.max_hp).min(v.max_hp);
                     v.ap = (v.ap + radar.ap_hp * v.max_ap).min(v.max_ap);
-                    refill(&data, &mut load, radar.mag, bonus);
+                    refill(&data, &mut load, radar.mag, bonus, mags);
                 }
                 "barricade" if stock && within(g.translation(), tf.translation, barricade.dist) => {
-                    refill(&data, &mut load, barricade.mag, bonus);
+                    refill(&data, &mut load, barricade.mag, bonus, mags);
                 }
                 _ => {}
             }
@@ -925,6 +1275,7 @@ fn reinforce(
     clock: Res<Clock>,
     mut blitz: ResMut<Blitz>,
     npcs: Query<(Entity, &Npc, &Team), Without<Dead>>,
+    player: Query<&Team, With<Player>>,
     mut state: MessageWriter<NpcState>,
 ) {
     let mut count = [0usize; 2];
@@ -940,10 +1291,11 @@ fn reinforce(
     for i in 0..2 {
         b.seen[i] = b.seen[i].max(count[i]);
     }
-    let mut banner = None;
+    let mine = player.single().ok().copied();
     for t in [Team::Red, Team::Blue] {
         let s = side(t);
-        for (i, r) in b.cfg.reinforce.iter().enumerate() {
+        for i in 0..b.cfg.reinforce.len() {
+            let r = b.cfg.reinforce[i].clone();
             if b.seen[s] == 0 || b.fired[s][i] || count[s] > r.barricades as usize {
                 continue;
             }
@@ -962,14 +1314,26 @@ fn reinforce(
                 count[s],
                 word(to)
             );
-            banner = Some((to, what.to_string()));
+            // `EventBenefit` for the player's side, `EventLoss` for the other; the enemy's wave
+            // carries message 2126 (the wording of the allied one and of the terminator is mine).
+            let (sound, text) = if Some(to) == mine {
+                (
+                    b.cfg.msg.benefit.clone(),
+                    format!("ALLIED REINFORCEMENTS: {what}"),
+                )
+            } else if what == "terminator" {
+                (b.cfg.msg.loss.clone(), "THE TERMINATOR HAS ARRIVED".into())
+            } else {
+                b.helped |= 1 << 5;
+                (
+                    b.cfg.msg.loss.clone(),
+                    "The enemy's reinforcements have arrived. Eliminate them to win Honor Points."
+                        .into(),
+                )
+            };
+            let view = b.cfg.msg.view;
+            b.say(&sound, text, view);
         }
-    }
-    if let Some((to, what)) = banner {
-        blitz.banner = (
-            clock.elapsed + BANNER_SECS,
-            format!("{} reinforcements: {what}", word(to)),
-        );
     }
 }
 
@@ -980,6 +1344,7 @@ fn crates(
     mut kills: MessageReader<Killed>,
     npcs: Query<&Npc>,
     mut spawn: MessageWriter<SpawnNpc>,
+    mut vfx: MessageWriter<Vfx>,
 ) {
     for k in kills.read() {
         let Ok(n) = npcs.get(k.victim) else { continue };
@@ -999,6 +1364,10 @@ fn crates(
                 id: blitz.cfg.crates[i].clone(),
                 pos: blitz.crate_at[i],
                 ..default()
+            });
+            vfx.write(Vfx::Named {
+                name: HONOR_ITEM_FX.into(),
+                at: Transform::from_translation(blitz.crate_at[i]),
             });
         }
     }
@@ -1021,6 +1390,8 @@ fn finish(
     mut clock: ResMut<Clock>,
     mut commands: Commands,
     mut vtime: ResMut<Time<Virtual>>,
+    honors: Query<(&Honor, &Team, Has<Player>)>,
+    mut reward: MessageWriter<Reward>,
 ) {
     let mut count = [0usize; 2];
     let mut soldiers = [0usize; 2];
@@ -1081,6 +1452,436 @@ fn finish(
         clock.over = Some(verdict(loser).into());
         freeze(&mut commands, &mut vtime, true);
     }
+    // The reward, once, as soon as the match is over.
+    if let Some(headline) = clock.over.clone().filter(|_| blitz.payout.is_none())
+        && let Some((h, t, _)) = honors.iter().find(|h| h.2)
+    {
+        let best = honors
+            .iter()
+            .filter(|o| o.1 == t)
+            .map(|o| o.0.total)
+            .fold(0.0, f32::max);
+        let p = payout(
+            &blitz.cfg.reward,
+            headline == "VICTORY",
+            h.total >= best,
+            clock.elapsed,
+            h.total,
+        );
+        info!(
+            "t={:.0} blitz: reward {headline}{}: +{} XP, +{} bounty, +{} medals{}",
+            clock.elapsed,
+            if p.mvp { " (MVP)" } else { "" },
+            p.xp,
+            p.bounty,
+            p.medals,
+            p.none
+                .as_deref()
+                .map_or(String::new(), |w| format!(" ({w})"))
+        );
+        if p.xp + p.bounty > 0 {
+            reward.write(Reward {
+                xp: p.xp,
+                bounty: p.bounty,
+            });
+        }
+        blitz.payout = Some(p);
+    }
+}
+
+/// What a finished match paid the player.
+#[derive(Clone, Debug, PartialEq)]
+struct Payout {
+    won: bool,
+    mvp: bool,
+    minutes: u32,
+    xp: u32,
+    bounty: u32,
+    medals: u32,
+    /// Why nothing was paid (`REWARD minTime` / `minHonor` not reached).
+    none: Option<String>,
+}
+
+/// The `REWARD` rules. **Observed**: nothing is paid below `minTime` seconds or `minHonor` honor;
+/// the medals are `winnerMedal` / `loserMedal` plus `minuteBonusMedal` per minute up to
+/// `minuteBonusMedalMax`; the MVP of a side gets `WinXPBonusMVP` .. `LoseMedalBonusMVP` more of
+/// each. **Inferred**: XP and bounty are `baseExp` / `baseBounty` per minute played (the file
+/// only says "base amount"), the same for either side; a draw pays like a loss; the MVP is the
+/// side's player with the most honor earned. `minPlayCount` (a newcomer bonus) and the waiting
+/// medals have no offline counterpart.
+fn payout(r: &RewardCfg, won: bool, mvp: bool, secs: f32, honor: f32) -> Payout {
+    let minutes = (secs / 60.0) as u32;
+    let mut p = Payout {
+        won,
+        mvp,
+        minutes,
+        xp: 0,
+        bounty: 0,
+        medals: 0,
+        none: None,
+    };
+    if secs < r.min_time {
+        p.none = Some(format!("needs {:.0} s of play", r.min_time));
+    } else if honor < r.min_honor {
+        p.none = Some(format!("needs {:.0} honor", r.min_honor));
+    }
+    if p.none.is_some() {
+        return p;
+    }
+    let bonus = match (mvp, won) {
+        (false, _) => [0.0; 3],
+        (true, true) => r.mvp_win,
+        (true, false) => r.mvp_lose,
+    };
+    let m = minutes as f32;
+    let medals =
+        if won { r.win_medal } else { r.lose_medal } + (m * r.minute_medal).min(r.minute_medal_max);
+    p.xp = (r.exp * m * (1.0 + bonus[0])).round() as u32;
+    p.bounty = (r.bounty * m * (1.0 + bonus[1])).round() as u32;
+    p.medals = (medals * (1.0 + bonus[2])).round() as u32;
+    p
+}
+
+// ---------------------------------------------------------------------------------------------
+// Classes
+
+/// Each class's blade and gun item (0: the data has none): the default loadout's katana,
+/// revolver or rifle where the kind matches, else the lowest id of the kind that has a name, a
+/// model and a real damage (zitem lists debug items with `damage="1"`): the same weapons every
+/// run, unlike a map's iteration order.
+fn kits(items: &Items) -> [[u32; 2]; 6] {
+    let is = |i: &crate::item::Item, kind| {
+        i.weapon
+            .as_ref()
+            .is_some_and(|w| w.kind == kind && w.damage > 1)
+    };
+    let first = |kind: WeaponKind| {
+        DEFAULT_LOADOUT
+            .into_iter()
+            .find(|id| items.get(*id).is_some_and(|i| is(i, kind)))
+            .or_else(|| {
+                items
+                    .weapons()
+                    .filter(|i| i.name.is_some() && items.model(i).is_some() && is(i, kind))
+                    .map(|i| i.id)
+                    .min()
+            })
+            .unwrap_or(0)
+    };
+    let mut kits = KITS.map(|(blade, gun)| [first(blade), first(gun)]);
+    if items
+        .get(INCINERATOR)
+        .is_some_and(|i| items.model(i).is_some())
+    {
+        kits[2][1] = INCINERATOR;
+    }
+    kits
+}
+
+/// What a Blitzkrieg actor spawns with: the default loadout and every class weapon (an
+/// [`Equip`] then picks the ones its class uses).
+pub fn arsenal(items: &Items) -> Vec<u32> {
+    let mut all = DEFAULT_LOADOUT.to_vec();
+    for id in kits(items).into_iter().flatten() {
+        if id != 0 && !all.contains(&id) {
+            all.push(id);
+        }
+    }
+    all
+}
+
+/// The class screen (`CLASS_SELECT_TIME`, `blitz/ui.rs`) and then the classes: the player's
+/// pick (or none), a random one for each bot with at most [`SAME_CLASS`] per side, each
+/// equipped with its weapons. Enter / Space confirm, 1-6 and the arrow keys choose; the
+/// highlighted class is taken when the time is up.
+#[allow(clippy::too_many_arguments)]
+fn classes(
+    real: Res<Time<Real>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    clock: Res<Clock>,
+    mut blitz: ResMut<Blitz>,
+    mut commands: Commands,
+    mut vtime: ResMut<Time<Virtual>>,
+    mut equip: MessageWriter<Equip>,
+    mut seed: Local<u32>,
+    mut q: Query<(Entity, &mut Honor, &mut Vitals, &Team, &Name, Has<Player>)>,
+) {
+    if !blitz.assign || !q.iter().any(|a| a.5) {
+        return;
+    }
+    let mut chosen = blitz.pick;
+    let held = blitz.select.is_some();
+    if let Some(s) = &mut blitz.select {
+        s.left -= real.delta_secs();
+        let n = CLASSES.len();
+        let digits = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+        ];
+        if let Some(i) = digits.iter().position(|k| keys.just_pressed(*k)) {
+            s.sel = i;
+        }
+        if keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::ArrowDown]) {
+            s.sel = (s.sel + 1) % n;
+        }
+        if keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::ArrowUp]) {
+            s.sel = (s.sel + n - 1) % n;
+        }
+        s.done |= s.left <= 0.0 || keys.any_just_pressed([KeyCode::Enter, KeyCode::Space]);
+        if !s.done {
+            return;
+        }
+        chosen = Some(s.sel);
+    }
+    if *seed == 0 {
+        *seed = 0x2545_f491;
+    }
+    let mut order: Vec<(Entity, bool)> = q.iter().map(|a| (a.0, a.5)).collect();
+    order.sort_by_key(|o| !o.1);
+    let mut count = [[0u8; 6]; 2];
+    let mut log = String::new();
+    for (e, player) in order {
+        let Ok((_, mut h, mut v, team, name, _)) = q.get_mut(e) else {
+            continue;
+        };
+        let c = if player {
+            chosen
+        } else {
+            let start = (rnd(&mut seed) * CLASSES.len() as f32) as usize;
+            (0..CLASSES.len())
+                .map(|i| (start + i) % CLASSES.len())
+                .find(|c| count[side(*team)][*c] < SAME_CLASS)
+        };
+        h.class = c;
+        // The Gladiator's `addMaxApHp`.
+        let add = blitz.cfg.class_val(c, "addMaxApHp");
+        v.max_hp += add;
+        v.max_ap += add;
+        v.hp += add;
+        v.ap += add;
+        let items = match c {
+            Some(c) => blitz.kit[c].map(|id| (id, None)).to_vec(),
+            None => DEFAULT_LOADOUT.map(|id| (id, None)).to_vec(),
+        };
+        equip.write(Equip {
+            actor: e,
+            items,
+            current: usize::from(c.is_some_and(|c| c != 0)),
+        });
+        if let Some(c) = c {
+            count[side(*team)][c] += 1;
+            log += &format!(" {name} ({}) {};", word(*team), CLASSES[c].0);
+        }
+        if player {
+            blitz.banner = (
+                clock.elapsed + BANNER_SECS,
+                c.map_or("NO CLASS".into(), |c| format!("CLASS: {}", CLASSES[c].0)),
+            );
+        }
+    }
+    info!("blitz: classes:{log}");
+    blitz.assign = false;
+    blitz.settle = 3;
+    if held {
+        blitz.select = None;
+        commands.remove_resource::<Hold>();
+        freeze(&mut commands, &mut vtime, false);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Announcer
+
+/// `EVENT_MESSAGE`: a radar under attack (at most once per `damagedRadarCoolDown` per side) and
+/// a barricade destroyed; the sound is `EventBenefit` when it favours the player's side,
+/// `EventLoss` when not (*inferred* pairing; the texts are mine, no string gives them).
+fn events(
+    clock: Res<Clock>,
+    mut blitz: ResMut<Blitz>,
+    mut hits: MessageReader<Damage>,
+    mut kills: MessageReader<Killed>,
+    npcs: Query<(&Npc, &Team)>,
+    player: Query<&Team, With<Player>>,
+) {
+    let Ok(&mine) = player.single() else { return };
+    let now = clock.elapsed;
+    let view = blitz.cfg.msg.view;
+    let say = |blitz: &mut Blitz, team: Team, benefit: &str, loss: &str| {
+        let (sound, text) = if team == mine {
+            (blitz.cfg.msg.loss.clone(), loss)
+        } else {
+            (blitz.cfg.msg.benefit.clone(), benefit)
+        };
+        blitz.say(&sound, text, view);
+    };
+    for d in hits.read() {
+        if let Ok((n, t)) = npcs.get(d.target)
+            && n.kind == "radar"
+            && d.amount > 0.0
+            && now - blitz.radar_hit[side(*t)] >= blitz.cfg.msg.radar_cooldown
+        {
+            blitz.radar_hit[side(*t)] = now;
+            say(
+                &mut blitz,
+                *t,
+                "ENEMY RADAR UNDER ATTACK",
+                "YOUR RADAR IS UNDER ATTACK",
+            );
+        }
+    }
+    for k in kills.read() {
+        if let Ok((n, t)) = npcs.get(k.victim)
+            && n.kind == "barricade"
+        {
+            say(
+                &mut blitz,
+                *t,
+                "ENEMY BARRICADE DESTROYED",
+                "YOUR BARRICADE WAS DESTROYED",
+            );
+        }
+    }
+}
+
+/// `HELP_MESSAGE`: the retail help sentences (messages 2121-2128), each once, when their
+/// situation arises (the triggers are *inferred* from the wording; `honor` and `dist` are the
+/// file's) and nothing else is on screen.
+fn helps(
+    clock: Res<Clock>,
+    mut blitz: ResMut<Blitz>,
+    data: Res<ActorData>,
+    player: Query<(&Honor, &Vitals, &Transform, &Team, &Loadout), (With<Player>, Without<Dead>)>,
+    npcs: Query<(&Npc, &Team, &GlobalTransform), Without<Dead>>,
+) {
+    let now = clock.elapsed;
+    if blitz.select.is_some() || !blitz.msgs.is_empty() || now < blitz.event.0 {
+        return;
+    }
+    let Ok((h, v, tf, team, load)) = player.single() else {
+        return;
+    };
+    let dist = blitz.cfg.msg.help_dist;
+    let (mut building, mut soldiers) = (0, 0);
+    for (n, t, g) in &npcs {
+        if t != team && within(g.translation(), tf.translation, dist) {
+            match n.kind.as_str() {
+                "radar" | "barricade" => building += 1,
+                k if SOLDIERS.contains(&k) => soldiers += 1,
+                _ => {}
+            }
+        }
+    }
+    let melee = load
+        .slots
+        .get(load.current)
+        .and_then(|s| data.items.get(s.item))
+        .and_then(|i| i.weapon.as_ref())
+        .is_some_and(|w| is_melee(w.kind));
+    let upgraded = h.level.iter().any(|l| *l > 0);
+    let help = [
+        (
+            0,
+            building > 0,
+            "Make your soldiers annihilate the buildings. The building has 94% resistance against a player's attack.",
+        ),
+        (
+            1,
+            soldiers >= 3 && !melee,
+            "If there are too many enemy soldiers, use your sword. Soldiers are no match for melee attacks.",
+        ),
+        (
+            2,
+            h.points >= blitz.cfg.msg.help_honor && !upgraded,
+            "Upgrade using the F key. Your character will grow stronger.",
+        ),
+        (
+            3,
+            h.aura & 2 != 0,
+            "You are currently near the barricade. Only half the damage will be inflicted upon you.",
+        ),
+        (
+            4,
+            h.aura & 1 != 0,
+            "You are currently near the radar. Your HP/AP/Bullet will restore.",
+        ),
+        (
+            6,
+            now - blitz.skip > 5.0,
+            "When there are 9/6/3 barricades left, ally reinforcements will be spawned. When everything is destroyed, the Terminator will appear.",
+        ),
+        (
+            7,
+            v.hp < v.max_hp * 0.5 && h.aura & 1 == 0,
+            "You are currently injured. Stay near your radar to restore your health and regain bullets.",
+        ),
+    ];
+    if let Some((bit, _, text)) = help
+        .into_iter()
+        .find(|(bit, on, _)| *on && blitz.helped >> bit & 1 == 0)
+    {
+        blitz.helped |= 1 << bit;
+        let (sound, view) = (blitz.cfg.msg.help.clone(), blitz.cfg.msg.help_view);
+        blitz.say(&sound, text, view);
+    }
+}
+
+/// Plays the queued announcements one at a time, the honor-gain effects and sounds
+/// (`ef_Blitz_*Honor_Gain`, `*gainhonor.wav`) and the buff effects around the player.
+fn feedback(
+    clock: Res<Clock>,
+    time: Res<Time>,
+    mut blitz: ResMut<Blitz>,
+    player: Query<(&GlobalTransform, &Honor), With<Player>>,
+    mut vfx: MessageWriter<Vfx>,
+    mut sound: MessageWriter<PlaySound>,
+) {
+    let Ok((tf, h)) = player.single() else { return };
+    let (at, now) = (tf.translation(), clock.elapsed);
+    if now >= blitz.event.0
+        && let Some((stem, text, view)) = blitz.msgs.pop_front()
+    {
+        let secs = if blitz.msgs.is_empty() {
+            view
+        } else {
+            blitz.cfg.msg.delay
+        };
+        info!("t={now:.1} blitz: announce [{stem}] {text}");
+        blitz.event = (now + secs, text);
+        sound.write(PlaySound { stem, at });
+    }
+    for g in std::mem::take(&mut blitz.gains) {
+        let (fx, stem) = match g {
+            g if g < GAIN_LESS => ("ef_Blitz_LessHonor_Gain", "Blitzkrieg/lessgainhonor"),
+            g if g < GAIN_MORE => ("ef_Blitz_LegularHonor_Gain", "Blitzkrieg/regulargainhonor"),
+            _ => ("ef_Blitz_MoreHonor_Gain", "Blitzkrieg/moregainhonor"),
+        };
+        vfx.write(Vfx::Named {
+            name: fx.into(),
+            at: Transform::from_translation(at),
+        });
+        sound.write(PlaySound {
+            stem: stem.into(),
+            at,
+        });
+    }
+    for (i, fx) in AURAS.into_iter().enumerate() {
+        if h.aura >> i & 1 == 0 {
+            blitz.aura_t[i] = 0.0;
+            continue;
+        }
+        blitz.aura_t[i] -= time.delta_secs();
+        if blitz.aura_t[i] <= 0.0 {
+            blitz.aura_t[i] = AURA_SECS;
+            vfx.write(Vfx::Named {
+                name: fx.into(),
+                at: Transform::from_translation(at),
+            });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1091,6 +1892,7 @@ enum Line {
     Honor,
     Panel,
     Banner,
+    Event,
 }
 
 /// The honor counter (top right), the upgrade panel (left) and the event banner (top centre).
@@ -1135,6 +1937,7 @@ fn hud(
                 r.spawn(text(Line::Honor, 22.0, px(16), px(56), auto()));
                 r.spawn(text(Line::Panel, 20.0, px(24), px(200), auto()));
                 r.spawn(text(Line::Banner, 30.0, percent(30), px(110), auto()));
+                r.spawn(text(Line::Event, 24.0, percent(20), px(150), auto()));
             });
         return;
     }
@@ -1169,16 +1972,29 @@ fn hud(
     } else {
         String::new()
     };
-    let banner = if clock.elapsed < blitz.banner.0 {
+    let banner = if clock.elapsed < blitz.banner.0 && clock.over.is_none() {
         blitz.banner.1.clone()
+    } else {
+        String::new()
+    };
+    let event = if clock.elapsed < blitz.event.0 && clock.over.is_none() {
+        blitz.event.1.clone()
     } else {
         String::new()
     };
     for (line, mut t) in &mut lines {
         let want = match line {
-            Line::Honor => format!("HONOR {:.0}   [F] upgrades", h.points),
+            Line::Honor => format!(
+                "HONOR {:.0}   [F] upgrades{}",
+                h.points,
+                h.class.map_or(String::new(), |c| format!(
+                    "   {}",
+                    CLASSES[c].0.to_uppercase()
+                ))
+            ),
             Line::Panel => panel.clone(),
             Line::Banner => banner.clone(),
+            Line::Event => event.clone(),
         };
         if t.0 != want {
             t.0 = want;
@@ -1233,5 +2049,35 @@ mod tests {
             Some("route_top_2")
         );
         assert_eq!(c.routes[0].1.len(), 7);
+        // Classes, the class screen, the leave income, the reward and the messages.
+        assert_eq!(c.class_select, 30.0);
+        assert_eq!(c.class.len(), 9);
+        assert_eq!(c.class_val(Some(3), "distance"), 800.0);
+        assert_eq!(c.class_val(Some(0), "enhanceMeleeDPS"), 60.0);
+        assert_eq!(c.class_val(None, "addMaxApHp"), 0.0);
+        for (i, (_, _, book)) in CLASSES.iter().enumerate() {
+            assert_eq!(
+                c.book.iter().find(|b| b.0 == *book).unwrap().1,
+                900000 + i as u32
+            );
+        }
+        assert_eq!(c.leave, [3.0, 4.0, 8.0]);
+        assert_eq!([5, 3, 2, 1].map(|n| c.income_for(n)), [2.0, 3.0, 4.0, 8.0]);
+        assert_eq!((c.reward.min_time, c.reward.min_honor), (420.0, 2000.0));
+        assert_eq!(c.reward.mvp_lose, [0.45; 3]);
+        assert_eq!(c.msg.benefit, "Blitzkrieg/EventBenefit");
+        assert_eq!(
+            (c.msg.radar_cooldown, c.msg.help_dist, c.msg.help_honor),
+            (2.0, 5.0, 300.0)
+        );
+        // The reward: the MVP of the winners after 10 minutes, a loser's, and the minimums.
+        let r = &c.reward;
+        let p = payout(r, true, true, 600.0, 2500.0);
+        assert_eq!((p.xp, p.bounty, p.medals), (575, 575, 29));
+        let p = payout(r, false, false, 600.0, 2500.0);
+        assert_eq!((p.xp, p.bounty, p.medals), (500, 500, 15));
+        assert_eq!(payout(r, true, false, 2400.0, 9000.0).medals, 35);
+        assert!(payout(r, true, false, 419.0, 9000.0).none.is_some());
+        assert!(payout(r, true, false, 900.0, 1999.0).none.is_some());
     }
 }

@@ -23,13 +23,16 @@ pub struct Sense<'a> {
     pub summons: u32,
     /// Free floor `dist` cm away in the direction `angle` (degrees clockwise from facing).
     pub empty: &'a dyn Fn(f32, f32) -> bool,
+    /// The state's stored random number in `[0, 1)` (see [`next`]).
+    pub dice: f32,
 }
 
-pub fn holds(c: &Cond, s: &Sense, roll: &mut dyn FnMut() -> f32) -> bool {
+pub fn holds(c: &Cond, s: &Sense) -> bool {
     match *c {
         Cond::Groggy(n) => s.groggy > n,
         Cond::Hp(n) => (s.hp - n).abs() < 0.5,
-        Cond::Dice(n) => roll() * 1000.0 < n,
+        // Banded by `next`, which never calls this for a `dice` term.
+        Cond::Dice(_) => false,
         Cond::Elapsed(ms) => s.elapsed_ms >= ms,
         Cond::EndAction => s.end_action,
         Cond::Dist(a, b) => s.has_target && (a..=b).contains(&s.dist),
@@ -50,22 +53,36 @@ pub fn holds(c: &Cond, s: &Sense, roll: &mut dyn FnMut() -> f32) -> bool {
 /// The first transition of `state` whose conditions all hold and whose target state is off
 /// cooldown (`since_ms(target)`: ms since that state was last entered; **inferred**: a state's
 /// `cooltime` is the minimum time between two entries).
-pub fn next(
-    fsm: &Fsm,
-    state: usize,
-    s: &Sense,
-    since_ms: &dyn Fn(usize) -> f32,
-    roll: &mut dyn FnMut() -> f32,
-) -> Option<Next> {
-    fsm.states[state]
-        .trans
+///
+/// `dice:N` (**inferred**): every state with a `dice` row (104 of 559) also has the `dice` entry
+/// or step function, so the state holds one random number `s.dice` in `[0, 1)`; scaled by the
+/// sum of the state's `dice` values, each row owns the next `N` of that range, in file order
+/// (`waitrandom`: four rows of 25 = four equal chances; `orbit1`: 75 + 75 + 25 + 25 + 25 =
+/// "orbit" 2/3 of the time, "shoot" 1/3). Sums run 50 to 1 300, so they are not percentages or
+/// permille. A row whose other terms fail still keeps its share.
+pub fn next(fsm: &Fsm, state: usize, s: &Sense, since_ms: &dyn Fn(usize) -> f32) -> Option<Next> {
+    let dice = |c: &Cond| match c {
+        Cond::Dice(n) => Some(*n),
+        _ => None,
+    };
+    let rows = &fsm.states[state].trans;
+    let total: f32 = rows
         .iter()
+        .flat_map(|t| t.conds.iter().filter_map(dice))
+        .sum();
+    let roll = s.dice * total;
+    let mut before = 0.0;
+    rows.iter()
         .find(|t| {
-            t.conds.iter().all(|c| holds(c, s, roll))
-                && match t.next {
-                    Next::State(i) => since_ms(i) >= fsm.states[i].cooltime_ms,
-                    Next::Die => true,
-                }
+            let lo = before;
+            before += t.conds.iter().filter_map(dice).sum::<f32>();
+            t.conds.iter().all(|c| match c {
+                Cond::Dice(n) => roll >= lo && roll < lo + n,
+                c => holds(c, s),
+            }) && match t.next {
+                Next::State(i) => since_ms(i) >= fsm.states[i].cooltime_ms,
+                Next::Die => true,
+            }
         })
         .map(|t| t.next)
 }
@@ -104,20 +121,62 @@ mod tests {
             path_failed: false,
             summons: 0,
             empty: &empty,
+            dice: 0.5,
         };
-        let mut never = || 0.5;
         let ready = |_: usize| 1e9;
-        assert_eq!(next(f, 0, &s, &ready, &mut never), Some(Next::State(1)));
-        // slash was entered 1 s ago: its 3 s cooldown skips it; the 100 % dice row fires.
+        assert_eq!(next(f, 0, &s, &ready), Some(Next::State(1)));
+        // slash was entered 1 s ago: its 3 s cooldown skips it; the lone dice row owns all of
+        // its range and fires.
         let recent = |i: usize| if i == 1 { 1000.0 } else { 1e9 };
-        assert_eq!(next(f, 0, &s, &recent, &mut never), Some(Next::State(0)));
+        assert_eq!(next(f, 0, &s, &recent), Some(Next::State(0)));
         s.groggy = 31.0;
-        assert_eq!(next(f, 0, &s, &ready, &mut never), Some(Next::State(2)));
+        assert_eq!(next(f, 0, &s, &ready), Some(Next::State(2)));
         s.hp = 0.0;
-        assert_eq!(next(f, 0, &s, &ready, &mut never), Some(Next::Die));
+        assert_eq!(next(f, 0, &s, &ready), Some(Next::Die));
         s.hp = 50.0;
         s.groggy = 0.0;
         s.look = 90.0; // facing away: the slash row fails, the dice row still fires
-        assert_eq!(next(f, 0, &s, &ready, &mut never), Some(Next::State(0)));
+        assert_eq!(next(f, 0, &s, &ready), Some(Next::State(0)));
+    }
+
+    #[test]
+    fn dice_rows_split_one_roll() {
+        // The disposer's `orbit1`: 75 + 75 -> orbit, then 25 + 25 + 25 -> shoot (225 in all).
+        let f = &parse_fsms(
+            r#"<XML><FSM name="d" entrystate="o">
+              <STATE name="o" cooltime="0">
+                <TRANS cond="dice:75" next="o"/><TRANS cond="dice:75" next="o"/>
+                <TRANS cond="dice:25,canSeeTarget" next="s"/><TRANS cond="dice:25" next="s"/>
+                <TRANS cond="dice:25" next="s"/></STATE>
+              <STATE name="s" cooltime="0"/></FSM></XML>"#,
+        )
+        .unwrap()["d"];
+        let empty = |_: f32, _: f32| true;
+        let mut s = Sense {
+            elapsed_ms: 0.0,
+            hp: 50.0,
+            groggy: 0.0,
+            has_target: true,
+            dist: 0.0,
+            sees: true,
+            look: 0.0,
+            elevation: 0.0,
+            height: 0.0,
+            end_action: false,
+            path_failed: false,
+            summons: 0,
+            empty: &empty,
+            dice: 0.0,
+        };
+        let ready = |_: usize| 1e9;
+        // 0.5 * 225 = 112 falls in the second band (orbit); 0.9 * 225 = 202 in the last (shoot).
+        s.dice = 0.5;
+        assert_eq!(next(f, 0, &s, &ready), Some(Next::State(0)));
+        s.dice = 0.9;
+        assert_eq!(next(f, 0, &s, &ready), Some(Next::State(1)));
+        // Out of sight, the first shoot band (150..175) is void and the roll finds nothing.
+        s.dice = 0.7;
+        s.sees = false;
+        assert_eq!(next(f, 0, &s, &ready), None);
     }
 }

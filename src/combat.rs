@@ -929,7 +929,9 @@ fn apply_damage(
         }
         // A mode's multipliers (Blitzkrieg upgrades, building resistances).
         let amount = d.amount
-            * mods.get(d.attacker).map_or(1.0, |m| m.dealt)
+            * mods
+                .get(d.attacker)
+                .map_or(1.0, |m| m.dealing(mods.get(d.target).ok()))
             * mods
                 .get(d.target)
                 .map_or(1.0, |m| m.against(humans.contains(d.attacker)));

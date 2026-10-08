@@ -9,6 +9,7 @@ use crate::{
     menu::{Art, Chosen, Page, State, button, heading, panel},
     mrs::Vfs,
     profile::{self, Profile, Ranks, SLOTS, progress},
+    quest::QItems,
     view::decode,
 };
 use bevy::{image::ImageSampler, prelude::*, text::Justify};
@@ -41,6 +42,8 @@ const CATS: [(usize, &str); 8] = [
     (7, "Legs"),
     (8, "Feet"),
 ];
+/// The inventory's extra category after the equipment slots: quest items (`zquestitem.xml`).
+pub const QUEST_SLOT: usize = SLOTS;
 const ROWS: usize = 8;
 
 /// One item the profile can own: the zitem record plus its bounty price.
@@ -73,6 +76,7 @@ impl Entry {
             0 => self.kind == "melee",
             1 | 2 => self.kind == "range",
             3 => self.kind == "custom",
+            QUEST_SLOT => self.kind == "quest",
             _ => self.kind == "equip" && self.slot == GEAR[slot - 4],
         };
         kind && (self.sex == 'a' || (self.sex == 'f') == woman)
@@ -189,6 +193,31 @@ impl ShopData {
                     stats: stats(i, hp, ap),
                 },
             );
+        }
+        // quest items are inventory entries too (kind "quest"; `level` is the level a page needs)
+        let strings = xml(vfs, "system/strings.xml")?;
+        let quest = QItems::parse(&xml(vfs, "system/zquestitem.xml")?, &strings).map_err(bad)?;
+        for i in quest.0.values() {
+            let entry = Entry {
+                id: i.id,
+                name: i.name.clone(),
+                kind: "quest".into(),
+                slot: "quest".into(),
+                sex: 'a',
+                level: i.level,
+                price: None,
+                sell: i.price,
+                hp: 0,
+                ap: 0,
+                stats: [
+                    i.desc.clone(),
+                    format!("Type {}   Worth {}", i.kind, i.price),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect(),
+            };
+            entries.insert(i.id, entry);
         }
         let mut sale: Vec<u32> = entries
             .values()
@@ -417,6 +446,9 @@ fn listing(page: Page, slot: usize, data: &ShopData, profile: &Profile, woman: b
     if page == Page::Shop {
         return data.sale.iter().copied().filter(fits).collect();
     }
+    if slot == QUEST_SLOT {
+        return profile.quest_items.keys().copied().filter(fits).collect();
+    }
     let mut v = Vec::new();
     if slot >= 3 {
         v.push(0);
@@ -503,7 +535,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
                     ));
                 }
             } else {
-                for slot in 0..SLOTS {
+                for slot in 0..=QUEST_SLOT {
                     m.spawn(tile(art, 220.0, 34.0, ShopAct::Cat(page, slot)))
                         .with_children(|t| drop(t.spawn(text(Txt::Cat(slot), 14.0))));
                 }
@@ -592,7 +624,13 @@ pub struct ShopPlugin;
 
 impl Plugin for ShopPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShopState>()
+        // headless shots: `GUNZ_INV_SLOT=N` opens the inventory on equipment slot N (9 = quest items)
+        let mut ss = ShopState::default();
+        let slot = std::env::var("GUNZ_INV_SLOT")
+            .ok()
+            .and_then(|s| s.parse().ok());
+        ss.inv.slot = slot.filter(|&s| s <= QUEST_SLOT).unwrap_or(0);
+        app.insert_resource(ss)
             .add_systems(Update, (act, refresh, profile::save).chain());
     }
 }
@@ -620,6 +658,10 @@ fn act(
                     let id = selected(&ss, p, &data, &profile, woman);
                     let slot = ss.view(p).slot;
                     let Some(id) = id else { continue };
+                    if slot == QUEST_SLOT {
+                        ss.msg = "Quest items are sacrificed in the match menu".into();
+                        continue;
+                    }
                     ss.msg = match profile.equip(slot, data.entries.get(&id), woman) {
                         Ok(()) => format!("{} equipped", SLOT_NAMES[slot]),
                         Err(e) => e.into(),
@@ -732,7 +774,9 @@ fn refresh(
                 Some(0) => "- none -".into(),
                 Some(id) => {
                     let e = &data.entries[&id];
-                    if p == Page::Shop && profile.owned.contains(&id) {
+                    if p == Page::Inventory && ss.view(p).slot == QUEST_SLOT {
+                        format!("{}   x{}", e.name, profile.quest_items[&id])
+                    } else if p == Page::Shop && profile.owned.contains(&id) {
                         format!("{}   (owned)", e.name)
                     } else if p == Page::Shop {
                         format!("{}   Lv {}   {}", e.name, e.level, e.price.unwrap_or(0))
@@ -743,7 +787,21 @@ fn refresh(
                     }
                 }
             },
+            Txt::Cat(QUEST_SLOT) => {
+                format!("Quest items: {}", profile.quest_items.values().sum::<u32>())
+            }
             Txt::Cat(slot) => format!("{}: {}", SLOT_NAMES[slot], name(profile.equipped[slot])),
+            Txt::Detail(p) if ss.view(p).slot == QUEST_SLOT => {
+                match of(p).sel.and_then(|id| data.entries.get(&id)) {
+                    None => "Select an item".into(),
+                    Some(e) => {
+                        let have = profile.quest_items.get(&e.id).copied().unwrap_or(0);
+                        let mut s = vec![format!("{}   x{have}", e.name)];
+                        s.extend(e.stats.iter().cloned());
+                        s.join("\n")
+                    }
+                }
+            }
             Txt::Detail(p) => match of(p).sel.and_then(|id| data.entries.get(&id)) {
                 None => "Select an item".into(),
                 Some(e) => {

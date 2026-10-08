@@ -6,7 +6,7 @@
 //! frozen.
 
 use crate::{
-    game::{Frozen, Player, Score, Settings, Team, Vitals},
+    game::{Frozen, Hold, Player, Score, Settings, Team, Vitals},
     menu::{Art, Mode, button, heading, hover, panel},
     modes::{Berserker, ModesPlugin, Phase, Round},
     view::Shot,
@@ -241,6 +241,7 @@ fn header(
             "YOU {mine} : {theirs} THEM   ROUND {}   {round_t}",
             round.n.max(1)
         ),
+        Mode::ClanWar => format!("{mine} : {theirs}   ROUND {}   {round_t}", round.n.max(1)),
         Mode::Berserker => match rules.kill_limit {
             Some(k) => format!("BERSERKER {}   {total}   first to {k}", boss.unwrap_or("-")),
             None => format!("BERSERKER {}   {total}", boss.unwrap_or("-")),
@@ -305,11 +306,12 @@ fn pause_key(
     keys: Res<ButtonInput<KeyCode>>,
     clock: Res<Clock>,
     frozen: Option<Res<Frozen>>,
+    hold: Option<Res<Hold>>,
     pause_at: Option<Res<PauseAt>>,
     mut commands: Commands,
     mut vtime: ResMut<Time<Virtual>>,
 ) {
-    if clock.over.is_some() {
+    if clock.over.is_some() || hold.is_some() {
         return;
     }
     let scripted = pause_at.is_some_and(|p| clock.elapsed >= p.0);
@@ -348,6 +350,7 @@ fn sens_text(s: &Settings) -> String {
 fn panels(
     mut commands: Commands,
     frozen: Option<Res<Frozen>>,
+    hold: Option<Res<Hold>>,
     clock: Res<Clock>,
     art: Option<Res<Art>>,
     settings: Res<Settings>,
@@ -359,7 +362,7 @@ fn panels(
     let (Some(art), Ok(camera)) = (art, camera.single()) else {
         return;
     };
-    let want_pause = frozen.is_some() && clock.over.is_none();
+    let want_pause = frozen.is_some() && clock.over.is_none() && hold.is_none();
     match (want_pause, pause.single()) {
         (false, Ok(e)) => commands.entity(e).despawn(),
         (true, Err(_)) => spawn_pause(&mut commands, &art, camera, &settings),

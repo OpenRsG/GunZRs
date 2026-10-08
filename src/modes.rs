@@ -117,6 +117,7 @@ impl Plugin for ModesPlugin {
                     &[FLASHBANG, SMOKE, SPY_BAG, SPY_ICE, SPY_STUN, SPY_MINE],
                 ]
                 .concat(),
+                Mode::Blitzkrieg => crate::blitz::arsenal(&data.items),
                 _ => return,
             }
         };
@@ -518,6 +519,11 @@ fn begin(
     round.t = 0.0;
     round.notice.0 = 0.0;
     round.dealt.clear();
+    if let Some((lo, hi)) = spy.and_then(|c| c.players)
+        && !(lo..=hi).contains(&seats.iter().count().try_into().unwrap_or(0))
+    {
+        warn!("spymaplist.xml lists this map for {lo}-{hi} players");
+    }
     round.spy.revealed = false;
     let duel = rules.mode.duel();
     let total = seats.iter().count() as u32;
@@ -584,7 +590,7 @@ fn begin(
             if is_spy {
                 commands.entity(s.e).insert(Spy);
             } else {
-                commands.entity(s.e).remove::<Spy>();
+                commands.entity(s.e).remove::<(Spy, Located)>();
             }
         }
         if !keep || s.dead.is_some() {
@@ -875,7 +881,8 @@ fn rounds(
     round.t += time.delta_secs();
     match round.phase {
         Phase::Ready if round.n == 0 => {
-            if can_play(&rules, &mut round, spy, &seats) {
+            if spy.is_none_or(|c| round.t >= c.select) && can_play(&rules, &mut round, spy, &seats)
+            {
                 let keep = setup.is_some_and(|s| s.at.is_some()) || ahead.is_some();
                 begin(
                     &rules,
@@ -1315,6 +1322,11 @@ fn gunman(
 #[derive(Component)]
 pub(crate) struct Spy;
 
+/// A spy whose position was triangulated: trackers see a marker, refreshed every
+/// `spy::PING_SECS`.
+#[derive(Component)]
+pub(crate) struct Located;
+
 /// Spy bookkeeping across rounds.
 #[derive(Default)]
 struct SpyRound {
@@ -1349,8 +1361,16 @@ struct SpyCfg {
     /// Stun grenades and mines a tracker carries (`TRACER_TABLE`).
     stun: u32,
     mine: u32,
-    /// Seconds into a round when the spies are located (*inferred*: one fifth of the round,
-    /// the ratio of `spyOpenTime` to `limitTime` in every `spymaplist.xml` row).
+    /// `MinimumRating` of `SELECT_SPY`.
+    min_rating: f32,
+    /// `selectSpyTime`: seconds after the match starts when the first spies are drawn
+    /// (*inferred* reading of the comment "spies are chosen selectSpyTime seconds after the game
+    /// starts"; later rounds draw at their start).
+    select: f32,
+    /// `minPlayers`/`maxPlayers` of the map's `spymaplist.xml` row, if listed.
+    players: Option<(u32, u32)>,
+    /// Seconds into a round when the spies are located: the row's `spyOpenTime`
+    /// (*inferred* one fifth of the round for an unlisted map: that is the ratio in every row).
     open: f32,
 }
 
@@ -1405,6 +1425,9 @@ fn parse_spy(xml: &str) -> Result<SpyCfg, String> {
             attr(sel, "SelectedRating")?,
             attr(sel, "MaximumRating")?,
         ),
+        min_rating: attr(sel, "MinimumRating")?,
+        select: attr(sel, "selectSpyTime")?,
+        players: None,
         // The attribute really is spelt "RounFinishWaitTime" in the retail file.
         finish_wait: attr(sel, "RounFinishWaitTime")?,
         rows,
@@ -1414,9 +1437,18 @@ fn parse_spy(xml: &str) -> Result<SpyCfg, String> {
     })
 }
 
-/// `limitTime` (seconds) of the Spy map list for the map in `dir` (`maps/<folder>/`), if it
-/// is listed: `system/map.xml` names the id, `system/spymaplist.xml` has the time.
-fn spy_limit(vfs: &Vfs, dir: &str) -> Option<f32> {
+/// The `spymaplist.xml` row of a map.
+#[derive(Clone, Copy)]
+struct SpyMap {
+    limit: f32,
+    open: f32,
+    min: u32,
+    max: u32,
+}
+
+/// The Spy map list row for the map in `dir` (`maps/<folder>/`), if it is listed:
+/// `system/map.xml` names the id, `system/spymaplist.xml` has the row.
+fn spy_map(vfs: &Vfs, dir: &str) -> Option<SpyMap> {
     let folder = dir
         .trim_end_matches('/')
         .rsplit('/')
@@ -1438,11 +1470,15 @@ fn spy_limit(vfs: &Vfs, dir: &str) -> Option<f32> {
         .attribute("id")?
         .to_owned();
     let list = roxmltree::Document::parse(&list).ok()?;
-    list.descendants()
-        .find(|n| n.has_tag_name("SPY_MAP") && n.attribute("id") == Some(id.as_str()))?
-        .attribute("limitTime")?
-        .parse()
-        .ok()
+    let row = list
+        .descendants()
+        .find(|n| n.has_tag_name("SPY_MAP") && n.attribute("id") == Some(id.as_str()))?;
+    Some(SpyMap {
+        limit: attr(row, "limitTime").ok()?,
+        open: attr(row, "spyOpenTime").ok()?,
+        min: attr(row, "minPlayers").ok()?,
+        max: attr(row, "maxPlayers").ok()?,
+    })
 }
 
 /// Loads `spymode.xml` and sets the round time from the map's `limitTime` (unless the round
@@ -1455,18 +1491,26 @@ fn spy_setup(mut commands: Commands, mut rules: ResMut<Rules>, level: Res<Level>
     let xml = String::from_utf8(xml).unwrap_or_else(|e| panic!("system/spymode.xml: {e}"));
     let mut cfg = parse_spy(xml.trim_start_matches('\u{feff}'))
         .unwrap_or_else(|e| panic!("system/spymode.xml: {e}"));
-    match spy_limit(&level.vfs, &level.map.dir) {
-        Some(limit) if rules.round_secs == ROUND_SECS => rules.round_secs = limit,
+    let map = spy_map(&level.vfs, &level.map.dir);
+    match map {
+        Some(m) if rules.round_secs == ROUND_SECS => rules.round_secs = m.limit,
         Some(_) => {}
         None => warn!(
             "{}: not in spymaplist.xml, keeping the round time",
             level.map.dir
         ),
     }
-    cfg.open = rules.round_secs / 5.0;
+    match map {
+        // `spyOpenTime` is a fifth of `limitTime` in every row, so a changed round time keeps the ratio.
+        Some(m) => {
+            cfg.open = m.open / m.limit * rules.round_secs;
+            cfg.players = Some((m.min, m.max));
+        }
+        None => cfg.open = rules.round_secs / 5.0,
+    }
     info!(
-        "spy mode: round {:.0} s, spies located after {:.0} s, at least {} players",
-        rules.round_secs, cfg.open, cfg.min_players
+        "spy mode: round {:.0} s, spies located after {:.0} s, drawn {:.0} s into the match (selectSpyTime), at least {} players",
+        rules.round_secs, cfg.open, cfg.select, cfg.min_players
     );
     commands.insert_resource(cfg);
 }
@@ -1493,7 +1537,7 @@ fn pick_roles(cfg: &SpyCfg, round: &mut Round, seats: &Seats) -> Vec<Entity> {
             *r = if *was_spy {
                 selected
             } else {
-                (*r + (max - default) / 2.0).min(max)
+                (*r + (max - default) / 2.0).min(max).max(cfg.min_rating)
             };
         }
     }
@@ -1546,7 +1590,7 @@ fn reveal(round: &mut Round, seats: &mut Seats, commands: &mut Commands) {
         *s.name = Name::new(format!("{base} [SPY]"));
         commands
             .entity(s.e)
-            .insert((Team::Blue, VipTag(base.clone())));
+            .insert((Team::Blue, VipTag(base.clone()), Located));
         names.push(base);
     }
     info!("round {}: spies located: {names:?}", round.n);

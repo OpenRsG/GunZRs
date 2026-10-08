@@ -6,6 +6,7 @@
 
 use crate::{
     character::{self, Character, Outfit},
+    clan::{self, ClanArt},
     hud::try_image,
     item::Items,
     model::Textures,
@@ -75,6 +76,9 @@ pub enum Mode {
     /// radars that send waves of soldiers down the lanes, barricades to destroy; honor buys
     /// upgrades (`blitz.rs`).
     Blitzkrieg,
+    /// id 22 (`GAMETYPE_CLAN_SCRIM`, "Clan War" in `strings.xml`): the player's clan against a
+    /// rival clan, 4 against 4, elimination rounds (`clan.rs`).
+    ClanWar,
 }
 
 /// The choices of one mode's limit steppers: `gametypecfg.xml`'s `ROUNDS` and `LIMITTIME`
@@ -87,7 +91,7 @@ pub struct Limits {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 14] = [
+    pub const ALL: [Mode; 15] = [
         Mode::Deathmatch,
         Mode::Team,
         Mode::Gladiator,
@@ -102,6 +106,7 @@ impl Mode {
         Mode::Gunman,
         Mode::Spy,
         Mode::Blitzkrieg,
+        Mode::ClanWar,
     ];
 
     pub fn name(self) -> &'static str {
@@ -120,6 +125,7 @@ impl Mode {
             Mode::Gunman => "Gunman",
             Mode::Spy => "Spy",
             Mode::Blitzkrieg => "Blitzkrieg",
+            Mode::ClanWar => "Clan War",
         }
     }
 
@@ -140,6 +146,7 @@ impl Mode {
             Mode::Gunman => "gunman",
             Mode::Spy => "spy",
             Mode::Blitzkrieg => "blitzkrieg",
+            Mode::ClanWar => "clanwar",
         }
     }
 
@@ -152,6 +159,7 @@ impl Mode {
                 | Mode::Elimination
                 | Mode::Assassinate
                 | Mode::Blitzkrieg
+                | Mode::ClanWar
         )
     }
 
@@ -164,7 +172,12 @@ impl Mode {
     pub fn rounds(self) -> bool {
         matches!(
             self,
-            Mode::Elimination | Mode::Assassinate | Mode::Duel | Mode::DuelTournament | Mode::Spy
+            Mode::Elimination
+                | Mode::Assassinate
+                | Mode::Duel
+                | Mode::DuelTournament
+                | Mode::Spy
+                | Mode::ClanWar
         )
     }
 
@@ -222,6 +235,9 @@ impl Mode {
             Mode::Blitzkrieg => {
                 "Red against Blue on the Blitzkrieg map: soldiers march, destroy the enemy buildings. F: honor upgrades."
             }
+            Mode::ClanWar => {
+                "Your clan and bot members against a rival clan, 4 against 4. Rounds, no respawn. Clan points change."
+            }
         }
     }
 
@@ -261,6 +277,8 @@ impl Mode {
             Mode::Spy => l(&[3, 4, 5], 3, &[0], 0),
             // No score limit: the match ends when a radar falls (or at the time limit).
             Mode::Blitzkrieg => l(&[0], 0, LONG, 0),
+            // `gametypecfg.xml` game type 22: `ROUNDS` 3 (the only choice), `LIMITTIME` -1.
+            Mode::ClanWar => l(&[3], 3, &[0], 0),
         }
     }
 }
@@ -293,6 +311,10 @@ pub struct Config {
     pub kill_limit: Option<u32>,
     /// Quest mode: the scenario to play (`--scenario NAME`); `None` = the first one.
     pub scenario: Option<String>,
+    /// Quest mode: the `<MAP dice>` to play (`--dice N`); `None` rolls one on every start.
+    pub dice: Option<u32>,
+    /// Quest mode: quest items in the two sacrifice slots (`--sacrifice A,B`; 0 = empty).
+    pub sacrifice: [u32; 2],
 }
 
 impl Config {
@@ -322,10 +344,24 @@ impl Config {
                 .collect::<Result<_, _>>()?,
         };
         let mode = get::<Mode>(args, "--mode")?.unwrap_or(Mode::Deathmatch);
+        if mode == Mode::ClanWar && profile.clan.is_none() {
+            return Err("--mode clanwar needs a clan: create one in the menu's CLAN tab".into());
+        }
         let lim = mode.limits();
         let limit = |v: Option<u32>, default: u32| match v {
             None => (!headless && default > 0).then_some(default),
             Some(n) => (n > 0).then_some(n),
+        };
+        let sacrifice = match get::<String>(args, "--sacrifice")? {
+            None => [0; 2],
+            Some(s) => {
+                let id = |n: &str| n.parse().map_err(|_| format!("--sacrifice: bad id {n:?}"));
+                match *s.split(',').collect::<Vec<_>>() {
+                    [a] => [id(a)?, 0],
+                    [a, b] => [id(a)?, id(b)?],
+                    _ => return Err("--sacrifice: one or two item ids".into()),
+                }
+            }
         };
         let (time, kills) = (get(args, "--time-limit")?, get(args, "--kill-limit")?);
         Ok(Self {
@@ -345,6 +381,8 @@ impl Config {
             time_limit: limit(time, lim.minutes_default * 60),
             kill_limit: limit(kills, lim.kills_default),
             scenario: get(args, "--scenario")?,
+            dice: get(args, "--dice")?,
+            sacrifice,
         })
     }
 
@@ -384,6 +422,15 @@ impl Config {
         if let Some(s) = &self.scenario {
             a.extend(["--scenario".into(), s.clone()]);
         }
+        if let Some(d) = self.dice {
+            a.extend(["--dice".into(), d.to_string()]);
+        }
+        if self.sacrifice != [0; 2] {
+            a.extend([
+                "--sacrifice".into(),
+                format!("{},{}", self.sacrifice[0], self.sacrifice[1]),
+            ]);
+        }
         a
     }
 }
@@ -394,6 +441,7 @@ pub enum Page {
     Player,
     Shop,
     Inventory,
+    Clan,
 }
 
 impl FromStr for Page {
@@ -404,6 +452,7 @@ impl FromStr for Page {
             "player" => Ok(Page::Player),
             "shop" => Ok(Page::Shop),
             "inventory" => Ok(Page::Inventory),
+            "clan" => Ok(Page::Clan),
             _ => Err(()),
         }
     }
@@ -534,7 +583,9 @@ pub(crate) struct Catalog {
     pub(crate) vfs: Vfs,
     pub(crate) items: Items,
     maps: Vec<String>,
-    /// Quest mode scenario names (`quest::scenario_names`); the first is the default.
+    /// Quest mode: the retail quest data (`None` if the files are missing).
+    quest: Option<crate::quest::Catalog>,
+    /// Its scenario names; the first is the default.
     scenarios: Vec<String>,
     men: Character,
     women: Character,
@@ -552,13 +603,15 @@ impl Catalog {
             .collect();
         maps.sort_unstable();
         maps.dedup();
-        let scenarios = crate::quest::scenario_names(&vfs);
+        let quest = crate::quest::Catalog::load(&vfs).ok();
+        let scenarios = quest.as_ref().map(|q| q.names()).unwrap_or_default();
         Ok(Self {
             men: character::load(&vfs, "heroman1")?,
             women: character::load(&vfs, "herowoman1")?,
             vfs,
             items,
             maps,
+            quest,
             scenarios,
         })
     }
@@ -605,6 +658,9 @@ enum Field {
     Sens,
     Outfit,
     Scenario,
+    Sac1,
+    Sac2,
+    Needs,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -642,7 +698,7 @@ fn walk(list: &[u32], cur: u32, d: i32) -> u32 {
     list[(at + d).clamp(0, list.len() as i32 - 1) as usize]
 }
 
-fn step(cfg: &mut Config, cat: &Catalog, field: Field, d: i32) {
+fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32) {
     match field {
         Field::MapName | Field::TimeName | Field::KillsName | Field::Blurb => {}
         Field::Time => {
@@ -661,6 +717,28 @@ fn step(cfg: &mut Config, cat: &Catalog, field: Field, d: i32) {
             let at = (cfg.outfit.map_or(0, |p| p + 1) as i32 + d).rem_euclid(n) as usize;
             cfg.outfit = at.checked_sub(1);
         }
+        Field::Sac1 | Field::Sac2 => {
+            let Some(q) = &cat.quest else { return };
+            let slot = (field == Field::Sac2) as usize;
+            // the empty slot, then the sacrificable quest items the profile keeps
+            let mut list = vec![0];
+            list.extend(
+                profile
+                    .quest_items
+                    .keys()
+                    .filter(|id| q.items.0.get(id).is_some_and(|i| i.sacrifice)),
+            );
+            let at = list
+                .iter()
+                .position(|&i| i == cfg.sacrifice[slot])
+                .unwrap_or(0);
+            cfg.sacrifice[slot] = list[(at as i32 + d).rem_euclid(list.len() as i32) as usize];
+            // two items that make a special scenario's offering switch to it
+            if let Some(t) = q.special_for(&cfg.sacrifice) {
+                cfg.scenario = Some(t);
+            }
+        }
+        Field::Needs => {}
         Field::Scenario => {
             let list = &cat.scenarios;
             let at = list
@@ -674,7 +752,7 @@ fn step(cfg: &mut Config, cat: &Catalog, field: Field, d: i32) {
     }
 }
 
-fn value(cfg: &Config, cat: &Catalog, field: Field) -> String {
+fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String {
     let clock = |s: u32| format!("{}:{:02}", s / 60, s % 60);
     match field {
         Field::MapName if cfg.mode == Mode::Quest => "Quest".into(),
@@ -699,6 +777,38 @@ fn value(cfg: &Config, cat: &Catalog, field: Field) -> String {
             None => "Default".into(),
             Some(p) => format!("{} / {}", p + 1, cat.character(cfg.woman).parts.len()),
         },
+        Field::Sac1 | Field::Sac2 => {
+            let id = cfg.sacrifice[(field == Field::Sac2) as usize];
+            match (&cat.quest, id) {
+                (Some(q), id) if id != 0 => format!(
+                    "{} x{}",
+                    q.items.name(id),
+                    profile.quest_items.get(&id).copied().unwrap_or(0)
+                ),
+                _ => "-".into(),
+            }
+        }
+        Field::Needs => {
+            let Some(q) = &cat.quest else {
+                return String::new();
+            };
+            let name = cfg
+                .scenario
+                .as_deref()
+                .or(cat.scenarios.first().map(String::as_str));
+            match q.admit(name, cfg.sacrifice, &profile.quest_items, profile.level()) {
+                Ok(a) if a.spend.is_empty() => format!("{}: ready", a.scenario),
+                Ok(a) => {
+                    let spent: Vec<_> = a.spend.iter().map(|&i| q.items.name(i)).collect();
+                    format!("{}: ready, spends {}", a.scenario, spent.join(" + "))
+                }
+                Err(e) => {
+                    let draws = cfg.sacrifice.iter().find_map(|&i| Some((i, q.draws(i)?)));
+                    let hint = draws.map(|(i, n)| format!("  ({} draws a {n})", q.items.name(i)));
+                    e + &hint.unwrap_or_default()
+                }
+            }
+        }
         Field::Scenario => cfg
             .scenario
             .clone()
@@ -740,6 +850,7 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         .insert_resource(State { cfg, page })
         .insert_resource(Pick(pick.clone()))
         .add_plugins(shop::ShopPlugin)
+        .add_plugins(clan::ClanMenuPlugin)
         .add_systems(Startup, build)
         .add_systems(
             Update,
@@ -761,6 +872,7 @@ fn build(
     cat: Res<Catalog>,
     data: Res<ShopData>,
     state: Res<State>,
+    profile: Res<Profile>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -768,6 +880,8 @@ fn build(
 ) {
     commands.insert_resource(shop::Icons::load(&cat.vfs, &data, &mut images));
     let art = Art::load(&cat.vfs, &mut images);
+    let clan_art =
+        ClanArt::load(&cat.vfs, &mut images).unwrap_or_else(|e| panic!("clan data: {e}"));
     let img = |n: &str, images: &mut Assets<Image>| {
         try_image(&cat.vfs, images, n).unwrap_or_else(|| panic!("interface/default/{n} missing"))
     };
@@ -818,7 +932,7 @@ fn build(
             r.spawn(button(&art, 34.0, 30.0, "<", 16.0, Act::Step(f, -1)));
             r.spawn((
                 Value(f),
-                Text::new(value(cfg, &cat, f)),
+                Text::new(value(cfg, &cat, &profile, f)),
                 TextFont::from_font_size(18.0),
                 TextColor(Color::WHITE),
                 TextLayout {
@@ -874,6 +988,7 @@ fn build(
                     ("PLAYER", Page::Player),
                     ("SHOP", Page::Shop),
                     ("INVENTORY", Page::Inventory),
+                    ("CLAN", Page::Clan),
                 ] {
                     t.spawn(button(&art, 130.0, 40.0, label, 18.0, Act::Page(page)));
                 }
@@ -913,7 +1028,7 @@ fn build(
                         m.spawn(heading("RULES"));
                         m.spawn((
                             Value(Field::MapName),
-                            Text::new(value(cfg, &cat, Field::MapName)),
+                            Text::new(value(cfg, &cat, &profile, Field::MapName)),
                             TextFont::from_font_size(30.0),
                             TextColor(Color::WHITE),
                         ));
@@ -937,7 +1052,7 @@ fn build(
                         });
                         m.spawn((
                             Value(Field::Blurb),
-                            Text::new(value(cfg, &cat, Field::Blurb)),
+                            Text::new(value(cfg, &cat, &profile, Field::Blurb)),
                             TextFont::from_font_size(15.0),
                             TextColor(Color::srgb(0.75, 0.75, 0.75)),
                             Node {
@@ -950,8 +1065,24 @@ fn build(
                         stepper(m, "Kill limit", Field::Kills, 150.0, false);
                         stepper(m, "Bots", Field::Bots, 150.0, false);
                         stepper(m, "Bot skill", Field::Skill, 150.0, false);
-                        m.spawn((ModeShow(true), Node::default()))
-                            .with_children(|q| stepper(q, "Scenario", Field::Scenario, 300.0, false));
+                    });
+                p.spawn((ModeShow(true), panel(660.0, AlignItems::FlexStart)))
+                    .with_children(|q| {
+                        q.spawn(heading("QUEST"));
+                        stepper(q, "Scenario", Field::Scenario, 300.0, false);
+                        stepper(q, "Sacrifice 1", Field::Sac1, 300.0, false);
+                        stepper(q, "Sacrifice 2", Field::Sac2, 300.0, false);
+                        q.spawn((
+                            Value(Field::Needs),
+                            Text::new(value(cfg, &cat, &profile, Field::Needs)),
+                            TextFont::from_font_size(16.0),
+                            TextColor(Color::srgb(1.0, 0.85, 0.4)),
+                            Node {
+                                width: px(600),
+                                min_height: px(60),
+                                ..default()
+                            },
+                        ));
                     });
             });
             root.spawn(page(Page::Player)).with_children(|p| {
@@ -984,6 +1115,8 @@ fn build(
                         ));
                     });
             });
+            root.spawn(page(Page::Clan))
+                .with_children(|p| clan::fill(p, &art, &clan_art));
             for page_kind in [Page::Shop, Page::Inventory] {
                 root.spawn(page(page_kind))
                     .with_children(|p| shop::fill(p, &art, page_kind));
@@ -1003,6 +1136,7 @@ fn build(
             });
         });
     commands.insert_resource(art);
+    commands.insert_resource(clan_art);
 }
 
 fn act(
@@ -1011,6 +1145,7 @@ fn act(
     cat: Res<Catalog>,
     mut state: ResMut<State>,
     mut profile: ResMut<Profile>,
+    mut clan_ui: ResMut<clan::Ui>,
     pick: Res<Pick>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -1042,8 +1177,32 @@ fn act(
                 state.cfg.woman = w;
                 state.cfg.outfit = None;
             }
-            Act::Step(f, d) => step(&mut state.cfg, &cat, f, d),
+            Act::Step(f, d) => step(&mut state.cfg, &cat, &profile, f, d),
             Act::Start => {
+                if state.cfg.mode == Mode::ClanWar && profile.clan.is_none() {
+                    clan::need_clan(&mut state, &mut clan_ui);
+                    continue;
+                }
+                // a locked quest does not start: the "needs" line says why
+                if state.cfg.mode == Mode::Quest
+                    && let Some(q) = &cat.quest
+                {
+                    let name = state
+                        .cfg
+                        .scenario
+                        .clone()
+                        .or(cat.scenarios.first().cloned());
+                    let cfg = &state.cfg;
+                    match q.admit(
+                        name.as_deref(),
+                        cfg.sacrifice,
+                        &profile.quest_items,
+                        profile.level(),
+                    ) {
+                        Ok(a) => state.cfg.scenario = Some(a.scenario),
+                        Err(_) => continue,
+                    }
+                }
                 if state.cfg.mode == Mode::Blitzkrieg {
                     state.cfg.map = Some("blitzkrieg".into());
                 }
@@ -1077,18 +1236,19 @@ fn act(
 fn refresh(
     mut commands: Commands,
     state: Res<State>,
+    profile: Res<Profile>,
     cat: Res<Catalog>,
     mut values: Query<(&Value, &mut Text)>,
     buttons: Query<(Entity, &Act, Has<Chosen>)>,
     mut pages: Query<(&PageRoot, &mut Node), Without<ModeShow>>,
     mut modes: Query<(&ModeShow, &mut Node)>,
 ) {
-    if !state.is_changed() {
+    if !state.is_changed() && !profile.is_changed() {
         return;
     }
     let cfg = &state.cfg;
     for (v, mut t) in &mut values {
-        let s = value(cfg, &cat, v.0);
+        let s = value(cfg, &cat, &profile, v.0);
         if t.0 != s {
             t.0 = s;
         }
@@ -1208,6 +1368,10 @@ mod tests {
             "90",
             "--kill-limit",
             "0",
+            "--dice",
+            "3",
+            "--sacrifice",
+            "200008,200018",
         ]
         .map(String::from)
         .into();
@@ -1217,6 +1381,7 @@ mod tests {
             (c.outfit, c.time_limit, c.kill_limit),
             (Some(11), Some(90), None)
         );
+        assert_eq!((c.dice, c.sacrifice), (Some(3), [200008, 200018]));
         let mut again = c.flags();
         let d = Config::parse(&mut again, false).unwrap();
         assert!(again.is_empty());

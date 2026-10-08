@@ -1,0 +1,11 @@
+{
+  "name": "reverse-engineering-framework",
+  "private": true,
+  "engines": {
+    "node": "^22.19.0 || ^24.11.0 || >=26.0.0"
+  },
+  "dependencies": {
+    "rea-agents": "4.1.0",
+    "@modelcontextprotocol/client": "2.3.1"
+  }
+}

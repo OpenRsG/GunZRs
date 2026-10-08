@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "rea": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "scripts/rea.sh",
+        "mcp"
+      ],
+      "timeout": 600000,
+      "instructions": false
+    }
+  }
+}

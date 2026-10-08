@@ -1,0 +1,11 @@
+/target/
+/.local/
+/.tools/
+/tools/node_modules/
+*.gpr
+*.rep/
+*.gzf
+*.dmp
+*.dll
+*.exe
+.env

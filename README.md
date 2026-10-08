@@ -98,7 +98,7 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Online multiplayer | Not started; every match is local, with bots as the other players |
 | Online clans | Clan chat, invitations, the war lobby and matchmaking need a server; rival clans are generated bots that never play each other |
 | Blitzkrieg extras | The six classes are playable, but the data has no class names, icons or weapons, so card texts and class guns are the port's guesses; three more stat rows (Hunter, Slaughter, Trickster) have no class book and are left out; medals are stored and shown on the profile header, but the data holds no medal prices, so the medal shop cannot be rebuilt |
-| Quest extras | The gacha reward item and permanent shop-item drops are missing (rental drops and quest-item selling work); the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon uses a guessed skeleton set (the data has none) |
+| Quest extras | The challenge quest's gacha reward item (3000xxx) is not in the item data, so it cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon uses a guessed skeleton set (the data has none) |
 | Music choice | The data does not say which track belongs to which map; the port picks one per map (fixed, by name) |
 | Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
 | Bots on Mansion | The top floors are reachable only by one wall run up a pillar corner that needs about 5 cm precision; bots cannot do it reliably, so they never go up there |

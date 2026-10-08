@@ -1845,8 +1845,9 @@ file and all rules are not in the data).
   map, has to stay as the fallback; one source is simpler, so the quest NPCs keep using it.
 - The quest `spawn.xml`: empty stubs. Scenario `DC`, `sdc` (sacrificetable) and per-NPC `dc`: no meaning in
   the data. The gacha `reward_item` (3000xxx) of the challenge quest and the quest-item shop (no shop in the
-  data sells quest items). Permanent shop-item drops (`droptable.xml` items of 2xxxxxx / 3xxxxxx without
-  `rent_period`, rate 0.001): dropped, not added to the inventory. Online party/lobby behaviour.
+  data sells quest items). Online party/lobby behaviour. Permanent shop-item drops (`droptable.xml`
+  items of 2xxxxxx / 3xxxxxx without `rent_period`, rate 0.001; all 21 exist in `zitem.xml`) are owned
+  for good when the quest ends (`profile::keep_loot`).
 
 ## Quest monsters (`src/npc.rs`, `src/npc/data.rs`, `src/npc/fsm.rs`)
 

@@ -211,7 +211,7 @@ impl ShopData {
                 ap: 0,
                 stats: [
                     i.desc.clone(),
-                    format!("Type {}   Worth {}", i.kind, i.price),
+                    format!("Type {}   Sells for {}", i.kind, i.price),
                 ]
                 .into_iter()
                 .filter(|s| !s.is_empty())
@@ -296,17 +296,26 @@ impl Profile {
         }
     }
 
-    /// Sells an owned, unequipped item for its `sell_bt_price`.
+    /// Sells an owned, unequipped item for its `sell_bt_price`, or one quest item for its
+    /// `zquestitem.xml` `price`. A rental cannot be sold (**inferred**: the retail dialog sells
+    /// cash items for their remaining period, which has no bounty price in the data).
     pub fn sell(&mut self, e: &Entry) -> Result<(), &'static str> {
-        if !self.owned.contains(&e.id) {
-            Err("Not owned")
+        if e.kind == "quest" {
+            if !self.quest_items.contains_key(&e.id) {
+                return Err("Not owned");
+            }
+            self.spend_quest_items(&[e.id]);
+        } else if !self.owned.contains(&e.id) {
+            return Err("Not owned");
         } else if self.equipped.contains(&e.id) {
-            Err("Unequip it first")
+            return Err("Unequip it first");
+        } else if self.rented.contains_key(&e.id) {
+            return Err("A rental cannot be sold");
         } else {
             self.owned.remove(&e.id);
-            self.bounty = self.bounty.saturating_add(e.sell);
-            Ok(())
         }
+        self.bounty = self.bounty.saturating_add(e.sell);
+        Ok(())
     }
 
     /// Puts an owned item into `slot`, or empties it (`None`; melee and ranged slots cannot be
@@ -584,16 +593,16 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
                     ..default()
                 },
             ));
-            if shop {
-                m.spawn(Node {
-                    column_gap: px(8),
-                    ..default()
-                })
-                .with_children(|b| {
+            m.spawn(Node {
+                column_gap: px(8),
+                ..default()
+            })
+            .with_children(|b| {
+                if shop {
                     b.spawn(button(art, 160.0, 40.0, "BUY", 20.0, ShopAct::Buy));
-                    b.spawn(button(art, 160.0, 40.0, "SELL", 20.0, ShopAct::Sell));
-                });
-            }
+                }
+                b.spawn(button(art, 160.0, 40.0, "SELL", 20.0, ShopAct::Sell));
+            });
             m.spawn((
                 Txt::Msg,
                 Text::new(""),
@@ -630,6 +639,12 @@ impl Plugin for ShopPlugin {
             .ok()
             .and_then(|s| s.parse().ok());
         ss.inv.slot = slot.filter(|&s| s <= QUEST_SLOT).unwrap_or(0);
+        // headless shots: `GUNZ_INV_SELL=1` presses SELL once on the first inventory row
+        if std::env::var_os("GUNZ_INV_SELL").is_some() {
+            app.add_systems(Startup, |mut c: Commands| {
+                c.spawn((ShopAct::Sell, Interaction::Pressed));
+            });
+        }
         app.insert_resource(ss)
             .add_systems(Update, (act, refresh, profile::save).chain());
     }
@@ -685,7 +700,7 @@ fn act(
                 v.sel = Some(0);
             }
             ShopAct::Buy | ShopAct::Sell => {
-                let Some(e) = selected(&ss, Page::Shop, &data, &profile, woman)
+                let Some(e) = selected(&ss, state.page, &data, &profile, woman)
                     .and_then(|id| data.entries.get(&id))
                 else {
                     ss.msg = "Select an item first".into();
@@ -693,7 +708,13 @@ fn act(
                 };
                 ss.msg = match (a, profile_op(&mut profile, a, e)) {
                     (ShopAct::Buy, Ok(())) => format!("Bought {}", e.name),
-                    (_, Ok(())) => format!("Sold {}", e.name),
+                    (_, Ok(())) => {
+                        println!(
+                            "shop: sold {} ({}) for {} bounty -> bounty {}",
+                            e.name, e.id, e.sell, profile.bounty
+                        );
+                        format!("Sold {} for {}", e.name, e.sell)
+                    }
                     (_, Err(m)) => m.into(),
                 };
             }
@@ -706,6 +727,16 @@ fn profile_op(profile: &mut Profile, a: &ShopAct, e: &Entry) -> Result<(), &'sta
         ShopAct::Buy => profile.buy(e),
         _ => profile.sell(e),
     }
+}
+
+/// Time left on a rented item, e.g. `2d 5h left`.
+fn left(profile: &Profile, id: u32) -> Option<String> {
+    let secs = profile
+        .rented
+        .get(&id)?
+        .saturating_sub(crate::profile::now());
+    let h = secs.div_ceil(3600);
+    Some(format!("{}d {}h left", h / 24, h % 24))
 }
 
 fn set(t: &mut Text, s: String) {
@@ -780,10 +811,15 @@ fn refresh(
                         format!("{}   (owned)", e.name)
                     } else if p == Page::Shop {
                         format!("{}   Lv {}   {}", e.name, e.level, e.price.unwrap_or(0))
-                    } else if profile.equipped[ss.view(p).slot] == id {
-                        format!("{}   [equipped]", e.name)
                     } else {
-                        e.name.clone()
+                        let mut s = e.name.clone();
+                        if profile.equipped[ss.view(p).slot] == id {
+                            s += "   [equipped]";
+                        }
+                        if let Some(l) = left(&profile, id) {
+                            s += &format!("   [rented, {l}]");
+                        }
+                        s
                     }
                 }
             },
@@ -820,6 +856,9 @@ fn refresh(
                         Some(p) => s.push(format!("Price {p}   Sells for {}", e.sell)),
                         None => s.push(format!("Not sold   Sells for {}", e.sell)),
                     }
+                    if let Some(l) = left(&profile, e.id) {
+                        s.push(format!("Rented, {l}"));
+                    }
                     s.join("\n")
                 }
             },
@@ -833,10 +872,11 @@ fn refresh(
                     format!("XP {into}/{need}")
                 };
                 format!(
-                    "{}  [{}]  Level {level}  {xp}  Bounty {}",
+                    "{}  [{}]  Level {level}  {xp}  Bounty {}  Medals {}",
                     profile.name,
                     ranks.code(level),
-                    profile.bounty
+                    profile.bounty,
+                    profile.medals
                 )
             }
         };
@@ -920,5 +960,24 @@ mod tests {
         p.sell(&gun).unwrap();
         assert_eq!(p.bounty, start - 5000 - 100 + 500);
         assert!(!p.owned.contains(&7));
+    }
+
+    #[test]
+    fn quest_items_sell_and_rentals_do_not() {
+        let mut p = Profile::new();
+        let q = Entry {
+            sell: 40,
+            ..entry(200008, "quest", 0, 0)
+        };
+        assert_eq!(p.sell(&q), Err("Not owned"));
+        p.add_quest_items(&[(200008, 2)]);
+        let start = p.bounty;
+        p.sell(&q).unwrap();
+        assert_eq!((p.bounty, p.quest_items[&200008]), (start + 40, 1));
+        p.sell(&q).unwrap();
+        assert!(p.quest_items.is_empty());
+        let gun = entry(7, "range", 5000, 1);
+        p.rent(gun.id, 72, 0);
+        assert_eq!(p.sell(&gun), Err("A rental cannot be sold"));
     }
 }

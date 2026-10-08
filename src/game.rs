@@ -44,12 +44,13 @@ impl Plugin for GamePlugin {
     }
 }
 
-/// XP and bounty for the local profile (`profile.rs` also pays kills and the match result by
-/// itself): write one for anything else that earns, e.g. a finished quest scenario.
-#[derive(Message, Clone, Copy, Debug)]
+/// XP, bounty and Blitzkrieg medals for the local profile (`profile.rs` also pays kills and the
+/// match result by itself): write one for anything else that earns, e.g. a finished quest.
+#[derive(Message, Clone, Copy, Debug, Default)]
 pub struct Reward {
     pub xp: u32,
     pub bounty: u32,
+    pub medals: u32,
 }
 
 /// Quest -> `npc.rs`: spawn one monster. `id` is a `<NPC id>` of `system/npc.xml` or an
@@ -157,11 +158,12 @@ pub struct HitShape {
 #[derive(Component)]
 pub struct MapEntity;
 
-/// Quest items (`system/zquestitem.xml` ids with counts) collected in a finished quest, for
-/// the profile.
+/// Items collected in a finished quest, for the profile: `zquestitem.xml` ids with counts, and
+/// rented shop items (`zitem.xml` id, `rent_period` hours).
 #[derive(Message, Clone, Debug)]
 pub struct QuestLoot {
     pub items: Vec<(u32, u32)>,
+    pub rented: Vec<(u32, u32)>,
 }
 
 /// Asks `audio.rs` to play the retail sound `sound/effect/<stem>.wav` once at `at` (metres):

@@ -22,7 +22,15 @@ use std::{
     fs, io,
     path::PathBuf,
     str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+/// Wall-clock Unix seconds (rental expiries).
+pub fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 /// Highest level (**inferred**; `grank.xml` lists 35 ranks but no level numbers).
 pub const MAX_LEVEL: u32 = 99;
@@ -83,6 +91,10 @@ pub struct Profile {
     pub equipped: [u32; SLOTS],
     /// `zquestitem.xml` id -> how many are kept (quest drops: [`QuestLoot`]; sacrifices spend them).
     pub quest_items: BTreeMap<u32, u32>,
+    /// Blitzkrieg medals earned ([`Reward::medals`]).
+    pub medals: u32,
+    /// Rented items (also in `owned`): zitem id -> expiry in Unix seconds ([`Profile::rent`]).
+    pub rented: BTreeMap<u32, u64>,
     /// The offline clan (`clan.rs`); `None` = not in one.
     pub clan: Option<Clan>,
     /// Where [`Profile::save`] writes; `None` = throwaway.
@@ -106,6 +118,8 @@ impl Profile {
             owned: DEFAULT_LOADOUT.into_iter().collect(),
             equipped,
             quest_items: BTreeMap::new(),
+            medals: 0,
+            rented: BTreeMap::new(),
             clan: None,
             path: None,
         }
@@ -137,6 +151,9 @@ impl Profile {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Self::new(),
             Err(e) => panic!("{}: {e}", path.display()),
         };
+        for id in p.expire(now()) {
+            println!("profile: rental of item {id} expired and was removed");
+        }
         p.path = Some(path);
         p
     }
@@ -154,17 +171,23 @@ impl Profile {
         let ids =
             |v: &mut dyn Iterator<Item = &u32>| v.map(u32::to_string).collect::<Vec<_>>().join(",");
         let mut text = format!(
-            "name={}\nwoman={}\noutfit={}\nxp={}\nbounty={}\nowned={}\nequipped={}\nquest_items={}\n",
+            "name={}\nwoman={}\noutfit={}\nxp={}\nbounty={}\nmedals={}\nowned={}\nequipped={}\nquest_items={}\nrented={}\n",
             self.name.replace('\n', " "),
             self.woman,
             self.outfit.map_or("none".into(), |o| o.to_string()),
             self.xp,
             self.bounty,
+            self.medals,
             ids(&mut self.owned.iter()),
             ids(&mut self.equipped.iter()),
             self.quest_items
                 .iter()
                 .map(|(id, n)| format!("{id}:{n}"))
+                .collect::<Vec<_>>()
+                .join(","),
+            self.rented
+                .iter()
+                .map(|(id, t)| format!("{id}:{t}"))
                 .collect::<Vec<_>>()
                 .join(","),
         );
@@ -208,14 +231,15 @@ impl Profile {
                 }
                 "xp" => p.xp = num(k, v)?,
                 "bounty" => p.bounty = num(k, v)?,
+                "medals" => p.medals = num(k, v)?,
                 "owned" => p.owned = list(k, v)?.into_iter().collect(),
                 "equipped" => {
                     p.equipped = list(k, v)?
                         .try_into()
                         .map_err(|_| format!("equipped: need {SLOTS} ids"))?
                 }
-                "quest_items" => {
-                    p.quest_items = v
+                "quest_items" | "rented" => {
+                    let pairs = v
                         .split(',')
                         .filter(|s| !s.trim().is_empty())
                         .map(|s| {
@@ -223,7 +247,19 @@ impl Profile {
                                 s.split_once(':').ok_or(format!("{k}: bad item {s:?}"))?;
                             Ok((num(k, id)?, num(k, n)?))
                         })
-                        .collect::<Result<_, String>>()?
+                        .collect::<Result<Vec<(u32, u64)>, String>>()?;
+                    if k.trim() == "rented" {
+                        p.rented = pairs.into_iter().collect();
+                    } else {
+                        p.quest_items = pairs
+                            .into_iter()
+                            .map(|(i, n)| {
+                                let n =
+                                    u32::try_from(n).map_err(|_| format!("{k}: bad count {n}"))?;
+                                Ok((i, n))
+                            })
+                            .collect::<Result<_, String>>()?;
+                    }
                 }
                 "clan" => p.clan = Some(Clan::parse(v)?),
                 _ => return Err(format!("unknown key {k:?}")),
@@ -264,6 +300,41 @@ impl Profile {
                 }
             }
         }
+    }
+
+    /// Rents shop item `id` for `hours` (`rent_period`) from `now`. An item owned for good stays
+    /// as it is (`false`); renting one again keeps the later expiry.
+    pub fn rent(&mut self, id: u32, hours: u32, now: u64) -> bool {
+        if self.owned.contains(&id) && !self.rented.contains_key(&id) {
+            return false;
+        }
+        let until = now + hours as u64 * 3600;
+        let e = self.rented.entry(id).or_default();
+        *e = (*e).max(until);
+        self.owned.insert(id);
+        true
+    }
+
+    /// Removes the rentals that ran out by `now` (also from the equipment: a melee or ranged slot
+    /// falls back to its starter weapon). Returns their ids.
+    pub fn expire(&mut self, now: u64) -> Vec<u32> {
+        let gone: Vec<u32> = self
+            .rented
+            .iter()
+            .filter(|&(_, &t)| t <= now)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in &gone {
+            self.rented.remove(id);
+            self.owned.remove(id);
+            for (slot, e) in self.equipped.iter_mut().enumerate() {
+                if *e == *id {
+                    *e = DEFAULT_LOADOUT.get(slot).copied().unwrap_or(0);
+                    self.owned.extend((*e != 0).then_some(*e));
+                }
+            }
+        }
+        gone
     }
 }
 
@@ -340,8 +411,8 @@ fn load_ranks(mut commands: Commands, level: Res<Level>) {
     commands.insert_resource(Ranks::load(&level.vfs).unwrap_or_else(|e| panic!("profile: {e}")));
 }
 
-/// A finished quest's drops stay in the profile. Only `zquestitem.xml` ids (six digits) are kept;
-/// the shop items a quest can drop are rentals, which the profile does not model.
+/// A finished quest's drops stay in the profile. Only `zquestitem.xml` ids (six digits) are kept,
+/// and the rented shop items ([`Profile::rent`]); permanent shop drops are not modelled.
 fn keep_loot(mut loot: MessageReader<QuestLoot>, mut profile: ResMut<Profile>) {
     for l in loot.read() {
         let kept: Vec<_> = l
@@ -353,6 +424,10 @@ fn keep_loot(mut loot: MessageReader<QuestLoot>, mut profile: ResMut<Profile>) {
         if !kept.is_empty() {
             profile.add_quest_items(&kept);
             println!("profile: kept quest items {kept:?}");
+        }
+        for &(id, hours) in &l.rented {
+            let new = profile.rent(id, hours, now());
+            println!("profile: rented item {id} for {hours} h (new: {new}, owned for good if not)");
         }
     }
 }
@@ -393,10 +468,11 @@ fn earn(
     mut profile: ResMut<Profile>,
     mut gain: ResMut<MatchGain>,
 ) {
-    let (mut xp, mut bounty) = (0, 0);
+    let (mut xp, mut bounty, mut medals) = (0, 0, 0);
     for r in rewards.read() {
         xp += r.xp;
         bounty += r.bounty;
+        medals += r.medals;
     }
     let training = rules.is_some_and(|r| r.mode == Mode::Training);
     let over = clock.over.is_some();
@@ -409,6 +485,10 @@ fn earn(
             xp += KILL_XP;
             bounty += KILL_BOUNTY;
         }
+    }
+    if medals > 0 {
+        profile.medals = profile.medals.saturating_add(medals);
+        println!("profile: +{medals} medals -> {}", profile.medals);
     }
     if xp + bounty > 0 {
         profile.add(xp, bounty);
@@ -459,6 +539,9 @@ mod tests {
         p.owned.insert(2000000);
         p.equipped[4] = 3010013;
         p.quest_items.insert(200008, 2);
+        p.medals = 42;
+        assert!(p.rent(3000042, 72, 1_000));
+        assert!(!p.rent(DEFAULT_LOADOUT[0], 72, 1_000), "owned for good");
         p.clan = Some(Clan {
             name: "Phoenix 1".into(),
             emblem: 1000005,
@@ -480,6 +563,22 @@ mod tests {
         assert!(Profile::parse("bogus=1").is_err());
         assert!(Profile::parse("equipped=1,2").is_err());
         assert!(Profile::parse("clan=Phoenix|1|2|3").is_err());
+        assert!(Profile::parse("rented=1").is_err());
+    }
+
+    /// Rentals expire against the wall clock: the item leaves `owned` and the equipment.
+    #[test]
+    fn rentals_expire() {
+        let mut p = Profile::new();
+        assert!(p.rent(2120016, 168, 1_000));
+        p.rent(2120016, 72, 1_000); // a shorter rental never shortens it
+        assert_eq!(p.rented[&2120016], 1_000 + 168 * 3600);
+        p.equipped[1] = 2120016;
+        assert!(p.expire(1_000 + 168 * 3600 - 1).is_empty());
+        assert_eq!(p.expire(1_000 + 168 * 3600), [2120016]);
+        assert!(!p.owned.contains(&2120016) && p.rented.is_empty());
+        assert_eq!(p.equipped[1], DEFAULT_LOADOUT[1]);
+        assert!(p.owned.contains(&DEFAULT_LOADOUT[1]));
     }
 
     #[test]
@@ -502,7 +601,10 @@ mod tests {
         for items in [vec![(200011, 2), (3000042, 1)], vec![(200011, 1)]] {
             app.world_mut()
                 .resource_mut::<Messages<QuestLoot>>()
-                .write(QuestLoot { items });
+                .write(QuestLoot {
+                    items,
+                    rented: vec![],
+                });
             app.update();
         }
         let mut p = app.world().resource::<Profile>().clone();
@@ -545,10 +647,15 @@ mod tests {
         kill(other, bot);
         app.world_mut()
             .resource_mut::<Messages<Reward>>()
-            .write(Reward { xp: 5, bounty: 7 });
+            .write(Reward {
+                xp: 5,
+                bounty: 7,
+                medals: 3,
+            });
         app.update();
         let p = app.world().resource::<Profile>();
         assert_eq!((p.xp, p.bounty), (start.xp + 15, start.bounty + 17));
+        assert_eq!(p.medals, start.medals + 3);
         app.world_mut().resource_mut::<Clock>().over = Some("VICTORY".into());
         app.update();
         app.update();

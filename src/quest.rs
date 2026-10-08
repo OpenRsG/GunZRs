@@ -378,10 +378,13 @@ impl QItems {
     }
 }
 
-/// `droptable.xml`: set name -> quest level -> (item id, rate). Sets listed twice under one
-/// name (`G181`) are merged.
+/// `droptable.xml`: set name -> quest level -> (item id, rate, `rent_period` in hours or 0 for a
+/// permanent item). Sets listed twice under one name (`G181`) are merged.
 #[derive(Default, Debug)]
-pub struct Drops(HashMap<String, HashMap<u32, Vec<(String, f32)>>>);
+pub struct Drops(HashMap<String, HashMap<u32, Vec<Drop3>>>);
+
+/// One `<ITEM>` of a drop set: id, rate, rent hours.
+type Drop3 = (String, f32, u32);
 
 pub fn parse_drops(xml: &str) -> Result<Drops, String> {
     let d = doc(xml)?;
@@ -399,7 +402,11 @@ pub fn parse_drops(xml: &str) -> Result<Drops, String> {
                     .attribute("rate")
                     .and_then(|r| r.parse().ok())
                     .unwrap_or(0.0);
-                items.push((text(i, "id"), rate));
+                let rent = i
+                    .attribute("rent_period")
+                    .and_then(|r| r.parse().ok())
+                    .unwrap_or(0);
+                items.push((text(i, "id"), rate, rent));
             }
         }
     }
@@ -410,7 +417,7 @@ impl Drops {
     /// The item `table` drops at quest level `ql` for a uniform roll `r` in 0..1: the item rates
     /// of a set add up to at most 1 (observed, all 147 sets), so one roll walks the cumulative
     /// rates and falls through to "nothing". The level's own set, else the nearest lower one.
-    pub fn roll(&self, table: &str, ql: u32, r: f32) -> Option<&str> {
+    pub fn roll(&self, table: &str, ql: u32, r: f32) -> Option<(&str, u32)> {
         let levels = self.0.get(table)?;
         let items = (0..=ql)
             .rev()
@@ -419,11 +426,11 @@ impl Drops {
         let mut acc = 0.0;
         items
             .iter()
-            .find(|(_, rate)| {
+            .find(|(_, rate, _)| {
                 acc += rate;
                 r < acc
             })
-            .map(|(id, _)| id.as_str())
+            .map(|(id, _, rent)| (id.as_str(), *rent))
     }
 }
 
@@ -1060,6 +1067,8 @@ pub struct Quest {
     jaco_t: f32,
     kills: u32,
     loot: Vec<(u32, u32)>,
+    /// Rental drops (shop item id, `rent_period` hours), one entry per pickup.
+    rented: Vec<(u32, u32)>,
     swap: bool,
     rng: u32,
     banner: String,
@@ -1129,6 +1138,7 @@ impl Quest {
             jaco_t: 0.0,
             kills: 0,
             loot: Vec::new(),
+            rented: Vec::new(),
             swap: false,
             rng: seed | 1,
             banner: String::new(),
@@ -1150,7 +1160,11 @@ impl Quest {
         self.stage + 1 == self.plan.sectors.len()
     }
 
-    fn add_loot(&mut self, id: u32) {
+    fn add_loot(&mut self, id: u32, rent: u32) {
+        if rent > 0 {
+            self.rented.push((id, rent));
+            return;
+        }
         match self.loot.iter_mut().find(|l| l.0 == id) {
             Some(l) => l.1 += 1,
             None => self.loot.push((id, 1)),
@@ -1248,6 +1262,8 @@ struct Portal;
 #[derive(Component)]
 struct Drop {
     id: Option<u32>,
+    /// `rent_period` hours of a rental drop, 0 = permanent.
+    rent: u32,
     base: f32,
 }
 
@@ -1501,7 +1517,11 @@ fn cleared(
 ) {
     let (xp, bp) = (quest.stage().xp, quest.stage().bp);
     if xp + bp > 0 {
-        reward.write(Reward { xp, bounty: bp });
+        reward.write(Reward {
+            xp,
+            bounty: bp,
+            ..default()
+        });
     }
     println!(
         "quest: sector {} cleared at {} ({} kills, reward {xp} XP {bp} BP)",
@@ -1546,11 +1566,12 @@ fn end(
             reward.write(Reward {
                 xp: quest.plan.xp,
                 bounty: quest.plan.bp,
+                ..default()
             });
         }
         if quest.plan.reward_item != 0 {
             let id = quest.plan.reward_item;
-            quest.add_loot(id);
+            quest.add_loot(id, 0);
         }
         let good = quest.plan.good_secs as f32;
         if good > 0.0 && quest.elapsed <= good {
@@ -1558,7 +1579,11 @@ fn end(
                 quest.plan.sectors.iter().map(f).sum::<u32>() as f32 * GOOD_TIME_BONUS
             };
             let (xp, bounty) = (sum(|s| s.xp) as u32, sum(|s| s.bp) as u32);
-            reward.write(Reward { xp, bounty });
+            reward.write(Reward {
+                xp,
+                bounty,
+                ..default()
+            });
             println!(
                 "quest: cleared in {} within the good time {}: bonus {xp} XP {bounty} BP",
                 mmss(quest.elapsed),
@@ -1568,6 +1593,7 @@ fn end(
     }
     loot.write(QuestLoot {
         items: quest.loot.clone(),
+        rented: quest.rented.clone(),
     });
     let items: Vec<String> = quest
         .loot
@@ -1617,12 +1643,15 @@ fn kills(
         let r = unit(&mut quest.rng);
         // challenge-quest tables (`C1`, `C2`) are not in `droptable.xml`: hp, ap or ammo (*inferred*)
         let item = match quest.drops.0.contains_key(table) {
-            true => quest.drops.roll(table, quest.plan.ql, r).map(str::to_owned),
+            true => quest
+                .drops
+                .roll(table, quest.plan.ql, r)
+                .map(|(s, rent)| (s.to_owned(), rent)),
             false => ["hp1", "ap1", "mag1"]
                 .get((r * 4.0) as usize)
-                .map(|s| (*s).to_owned()),
+                .map(|s| ((*s).to_owned(), 0)),
         };
-        let Some(item) = item else { continue };
+        let Some((item, rent)) = item else { continue };
         let at = tf.translation + Vec3::Y * 0.05;
         let sphere = Mesh3d(meshes.add(Sphere::new(0.16)));
         let mut glow = |c: LinearRgba| {
@@ -1644,6 +1673,7 @@ fn kills(
                 commands.spawn((
                     Drop {
                         id: None,
+                        rent: 0,
                         base: at.y + 0.3,
                     },
                     WorldItem {
@@ -1661,6 +1691,7 @@ fn kills(
                 commands.spawn((
                     Drop {
                         id: Some(id),
+                        rent,
                         base: at.y + 0.5,
                     },
                     sphere,
@@ -1710,7 +1741,7 @@ fn collect(
         };
         let off = tf.translation - p.translation;
         if off.xz().length() < PICKUP_R && off.y.abs() < 2.5 {
-            quest.add_loot(id);
+            quest.add_loot(id, d.rent);
             quest.banner = format!("{} picked up", quest.item_name(id));
             println!("quest: picked up {} ({id})", quest.item_name(id));
             commands.entity(e).despawn();
@@ -1969,10 +2000,10 @@ mod tests {
                <ITEMSET QL="3"><ITEM id="ap1" rate="1.0"/></ITEMSET></DROPSET></XML>"#,
         )
         .unwrap();
-        assert_eq!(d.roll("G11", 0, 0.1), Some("hp1"));
-        assert_eq!(d.roll("G11", 0, 0.4), Some("200011"));
+        assert_eq!(d.roll("G11", 0, 0.1), Some(("hp1", 0)));
+        assert_eq!(d.roll("G11", 0, 0.4), Some(("200011", 0)));
         assert_eq!(d.roll("G11", 1, 0.9), None);
-        assert_eq!(d.roll("G11", 5, 0.9), Some("ap1"));
+        assert_eq!(d.roll("G11", 5, 0.9), Some(("ap1", 0)));
         assert_eq!(d.roll("none", 0, 0.1), None);
         assert_eq!(world_name("hp1"), "hp01");
         assert_eq!(world_name("mag1"), "bullet01");
@@ -2125,6 +2156,7 @@ mod tests {
             jaco_t: 0.0,
             kills: 0,
             loot: vec![],
+            rented: vec![],
             swap: false,
             rng: 1,
             banner: String::new(),
@@ -2142,6 +2174,7 @@ mod tests {
         app.world_mut().spawn((
             Drop {
                 id: Some(200011),
+                rent: 0,
                 base: 0.5,
             },
             near(0.3),
@@ -2149,6 +2182,7 @@ mod tests {
         app.world_mut().spawn((
             Drop {
                 id: Some(200012),
+                rent: 0,
                 base: 0.5,
             },
             near(5.0),
@@ -2162,6 +2196,7 @@ mod tests {
         app.world_mut().spawn((
             Drop {
                 id: None,
+                rent: 0,
                 base: 0.5,
             },
             taken,

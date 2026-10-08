@@ -1,18 +1,22 @@
 //! Bot AI: spawns `--bots N` bots and steers them through `Intent` (docs/formats.md "Bots").
 //! A bot hunts the nearest enemy (the player; in team games the other team), routing over the
 //! [`Nav`] floor graph, fights with the weapon that suits the range, strafes, hops and tumbles,
-//! and falls back to the spawn point farthest from the enemy when hurt.
+//! throws grenades at enemies behind cover or in a group, butterflies (guard cancel between combo
+//! blows), and falls back to the spawn point farthest from the enemy when hurt.
 
 use crate::{
-    actor::{ActorData, ActorSpawner, ActorSpec},
+    actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT},
     col::MapCollision,
     combat::{EYE, HIT_RADIUS, is_melee, rnd, yaw_of},
-    game::{Acting, Bot, Dead, Guarding, Intent, Loadout, Team, Vitals, friendly},
-    item::{Items, WeaponKind},
+    game::{Acting, Bot, Dead, Guarding, Intent, Loadout, Status, Team, Vitals, friendly},
+    item::{Items, Weapon, WeaponKind},
     level::Level,
     nav::{Kind, Nav, Search, Step, walkable},
     pickup::{ItemKind, WorldItem},
-    projectile::{Flashed, SmokeCloud, smoke_blocks},
+    projectile::{
+        BOUNCE, FRAG_RADIUS, FRICTION, FUSE, Flashed, GRAVITY, SmokeCloud, THROW_DELAY, THROW_LIFT,
+        THROW_SPEED, smoke_blocks,
+    },
     view::{SCALE, to_bevy},
 };
 use bevy::prelude::*;
@@ -95,6 +99,21 @@ struct BotAi {
     item: Option<Vec3>,
     item_t: f32,
     no_item: f32,
+    /// Heading and seconds left of a side wall run in the air.
+    air: Option<(Vec3, f32)>,
+    /// Grenade throw in progress, and seconds until the next one may be considered.
+    throw: Option<Throw>,
+    throw_cd: f32,
+    /// Seconds a bot that threw a grenade still stands (the fuse), so it does not walk into it.
+    hold: f32,
+    /// Butterfly guard cancel in progress (seconds in) and seconds until the next may start.
+    bf: Option<f32>,
+    bf_cd: f32,
+    /// Rooted or stunned last frame (the route is replanned when it ends).
+    held: bool,
+    /// A mine is being laid (seconds since it began), and seconds until the next one may be.
+    lay: Option<f32>,
+    lay_cd: f32,
 }
 
 impl BotAi {
@@ -133,6 +152,17 @@ impl BotAi {
             item: None,
             item_t: 0.0,
             no_item: 0.0,
+            air: None,
+            // Spawn grace: no grenade in the first seconds.
+            throw: None,
+            throw_cd: 3.0,
+            hold: 0.0,
+            bf: None,
+            bf_cd: 0.0,
+            held: false,
+            lay: None,
+            // Spawn grace, as for grenades.
+            lay_cd: 4.0,
         }
     }
 }
@@ -184,7 +214,7 @@ fn spawn_bots(
             pos,
             yaw,
             woman: i % 2 == 1,
-            loadout: vec![],
+            loadout: [&DEFAULT_LOADOUT[..], &[BOT_GRENADE]].concat(),
             bot: true,
             outfit: None,
         });
@@ -253,6 +283,84 @@ fn seg_dist(a: Vec3, b: Vec3, p: Vec3) -> f32 {
     p.distance(a + ab * t)
 }
 
+/// Bots carry the default loadout plus this frag grenade (zitem `2200007`, `item_source` DEFAULT;
+/// *inferred* choice).
+const BOT_GRENADE: u32 = 2200007;
+/// Seconds a butterfly holds the guard, which must end before the blade's next blow is ready
+/// (katana: strike 0.17 s, ready 0.33 s) or the held click would become the guard's uppercut.
+/// *Inferred* from `melee.rs`.
+const BUTTERFLY_GUARD: f32 = 0.1;
+/// Seconds a bot holds a mine before it clicks (the draw delay and a little more), and how
+/// long it keeps trying (a reload may come first). *Inferred*.
+const LAY_AFTER: f32 = 0.6;
+const LAY_GIVE_UP: f32 = 8.0;
+
+/// A grenade throw: the slot, seconds since it began, and the second the button was pressed.
+#[derive(Clone, Copy)]
+struct Throw {
+    slot: usize,
+    t: f32,
+    release: f32,
+}
+
+/// Where a grenade released from `chest` along unit `dir` ends up after `fuse` seconds: the same
+/// step as `projectile::fly` (gravity, a 0.1 m sphere sweep, bounce and friction, rest on a floor).
+fn grenade_landing(col: &MapCollision, chest: Vec3, dir: Vec3, fuse: f32) -> Vec3 {
+    const DT: f32 = 1.0 / 30.0;
+    let mut pos = chest + dir * 0.5;
+    let mut vel = (dir + Vec3::Y * THROW_LIFT).normalize() * THROW_SPEED;
+    for _ in 0..(fuse / DT) as u32 {
+        vel.y -= GRAVITY * DT;
+        let to = pos + vel * DT;
+        let Some(h) = col.sweep_sphere(pos, to, 0.1) else {
+            pos = to;
+            continue;
+        };
+        pos += (to - pos).normalize_or_zero() * h.distance;
+        let vn = h.normal * vel.dot(h.normal);
+        vel = (vel - vn) * FRICTION - vn * BOUNCE;
+        if vel.length() < 1.0 && h.normal.y > 0.7 {
+            break;
+        }
+    }
+    pos
+}
+
+/// The pitch that lands a grenade thrown from `feet` along `yaw` within 60 % of its `radius` of
+/// the target's body at `target` (feet), and not within `radius` of the thrower; `None` when no
+/// throw does (a wall in the way, too far). Tries pitches -0.3..1.1 rad.
+fn plan_throw(
+    col: &MapCollision,
+    feet: Vec3,
+    target: Vec3,
+    yaw: f32,
+    fuse: f32,
+    radius: f32,
+) -> Option<f32> {
+    let chest = feet + Vec3::Y * (EYE - 0.25);
+    (0..15)
+        .filter_map(|i| {
+            let pitch = -0.3 + i as f32 * 0.1;
+            let dir = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::NEG_Z;
+            let land = grenade_landing(col, chest, dir, fuse);
+            let err = land.distance(target + Vec3::Y * 0.9);
+            (err < 0.6 * radius && land.distance(feet) > radius).then_some((err, pitch))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|b| b.1)
+}
+
+/// (blast radius, fuse seconds) of a throwable that hurts or blinds, as `projectile::launch`
+/// reads them; `None` for anything else.
+fn grenade_stats(w: &Weapon) -> Option<(f32, f32)> {
+    let fuse = match w.kind {
+        WeaponKind::Frag => FUSE,
+        WeaponKind::Flashbang | WeaponKind::Stun => w.life.map_or(FUSE, |ms| ms as f32 / 1000.0),
+        _ => return None,
+    };
+    Some((w.coll_dist.map_or(FRAG_RADIUS, |c| c as f32 * 0.01), fuse))
+}
+
 /// Nearest ready pickup within 40 m that the bot needs: health below 70 %, armour below half, or a
 /// gun with no spare magazine.
 fn wanted_item(
@@ -315,6 +423,7 @@ fn bot_ai(
             Option<&Team>,
             Has<Dead>,
             Has<Flashed>,
+            Option<&Status>,
         ),
         With<Bot>,
     >,
@@ -327,8 +436,8 @@ fn bot_ai(
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
     // A* is the one heavy step: one replan starts per frame and all searches share a budget of
     // node expansions (about 2 ms), so a long search spreads over several frames.
-    let (mut routed, mut budget) = (false, 2500usize);
-    for (me, name, g, mut intent, mut ai, loadout, vitals, team, dead, blind) in &mut bots {
+    let (mut routed, mut planned, mut budget) = (false, false, 2500usize);
+    for (me, name, g, mut intent, mut ai, loadout, vitals, team, dead, blind, status) in &mut bots {
         if dead {
             (intent.attack, intent.jump, intent.reload, intent.walk) =
                 (false, false, false, Vec2::ZERO);
@@ -341,6 +450,15 @@ fn bot_ai(
             continue;
         }
         let pos = g.translation();
+        // Rooted or stunned: the controller holds it still, which must not read as being stuck;
+        // the route is replanned when it is free again.
+        let held = status.is_some_and(Status::rooted);
+        if held {
+            (ai.check_t, ai.check_pos, ai.stuck) = (0.0, pos, 0);
+        } else if ai.held {
+            ai.path_t = 0.0;
+        }
+        ai.held = held;
         let eye = pos + Vec3::Y * EYE;
         let mine = (team.copied(), true);
         let foe = actors
@@ -355,14 +473,46 @@ fn bot_ai(
         let (foe_acting, foe_guard) = foe
             .and_then(|f| foes.get(f.0).ok())
             .unwrap_or((None, false));
+        let me_acting = foes.get(me).ok().and_then(|f| f.0);
         let dist = target.map_or(f32::MAX, |t| flat(t - pos).length());
+
+        // Mines (spy trackers): one every 6-12 s while the enemy is not close. The bot switches
+        // to the mine, stands still for the draw and clicks once (`lay_fire` below).
+        ai.lay_cd -= dt;
+        let mine_slot = loadout.slots.iter().position(|s| {
+            s.magazine + s.reserve > 0
+                && data
+                    .items
+                    .get(s.item)
+                    .and_then(|i| i.weapon.as_ref())
+                    .is_some_and(|w| w.kind == WeaponKind::Mine)
+        });
+        ai.lay = ai.lay.map(|t| t + dt);
+        if ai.lay.is_none()
+            && ai.lay_cd <= 0.0
+            && mine_slot.is_some()
+            && ai.throw.is_none()
+            && !blind
+            && ai.react <= 0.0
+            && dist > 6.0
+        {
+            ai.lay = Some(0.0);
+        }
+        if ai
+            .lay
+            .is_some_and(|t| t > LAY_GIVE_UP || mine_slot.is_none())
+        {
+            (ai.lay, ai.lay_cd) = (None, 6.0);
+        }
 
         // Weapon by range (at most one switch a second).
         ai.switch_t -= dt;
-        let want = if target.is_some() && ai.switch_t <= 0.0 {
-            pick_weapon(&data.items, loadout, dist)
-        } else {
-            loadout.current
+        let want = match mine_slot.filter(|_| ai.lay.is_some()) {
+            Some(slot) => slot,
+            None if target.is_some() && ai.switch_t <= 0.0 && ai.throw.is_none() => {
+                pick_weapon(&data.items, loadout, dist)
+            }
+            None => loadout.current,
         };
         intent.slot = (want != loadout.current).then(|| {
             ai.switch_t = 1.0;
@@ -385,6 +535,9 @@ fn bot_ai(
             Some(w) => (false, 35.0, gun_range(w.kind).unwrap_or(9.0)),
             None => (false, 35.0, 9.0),
         };
+        // Only blades and guns are fired by the trigger logic below; a grenade is thrown by the
+        // throw sequence.
+        let usable = melee || weapon.is_some_and(|w| gun_range(w.kind).is_some());
 
         // Sight: a flashed bot sees nothing, smoke and walls block the line.
         let seen = target.filter(|t| {
@@ -404,6 +557,83 @@ fn bot_ai(
             ai.lost = 0.0;
         } else {
             ai.lost += dt;
+        }
+
+        // Grenades. Considered when the enemy is 5-14 m away (out of melee range) and either
+        // behind cover (no sight line) or grouped with another enemy, at most one plan per frame
+        // and every few seconds. The sequence equips the grenade, turns to the enemy, clicks once
+        // at the planned pitch and stands still while it is thrown: `Intent` only, the actor
+        // controller and `projectile::launch` do the rest as for the player.
+        ai.throw_cd -= dt;
+        let mut press = None;
+        let stats = |slot: usize| {
+            let w = data
+                .items
+                .get(loadout.slots.get(slot)?.item)?
+                .weapon
+                .as_ref()?;
+            grenade_stats(w)
+        };
+        if let Some(mut th) = ai.throw {
+            th.t += dt;
+            if target.is_none() || blind || th.t > 3.0 || th.t > th.release + 0.9 {
+                ai.throw = None;
+                (ai.switch_t, ai.throw_cd) = (0.0, 10.0 + 6.0 * rnd(&mut ai.rng));
+            } else {
+                if loadout.current != th.slot {
+                    intent.slot = Some(th.slot);
+                } else if th.release == f32::MAX
+                    && th.t >= 0.5
+                    && let (Some(t), Some((radius, fuse))) = (target, stats(th.slot))
+                {
+                    let yaw = yaw_of(flat(t - pos));
+                    if ((yaw - ai.yaw + PI).rem_euclid(TAU) - PI).abs() < 0.1 {
+                        match plan_throw(&col, pos, t, yaw, fuse, radius) {
+                            Some(pitch) => {
+                                (th.release, press) = (th.t, Some(pitch));
+                                ai.hold = THROW_DELAY + fuse + 0.2;
+                            }
+                            None => th.t = f32::MAX,
+                        }
+                    }
+                }
+                ai.throw = Some(th);
+            }
+        } else if ai.throw_cd <= 0.0
+            && !planned
+            && !blind
+            && ai.react <= 0.0
+            && (5.0..14.0).contains(&dist)
+            && let Some(t) = target
+            && let Some(slot) = (0..loadout.slots.len())
+                .find(|&i| loadout.slots[i].magazine > 0 && stats(i).is_some())
+            && let Some((radius, fuse)) = stats(slot)
+        {
+            planned = true;
+            ai.throw_cd = 1.0;
+            let cover = seen.is_none();
+            let grouped = actors
+                .iter()
+                .filter(|(e, g, tm, b)| {
+                    *e != me
+                        && !friendly(mine, (tm.copied(), *b))
+                        && flat(g.translation() - t).length() < 0.8 * radius
+                })
+                .count()
+                >= 2;
+            if (cover || grouped)
+                && plan_throw(&col, pos, t, yaw_of(flat(t - pos)), fuse, radius).is_some()
+            {
+                debug!(
+                    "bot {name}: grenade slot {slot} at {dist:.1} m ({})",
+                    if cover { "behind cover" } else { "grouped" }
+                );
+                ai.throw = Some(Throw {
+                    slot,
+                    t: 0.0,
+                    release: f32::MAX,
+                });
+            }
         }
 
         // Goal: the enemy; when hurt, the spawn point that gets us farthest from the enemy (none:
@@ -511,6 +741,13 @@ fn bot_ai(
             if flat(np - pos).length() < r && (np.y - pos.y).abs() < 1.2 {
                 ai.next = t + 1;
                 hop |= takeoff;
+                if takeoff && ai.path[t + 1].turn != Vec3::ZERO {
+                    ai.air = Some((ai.path[t + 1].turn, ai.path[t + 1].hold));
+                    debug!(
+                        "bot {name}: side wall run from {pos:.1} heading {:.2}",
+                        ai.path[t + 1].turn
+                    );
+                }
             } else {
                 // Ledge guard stays on unless a drop or jump is imminent.
                 let guard = ai.path[t].kind == Kind::Walk
@@ -581,6 +818,17 @@ fn bot_ai(
         }
 
         // Turn, then express the wanted motion in the facing frame.
+        // A side wall run (nav `Step::turn`) holds its heading in the air so that the controller
+        // meets the wall at a glancing angle.
+        if let Some((h, left)) = ai.air {
+            ai.air = (left > dt).then_some((h, left - dt));
+            (mv, guard, strafe) = (h, false, 0.0);
+        }
+        let face = match (target, ai.air) {
+            (_, Some((h, _))) => yaw_of(h),
+            (Some(t), _) if ai.throw.is_some() => yaw_of(flat(t - pos)),
+            _ => face,
+        };
         ai.yaw = turn(ai.yaw, face, (3.0 + 6.0 * skill) * dt);
         let (s, c) = ai.yaw.sin_cos();
         let mut walk = Vec2::new(
@@ -676,6 +924,10 @@ fn bot_ai(
             hop = false;
         }
 
+        ai.hold -= dt;
+        if ai.throw.is_some() || ai.hold > 0.0 || ai.lay.is_some() {
+            (walk, hop, ai.tap) = (Vec2::ZERO, false, None);
+        }
         // Never walk off a ledge (strafing and backing up included) unless the route says so.
         let wish = Vec3::new(walk.x * c - walk.y * s, 0.0, -walk.x * s - walk.y * c);
         if guard
@@ -698,11 +950,14 @@ fn bot_ai(
             let c = t + Vec3::Y * 1.1;
             (c.y - eye.y).atan2(Vec2::new(c.x - eye.x, c.z - eye.z).length())
         });
-        if !melee {
+        if !melee && ai.throw.is_none() {
             // Aim error: weaker bots are worse shots.
             let e = 1.5 - skill;
             intent.yaw += (rnd(&mut ai.rng) - 0.5) * 0.18 * e;
             intent.pitch += (rnd(&mut ai.rng) - 0.5) * 0.1 * e;
+        }
+        if let Some(pitch) = press {
+            intent.pitch = pitch;
         }
 
         ai.react -= dt;
@@ -719,7 +974,29 @@ fn bot_ai(
                 debug!("bot {name}: guard against {:?}", foe_acting.map(|a| a.clip));
             }
         }
-        intent.guard = melee && ai.guard_t > 0.0;
+        // Butterfly: right after its own slash lands (the cancel window of the blow, `Acting`
+        // `cancel_from`), a melee bot raises the guard for `BUTTERFLY_GUARD` seconds, which
+        // `melee.rs` takes as the guard cancel of the recovery, then lets the held click start the
+        // next combo blow. Rolled once per blow: 15 % + 50 % x skill (*inferred*).
+        ai.bf_cd -= dt;
+        if let Some(t) = ai.bf {
+            ai.bf = (t + dt < BUTTERFLY_GUARD).then_some(t + dt);
+        } else if melee
+            && seen.is_some()
+            && dist <= reach + 1.0
+            && ai.bf_cd <= 0.0
+            && let Some(a) = me_acting
+            && matches!(a.clip, "attack1" | "attack2" | "attack3" | "attack4")
+            && a.time >= a.cancel_from
+        {
+            ai.bf_cd = 0.6;
+            if rnd(&mut ai.rng) < 0.15 + 0.5 * skill {
+                (ai.bf, ai.bf_cd) = (Some(0.0), 1.2);
+                debug!("bot {name}: butterfly after {} at {:.2}s", a.clip, a.time);
+            }
+        }
+        let butterfly = ai.bf.is_some();
+        intent.guard = butterfly || melee && ai.guard_t > 0.0;
         let engaged = seen.is_some() && dist <= reach && ai.react <= 0.0;
         ai.burst_t -= dt;
         if ai.burst_t <= 0.0 {
@@ -740,10 +1017,25 @@ fn bot_ai(
                 })
             });
         intent.attack = !blind
+            && usable
+            && !butterfly
             && (engaged && (melee || ai.firing) && clear && !(intent.guard && swung)
                 || slash && dist <= reach + 2.5);
-        if melee && foe_guard && engaged && !blind {
+        if melee && foe_guard && engaged && !blind && !butterfly {
             intent.attack = true;
+        }
+        if press.is_some() {
+            intent.attack = true;
+        }
+        // Lay the mine once it is in hand and loaded.
+        if let (Some(t), Some(s)) = (ai.lay, mine_slot)
+            && loadout.current == s
+            && t >= LAY_AFTER
+            && loadout.slots[s].magazine > 0
+        {
+            debug!("bot {name}: lays a mine");
+            (intent.attack, ai.lay, ai.lay_cd, ai.switch_t) =
+                (true, None, 6.0 + 6.0 * rnd(&mut ai.rng), 0.0);
         }
         intent.reload = loadout
             .slots

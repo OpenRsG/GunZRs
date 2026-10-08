@@ -45,7 +45,7 @@ impl Level {
             .map
             .dummies
             .iter()
-            .filter(|d| d.name.starts_with("spawn"))
+            .filter(|d| d.name.starts_with("spawn") && !d.name.starts_with("spawn_npc"))
             .map(dummy)
             .collect();
         if spawns.is_empty() {
@@ -126,7 +126,7 @@ impl Material for MapMaterial {
 }
 
 /// Startup system: one mesh per (material, lightmap) pair; polygons are triangle fans.
-fn spawn_level(
+pub fn spawn_level(
     mut commands: Commands,
     level: Res<Level>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -237,6 +237,7 @@ fn spawn_level(
             AlphaMode::Opaque
         };
         commands.spawn((
+            crate::game::MapEntity,
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(MapMaterial {
                 params: Vec4::new(

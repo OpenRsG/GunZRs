@@ -5,12 +5,13 @@
 //! archives, so text uses Bevy's built-in font. Notes: `docs/formats.md` (menu).
 
 use crate::{
-    actor::DEFAULT_LOADOUT,
     character::{self, Character, Outfit},
     hud::try_image,
     item::Items,
     model::Textures,
     mrs::Vfs,
+    profile::{Profile, Ranks},
+    shop::{self, ShopData},
     view::{self, Shot},
 };
 use bevy::{
@@ -39,14 +40,15 @@ pub fn take_arg<T: FromStr>(args: &mut Vec<String>, flag: &str) -> Result<Option
 pub enum Mode {
     /// id 0 (`GAMETYPE_DEATHMATCH_SOLO`).
     Deathmatch,
-    /// id 1.
+    /// id 9 (`DEATHMATCH_TEAM2`, "Death match team" in `strings.xml`): Red against Blue with
+    /// respawns; team kills count.
     Team,
     /// id 2: deathmatch with melee weapons only.
     Gladiator,
     /// id 3.
     TeamGladiator,
-    /// id 9 (`DEATHMATCH_TEAM2`): team rounds, nobody respawns until the round ends. The
-    /// retail strings call these rounds "Elimination" (`MISSION_DES_WEEKLY_00251`).
+    /// id 1 (`DEATHMATCH_TEAM`, "Elimination" in `strings.xml`): team rounds, nobody respawns
+    /// until the round ends.
     Elimination,
     /// id 4: team rounds, each side hides a VIP; a round ends when one dies.
     Assassinate,
@@ -54,6 +56,25 @@ pub enum Mode {
     Duel,
     /// id 5: no bots, dummy targets.
     Training,
+    /// id 7 (`GAMETYPE_QUEST`; also plays the challenge quest, id 12, and survival, id 6):
+    /// the player and bot allies against scripted NPC sectors (`quest.rs`).
+    Quest,
+    /// id 8 (`GAMETYPE_BERSERKER`; its `gametypecfg.xml` block is commented out but the
+    /// `champion` channel rule lists it): one berserker against everyone; kill it to become it.
+    Berserker,
+    /// id 11 (`GAMETYPE_DUELTOURNAMENT`, the `dueltournament` channel): a knockout bracket of
+    /// duels, the loser is out.
+    DuelTournament,
+    /// id 17 (`MMATCH_GAMETYPE_RANDOM_WEAPON`, "Gunman" in `strings.xml`): deathmatch where every
+    /// life brings a random melee weapon and gun.
+    Gunman,
+    /// id 14 (`MMATCH_GAMETYPE_SPY`, `system/spymode.xml`): hidden spies against trackers, in
+    /// rounds.
+    Spy,
+    /// id 13 (`GAMETYPE_BLITZKRIEG`, `system/blitzkrieg.xml`; map `blitzkrieg` only): two sides,
+    /// radars that send waves of soldiers down the lanes, barricades to destroy; honor buys
+    /// upgrades (`blitz.rs`).
+    Blitzkrieg,
 }
 
 /// The choices of one mode's limit steppers: `gametypecfg.xml`'s `ROUNDS` and `LIMITTIME`
@@ -66,7 +87,7 @@ pub struct Limits {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 8] = [
+    pub const ALL: [Mode; 14] = [
         Mode::Deathmatch,
         Mode::Team,
         Mode::Gladiator,
@@ -75,6 +96,12 @@ impl Mode {
         Mode::Assassinate,
         Mode::Duel,
         Mode::Training,
+        Mode::Quest,
+        Mode::Berserker,
+        Mode::DuelTournament,
+        Mode::Gunman,
+        Mode::Spy,
+        Mode::Blitzkrieg,
     ];
 
     pub fn name(self) -> &'static str {
@@ -87,6 +114,12 @@ impl Mode {
             Mode::Assassinate => "Assassinate",
             Mode::Duel => "Duel",
             Mode::Training => "Training",
+            Mode::Quest => "Quest",
+            Mode::Berserker => "Berserker",
+            Mode::DuelTournament => "Tournament",
+            Mode::Gunman => "Gunman",
+            Mode::Spy => "Spy",
+            Mode::Blitzkrieg => "Blitzkrieg",
         }
     }
 
@@ -101,6 +134,12 @@ impl Mode {
             Mode::Assassinate => "assassinate",
             Mode::Duel => "duel",
             Mode::Training => "training",
+            Mode::Quest => "quest",
+            Mode::Berserker => "berserker",
+            Mode::DuelTournament => "tournament",
+            Mode::Gunman => "gunman",
+            Mode::Spy => "spy",
+            Mode::Blitzkrieg => "blitzkrieg",
         }
     }
 
@@ -108,7 +147,11 @@ impl Mode {
     pub fn teams(self) -> bool {
         matches!(
             self,
-            Mode::Team | Mode::TeamGladiator | Mode::Elimination | Mode::Assassinate
+            Mode::Team
+                | Mode::TeamGladiator
+                | Mode::Elimination
+                | Mode::Assassinate
+                | Mode::Blitzkrieg
         )
     }
 
@@ -119,7 +162,10 @@ impl Mode {
 
     /// Played in rounds: nobody respawns until the round is decided.
     pub fn rounds(self) -> bool {
-        matches!(self, Mode::Elimination | Mode::Assassinate | Mode::Duel)
+        matches!(
+            self,
+            Mode::Elimination | Mode::Assassinate | Mode::Duel | Mode::DuelTournament | Mode::Spy
+        )
     }
 
     /// Pickups use the map's `spawn_item_team_*` list instead of `spawn_item_solo_*`.
@@ -127,10 +173,15 @@ impl Mode {
         self.teams()
     }
 
+    /// One-on-one rounds: the duel and its tournament.
+    pub fn duel(self) -> bool {
+        matches!(self, Mode::Duel | Mode::DuelTournament)
+    }
+
     /// Whether the map's item pickups exist (*inferred*: not in the one-on-one duel, nor in
     /// the training range).
     pub fn items(self) -> bool {
-        !matches!(self, Mode::Duel | Mode::Training)
+        !matches!(self, Mode::Duel | Mode::DuelTournament | Mode::Training)
     }
 
     /// What the kill limit counts: kills, team kills, or round wins.
@@ -144,7 +195,7 @@ impl Mode {
 
     /// What the time limit is: the match, or (duel) one round.
     pub fn time_name(self) -> &'static str {
-        if self == Mode::Duel {
+        if self.duel() {
             "Round time"
         } else {
             "Time limit"
@@ -161,6 +212,16 @@ impl Mode {
             Mode::Assassinate => "Rounds: kill the enemy VIP, keep your own alive.",
             Mode::Duel => "One on one. The winner stays, the loser queues, the rest watch.",
             Mode::Training => "No bots: slash and shoot the dummy targets.",
+            Mode::Quest => "Clear NPC sectors with bot allies, then take the portal.",
+            Mode::Berserker => "One berserker, everyone else hunts it. Kill it to become it.",
+            Mode::DuelTournament => {
+                "Knockout bracket of one-on-one duels. More damage wins on time."
+            }
+            Mode::Gunman => "Deathmatch with a random melee weapon and gun every life.",
+            Mode::Spy => "Hidden spies with grenades only, trackers hunt them. Rounds.",
+            Mode::Blitzkrieg => {
+                "Red against Blue on the Blitzkrieg map: soldiers march, destroy the enemy buildings. F: honor upgrades."
+            }
         }
     }
 
@@ -182,14 +243,24 @@ impl Mode {
         }
         match self {
             Mode::Deathmatch => l(&[5, 7, 10, 20, 30, 50, 70, 100], 50, LONG, 30),
-            Mode::Team => l(&[3, 5, 10, 20, 30, 50, 70, 100], 30, SHORT, 10),
+            Mode::Team => l(&[5, 10, 20, 30, 50, 70, 100], 70, LONG, 40),
             Mode::Gladiator => l(&[10, 20, 30, 50, 70, 100], 50, LONG, 30),
             Mode::TeamGladiator | Mode::Assassinate => l(&[10, 20, 30, 50, 70, 100], 30, SHORT, 10),
-            Mode::Elimination => l(&[5, 10, 20, 30, 50, 70, 100], 70, LONG, 40),
+            Mode::Elimination => l(&[3, 5, 10, 20, 30, 50, 70, 100], 30, SHORT, 10),
             Mode::Duel => l(&[10, 15, 20, 25, 30], 20, &[1, 2, 3, 4, 5], 3),
             // The file lists 10..100 (default 50, 30 min); a training range that ends on its
             // own is no use, so it starts unlimited (0 = off, inferred).
             Mode::Training => l(&[0, 10, 20, 30, 50, 70, 100], 0, LONG, 0),
+            // No limits: a quest ends when its sectors are cleared or the player falls.
+            Mode::Quest => l(&[0], 0, &[0], 0),
+            Mode::Berserker => l(&[10, 20, 30, 50, 70, 100], 50, LONG, 30),
+            // The bracket decides itself; the time limit is per duel (as the duel's).
+            Mode::DuelTournament => l(&[0], 0, &[1, 2, 3, 4, 5], 3),
+            Mode::Gunman => l(&[50], 50, &[20], 20),
+            // `spymode.xml`/`gametypecfg.xml`: 3-5 rounds, the round time comes from the map.
+            Mode::Spy => l(&[3, 4, 5], 3, &[0], 0),
+            // No score limit: the match ends when a radar falls (or at the time limit).
+            Mode::Blitzkrieg => l(&[0], 0, LONG, 0),
         }
     }
 }
@@ -209,7 +280,8 @@ pub struct Config {
     pub woman: bool,
     /// Index into the character's `AddParts` sets; `None` keeps the default outfit.
     pub outfit: Option<usize>,
-    /// zitem ids for the weapon slots; empty = [`DEFAULT_LOADOUT`].
+    /// zitem ids for the weapon slots (melee, primary, secondary, item; 0 = empty): the
+    /// profile's equipped weapons unless `--loadout` overrides them.
     pub loadout: Vec<u32>,
     pub bots: usize,
     /// Bot difficulty 0..=1.
@@ -219,6 +291,8 @@ pub struct Config {
     pub mode: Mode,
     pub time_limit: Option<u32>,
     pub kill_limit: Option<u32>,
+    /// Quest mode: the scenario to play (`--scenario NAME`); `None` = the first one.
+    pub scenario: Option<String>,
 }
 
 impl Config {
@@ -228,13 +302,20 @@ impl Config {
         fn get<T: FromStr>(args: &mut Vec<String>, flag: &str) -> Result<Option<T>, String> {
             take_arg(args, flag).map_err(|()| format!("{flag}: missing or bad value"))
         }
+        let profile = Profile::open(headless);
         let woman = match get::<String>(args, "--char")?.as_deref() {
-            None | Some("man") => false,
+            None => profile.woman,
+            Some("man") => false,
             Some("woman") => true,
             Some(_) => return Err("--char: man or woman".into()),
         };
         let loadout = match get::<String>(args, "--loadout")? {
-            None => Vec::new(),
+            // Empty (0) slots are only ever the trailing ones.
+            None => profile.equipped[..4]
+                .iter()
+                .copied()
+                .take_while(|&i| i != 0)
+                .collect(),
             Some(s) => s
                 .split(',')
                 .map(|n| n.parse().map_err(|_| format!("--loadout: bad id {n:?}")))
@@ -248,10 +329,14 @@ impl Config {
         };
         let (time, kills) = (get(args, "--time-limit")?, get(args, "--kill-limit")?);
         Ok(Self {
-            map: get(args, "--map")?,
+            map: get(args, "--map")?
+                .or_else(|| (mode == Mode::Blitzkrieg).then(|| "blitzkrieg".into())),
             woman,
             // 1-based on the command line (like `gunz-char --set`), 0 = default outfit.
-            outfit: get::<usize>(args, "--outfit")?.and_then(|n| n.checked_sub(1)),
+            outfit: match get::<usize>(args, "--outfit")? {
+                None => profile.outfit,
+                Some(n) => n.checked_sub(1),
+            },
             loadout,
             bots: get(args, "--bots")?.unwrap_or(3),
             skill: get::<f32>(args, "--skill")?.unwrap_or(0.5).clamp(0.0, 1.0),
@@ -259,6 +344,7 @@ impl Config {
             mode,
             time_limit: limit(time, lim.minutes_default * 60),
             kill_limit: limit(kills, lim.kills_default),
+            scenario: get(args, "--scenario")?,
         })
     }
 
@@ -295,6 +381,9 @@ impl Config {
                     .join(","),
             );
         }
+        if let Some(s) = &self.scenario {
+            a.extend(["--scenario".into(), s.clone()]);
+        }
         a
     }
 }
@@ -303,6 +392,8 @@ impl Config {
 pub enum Page {
     Match,
     Player,
+    Shop,
+    Inventory,
 }
 
 impl FromStr for Page {
@@ -311,6 +402,8 @@ impl FromStr for Page {
         match s {
             "match" => Ok(Page::Match),
             "player" => Ok(Page::Player),
+            "shop" => Ok(Page::Shop),
+            "inventory" => Ok(Page::Inventory),
             _ => Err(()),
         }
     }
@@ -319,8 +412,8 @@ impl FromStr for Page {
 /// Button textures shared by the main menu and the in-game pause menu.
 #[derive(Resource, Clone)]
 pub struct Art {
-    up: Handle<Image>,
-    over: Handle<Image>,
+    pub(crate) up: Handle<Image>,
+    pub(crate) over: Handle<Image>,
 }
 
 impl Art {
@@ -435,19 +528,17 @@ fn label(s: &str, w: f32) -> impl Bundle {
     )
 }
 
-/// What the main menu offers: maps, characters and weapon candidates per slot.
+/// What the main menu offers: maps and the characters.
 #[derive(Resource)]
-struct Catalog {
-    vfs: Vfs,
-    items: Items,
+pub(crate) struct Catalog {
+    pub(crate) vfs: Vfs,
+    pub(crate) items: Items,
     maps: Vec<String>,
+    /// Quest mode scenario names (`quest::scenario_names`); the first is the default.
+    scenarios: Vec<String>,
     men: Character,
     women: Character,
-    /// Candidate zitem ids per slot (melee, two ranged, one item; 0 = empty, last slot only).
-    slots: [Vec<u32>; 4],
 }
-
-const SLOT_NAMES: [&str; 4] = ["Melee", "Primary", "Secondary", "Item"];
 
 impl Catalog {
     fn load(vfs: Vfs) -> std::io::Result<Self> {
@@ -461,47 +552,19 @@ impl Catalog {
             .collect();
         maps.sort_unstable();
         maps.dedup();
-        let pick = |kind: &str, empty: bool| {
-            let mut v: Vec<u32> = empty.then_some(0).into_iter().collect();
-            v.extend(
-                items
-                    .weapons()
-                    .filter(|i| i.kind == kind && i.name.is_some() && items.model(i).is_some())
-                    .map(|i| i.id),
-            );
-            v
-        };
-        let slots = [
-            pick("melee", false),
-            pick("range", false),
-            pick("range", false),
-            pick("custom", true),
-        ];
+        let scenarios = crate::quest::scenario_names(&vfs);
         Ok(Self {
             men: character::load(&vfs, "heroman1")?,
             women: character::load(&vfs, "herowoman1")?,
             vfs,
             items,
             maps,
-            slots,
+            scenarios,
         })
     }
 
     fn character(&self, woman: bool) -> &Character {
         if woman { &self.women } else { &self.men }
-    }
-
-    fn item_name(&self, id: u32) -> String {
-        match self.items.get(id) {
-            None => "None".into(),
-            Some(i) => {
-                let name = i.name.as_deref().unwrap_or("?");
-                match &i.weapon {
-                    Some(w) if i.kind != "custom" => format!("{name} ({})", w.damage),
-                    _ => name.to_owned(),
-                }
-            }
-        }
     }
 }
 
@@ -520,9 +583,9 @@ fn title(dir: &str) -> String {
 }
 
 #[derive(Resource)]
-struct State {
-    cfg: Config,
-    page: Page,
+pub(crate) struct State {
+    pub(crate) cfg: Config,
+    pub(crate) page: Page,
 }
 
 /// Where [`run`] leaves the choice when Start is pressed.
@@ -541,7 +604,7 @@ enum Field {
     Skill,
     Sens,
     Outfit,
-    Slot(usize),
+    Scenario,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -561,7 +624,11 @@ struct Value(Field);
 
 /// Container shown only on its page.
 #[derive(Component)]
-struct PageRoot(Page);
+pub(crate) struct PageRoot(pub(crate) Page);
+
+/// Container shown only while the chosen mode is Quest (`true`) or is not Quest (`false`).
+#[derive(Component)]
+struct ModeShow(bool);
 
 /// The character model's parent (turned slowly), shown on the player page only.
 #[derive(Component)]
@@ -594,10 +661,15 @@ fn step(cfg: &mut Config, cat: &Catalog, field: Field, d: i32) {
             let at = (cfg.outfit.map_or(0, |p| p + 1) as i32 + d).rem_euclid(n) as usize;
             cfg.outfit = at.checked_sub(1);
         }
-        Field::Slot(s) => {
-            let list = &cat.slots[s];
-            let at = list.iter().position(|&v| v == cfg.loadout[s]).unwrap_or(0) as i32;
-            cfg.loadout[s] = list[(at + d).rem_euclid(list.len() as i32) as usize];
+        Field::Scenario => {
+            let list = &cat.scenarios;
+            let at = list
+                .iter()
+                .position(|s| Some(s) == cfg.scenario.as_ref())
+                .unwrap_or(0) as i32;
+            if !list.is_empty() {
+                cfg.scenario = Some(list[(at + d).rem_euclid(list.len() as i32) as usize].clone());
+            }
         }
     }
 }
@@ -605,6 +677,7 @@ fn step(cfg: &mut Config, cat: &Catalog, field: Field, d: i32) {
 fn value(cfg: &Config, cat: &Catalog, field: Field) -> String {
     let clock = |s: u32| format!("{}:{:02}", s / 60, s % 60);
     match field {
+        Field::MapName if cfg.mode == Mode::Quest => "Quest".into(),
         Field::MapName => cfg.map.as_deref().map(title).unwrap_or_default(),
         Field::Time => cfg.time_limit.map_or("Off".into(), clock),
         Field::Kills => cfg.kill_limit.map_or("Off".into(), |k| k.to_string()),
@@ -626,7 +699,11 @@ fn value(cfg: &Config, cat: &Catalog, field: Field) -> String {
             None => "Default".into(),
             Some(p) => format!("{} / {}", p + 1, cat.character(cfg.woman).parts.len()),
         },
-        Field::Slot(s) => cat.item_name(cfg.loadout[s]),
+        Field::Scenario => cfg
+            .scenario
+            .clone()
+            .or_else(|| cat.scenarios.first().cloned())
+            .unwrap_or_default(),
     }
 }
 
@@ -634,19 +711,17 @@ fn value(cfg: &Config, cat: &Catalog, field: Field) -> String {
 /// Headless (`shot`), the menu shows `page` and the run ends with the screenshot.
 pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Option<Config> {
     let cat = Catalog::load(vfs).unwrap_or_else(|e| panic!("menu data: {e}"));
+    let data = ShopData::load(&cat.vfs, &cat.items).unwrap_or_else(|e| panic!("shop data: {e}"));
+    let ranks = Ranks::load(&cat.vfs).unwrap_or_else(|e| panic!("menu data: {e}"));
     println!(
-        "menu: {} maps, {} weapon candidates",
+        "menu: {} maps, {} items for sale",
         cat.maps.len(),
-        cat.slots[1].len()
+        data.sale.len()
     );
-    // Fill every loadout slot (0 = empty item slot) so the pickers always have a value.
-    let mut ids: Vec<u32> = if cfg.loadout.is_empty() {
-        DEFAULT_LOADOUT.to_vec()
-    } else {
-        cfg.loadout.clone()
-    };
-    ids.resize(4, 0);
-    cfg.loadout = ids;
+    let mut profile = Profile::open(shot.is_some());
+    // The menu edits the profile's character and equipment; Start launches with them.
+    (profile.woman, profile.outfit) = (cfg.woman, cfg.outfit);
+    cfg.loadout.resize(4, 0);
     let default_map = cat
         .maps
         .iter()
@@ -656,10 +731,15 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
     cfg.map = cfg.map.filter(|m| cat.maps.contains(m)).or(default_map);
     let pick = Arc::new(Mutex::new(None));
     let mut app = view::app_plain("gunz-play", shot);
+    crate::music::menu(&mut app, &cat.vfs);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.05, 0.07)))
         .insert_resource(cat)
+        .insert_resource(data)
+        .insert_resource(ranks)
+        .insert_resource(profile)
         .insert_resource(State { cfg, page })
         .insert_resource(Pick(pick.clone()))
+        .add_plugins(shop::ShopPlugin)
         .add_systems(Startup, build)
         .add_systems(
             Update,
@@ -679,12 +759,14 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
 fn build(
     mut commands: Commands,
     cat: Res<Catalog>,
+    data: Res<ShopData>,
     state: Res<State>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     shot: Option<Res<Shot>>,
 ) {
+    commands.insert_resource(shop::Icons::load(&cat.vfs, &data, &mut images));
     let art = Art::load(&cat.vfs, &mut images);
     let img = |n: &str, images: &mut Assets<Image>| {
         try_image(&cat.vfs, images, n).unwrap_or_else(|| panic!("interface/default/{n} missing"))
@@ -787,22 +869,14 @@ fn build(
                 ..default()
             })
             .with_children(|t| {
-                t.spawn(button(
-                    &art,
-                    160.0,
-                    40.0,
-                    "MATCH",
-                    20.0,
-                    Act::Page(Page::Match),
-                ));
-                t.spawn(button(
-                    &art,
-                    160.0,
-                    40.0,
-                    "PLAYER",
-                    20.0,
-                    Act::Page(Page::Player),
-                ));
+                for (label, page) in [
+                    ("MATCH", Page::Match),
+                    ("PLAYER", Page::Player),
+                    ("SHOP", Page::Shop),
+                    ("INVENTORY", Page::Inventory),
+                ] {
+                    t.spawn(button(&art, 130.0, 40.0, label, 18.0, Act::Page(page)));
+                }
             });
             let page = |page| {
                 (
@@ -819,7 +893,7 @@ fn build(
                 )
             };
             root.spawn(page(Page::Match)).with_children(|p| {
-                p.spawn(panel(676.0, AlignItems::FlexStart))
+                p.spawn((ModeShow(false), panel(676.0, AlignItems::FlexStart)))
                     .with_children(|m| {
                         m.spawn(heading("MAP"));
                         m.spawn(Node {
@@ -876,6 +950,8 @@ fn build(
                         stepper(m, "Kill limit", Field::Kills, 150.0, false);
                         stepper(m, "Bots", Field::Bots, 150.0, false);
                         stepper(m, "Bot skill", Field::Skill, 150.0, false);
+                        m.spawn((ModeShow(true), Node::default()))
+                            .with_children(|q| stepper(q, "Scenario", Field::Scenario, 300.0, false));
                     });
             });
             root.spawn(page(Page::Player)).with_children(|p| {
@@ -894,48 +970,25 @@ fn build(
                     flex_grow: 1.0,
                     ..default()
                 });
-                p.spawn(panel(520.0, AlignItems::FlexStart))
+                p.spawn(panel(380.0, AlignItems::FlexStart))
                     .with_children(|m| {
-                        m.spawn(heading("LOADOUT"));
-                        for s in 0..4 {
-                            m.spawn(row()).with_children(|r| {
-                                r.spawn(label(SLOT_NAMES[s], 100.0));
-                                r.spawn(button(
-                                    &art,
-                                    34.0,
-                                    30.0,
-                                    "<",
-                                    16.0,
-                                    Act::Step(Field::Slot(s), -1),
-                                ));
-                                r.spawn((
-                                    Value(Field::Slot(s)),
-                                    Text::new(value(cfg, &cat, Field::Slot(s))),
-                                    TextFont::from_font_size(18.0),
-                                    TextColor(Color::WHITE),
-                                    TextLayout {
-                                        justify: Justify::Center,
-                                        linebreak: LineBreak::NoWrap,
-                                        ..default()
-                                    },
-                                    Node {
-                                        width: px(300),
-                                        height: px(24),
-                                        ..default()
-                                    },
-                                ));
-                                r.spawn(button(
-                                    &art,
-                                    34.0,
-                                    30.0,
-                                    ">",
-                                    16.0,
-                                    Act::Step(Field::Slot(s), 1),
-                                ));
-                            });
-                        }
+                        m.spawn(heading("EQUIPMENT"));
+                        m.spawn((
+                            Text::new("Weapons and armour are chosen in the INVENTORY tab; buy more in the SHOP tab."),
+                            TextFont::from_font_size(16.0),
+                            TextColor(Color::srgb(0.85, 0.85, 0.85)),
+                            Node {
+                                width: px(350),
+                                ..default()
+                            },
+                        ));
                     });
             });
+            for page_kind in [Page::Shop, Page::Inventory] {
+                root.spawn(page(page_kind))
+                    .with_children(|p| shop::fill(p, &art, page_kind));
+            }
+            root.spawn(shop::card());
             root.spawn(Node {
                 position_type: PositionType::Absolute,
                 left: px(24),
@@ -957,6 +1010,7 @@ fn act(
     keys: Res<ButtonInput<KeyCode>>,
     cat: Res<Catalog>,
     mut state: ResMut<State>,
+    mut profile: ResMut<Profile>,
     pick: Res<Pick>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -974,15 +1028,41 @@ fn act(
                 // Each mode has its own limit lists and defaults (`gametypecfg.xml`).
                 let lim = m.limits();
                 state.cfg.mode = m;
+                if m == Mode::Blitzkrieg {
+                    state.cfg.map = Some("blitzkrieg".into());
+                }
                 state.cfg.time_limit = Some(lim.minutes_default * 60).filter(|&t| t > 0);
                 state.cfg.kill_limit = Some(lim.kills_default).filter(|&k| k > 0);
             }
             Act::Sex(w) => {
+                // Armour is made for one sex.
+                if w != state.cfg.woman {
+                    profile.equipped[4..].fill(0);
+                }
                 state.cfg.woman = w;
                 state.cfg.outfit = None;
             }
             Act::Step(f, d) => step(&mut state.cfg, &cat, f, d),
             Act::Start => {
+                if state.cfg.mode == Mode::Blitzkrieg {
+                    state.cfg.map = Some("blitzkrieg".into());
+                }
+                if state.cfg.mode == Mode::Quest {
+                    // A quest picks its own map from the scenario.
+                    state.cfg.map = None;
+                    if let Some(first) = cat.scenarios.first() {
+                        state.cfg.scenario.get_or_insert_with(|| first.clone());
+                    }
+                } else {
+                    state.cfg.scenario = None;
+                }
+                (profile.woman, profile.outfit) = (state.cfg.woman, state.cfg.outfit);
+                state.cfg.loadout = profile.equipped[..4]
+                    .iter()
+                    .copied()
+                    .take_while(|&i| i != 0)
+                    .collect();
+                profile.save();
                 *pick.0.lock().unwrap() = Some(state.cfg.clone());
                 exit.write(AppExit::Success);
             }
@@ -1000,7 +1080,8 @@ fn refresh(
     cat: Res<Catalog>,
     mut values: Query<(&Value, &mut Text)>,
     buttons: Query<(Entity, &Act, Has<Chosen>)>,
-    mut pages: Query<(&PageRoot, &mut Node)>,
+    mut pages: Query<(&PageRoot, &mut Node), Without<ModeShow>>,
+    mut modes: Query<(&ModeShow, &mut Node)>,
 ) {
     if !state.is_changed() {
         return;
@@ -1028,6 +1109,13 @@ fn refresh(
     }
     for (p, mut n) in &mut pages {
         n.display = if p.0 == state.page {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for (m, mut n) in &mut modes {
+        n.display = if m.0 == (cfg.mode == Mode::Quest) {
             Display::Flex
         } else {
             Display::None

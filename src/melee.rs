@@ -21,7 +21,8 @@ use bevy::prelude::*;
 /// Hit frame of a clip: the frame of the fastest sword-hand tip (`R Finger0Nub`, forward
 /// kinematics on the `.ani` keys; probe `.local/py/hit.py`), *inferred* to be the moment the blade
 /// meets the target. `(motion type, clip, frame)`; clips without an entry strike at 45 % of
-/// their length.
+/// their length. `system/animationevent.xml` has no player-clip events (quest-NPC sounds only,
+/// docs/formats.md), so nothing in the data replaces these frames.
 const STRIKE: &[(u32, &str, f32)] = &[
     (1, "attack1", 5.0),
     (1, "attack2", 7.0),
@@ -194,6 +195,9 @@ enum Stage {
     Hold,
     /// `guard_block1/2` after a blocked blow.
     Block,
+    /// `guard_block1_ret`: the return out of a `guard_block1` pose back to the guard (the
+    /// block2 pose has no return clip in the data).
+    BlockRet,
     /// `guard_cancel`.
     Release,
 }
@@ -499,6 +503,13 @@ fn drive(
                         combo: 0,
                         power: 0.0,
                     })
+                } else if stage == Stage::Block
+                    && t >= m.secs
+                    && m.alt
+                    && secs("guard_block1_ret").is_some()
+                {
+                    // `alt` is set right after a block1 pose (see `resolve`)
+                    Some(Next::Guard(Stage::BlockRet))
                 } else if stage != Stage::Hold && t >= m.secs {
                     Some(Next::Guard(Stage::Hold))
                 } else {
@@ -595,6 +606,7 @@ fn drive(
                     Stage::Start => "guard_start",
                     Stage::Hold => "guard_idle",
                     Stage::Block => "guard_block1",
+                    Stage::BlockRet => "guard_block1_ret",
                     Stage::Release => "guard_cancel",
                 };
                 // Some motion types have no `guard_start`: raise the guard straight away.
@@ -746,13 +758,13 @@ fn resolve(
         (
             Entity,
             &GlobalTransform,
-            &Intent,
-            &Motor,
+            Option<&Intent>,
+            Option<&Motor>,
             Option<&Team>,
             Has<Bot>,
             Has<Guarding>,
             Has<Protected>,
-            &Loadout,
+            Option<&Loadout>,
             Option<&Name>,
         ),
         (With<Vitals>, Without<Dead>),
@@ -767,7 +779,7 @@ fn resolve(
         let Some(w) = data.items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
             continue;
         };
-        let Ok((_, g, intent, _, team, bot, _, _, _, aname)) = actors.get(s.attacker) else {
+        let Ok((_, g, Some(intent), _, team, bot, _, _, _, aname)) = actors.get(s.attacker) else {
             continue;
         };
         let me = (team.copied(), bot);
@@ -814,22 +826,21 @@ fn resolve(
             }
             let flat = to.normalize_or(fwd);
             let label = vname.map_or("?", |n| n.as_str());
-            let vfwd = Quat::from_rotation_y(vi.yaw) * Vec3::NEG_Z;
             let vmotion = vload
-                .slots
-                .get(vload.current)
+                .and_then(|l| l.slots.get(l.current))
                 .and_then(|s| data.items.get(s.item))
                 .and_then(|i| i.weapon.as_ref())
                 .map_or(1, |w| w.kind.motion_type());
-            let Ok(mut vm_state) = melee.get_mut(e) else {
-                continue;
-            };
-            let vstate = &mut *vm_state;
+            // Quest monsters have no melee state: they take the damage and nothing else.
+            let mut state = melee.get_mut(e).ok();
+            let mut body = vi.zip(vm).zip(state.as_deref_mut());
 
             // Guard: blocks every blow from the front except a massive swing.
-            if guarding
+            if let Some(((vi, vm), vstate)) = body.as_mut()
+                && guarding
                 && s.blow.effect != Effect::Massive
-                && vfwd.angle_between(-flat) <= GUARD_HALF.to_radians()
+                && (Quat::from_rotation_y(vi.yaw) * Vec3::NEG_Z).angle_between(-flat)
+                    <= GUARD_HALF.to_radians()
             {
                 let clip = if vstate.alt {
                     "guard_block2"
@@ -869,6 +880,7 @@ fn resolve(
                 item: s.item,
                 point: p,
                 dir: d,
+                pierce: None,
             });
             vfx.write(Vfx::Blood { point: p, dir: d });
             vfx.write(Vfx::Elu {
@@ -878,15 +890,17 @@ fn resolve(
             });
 
             // Reaction. An actor already thrown up is juggled instead of flinching.
-            let reaction = if vm.blast {
-                if vstate.juggle < MAX_JUGGLE {
-                    vstate.juggle += 1;
-                    Some(Vec3::Y * JUGGLE_UP + flat * FLINCH_PUSH)
-                } else {
-                    None
+            let reaction = match body.as_mut() {
+                None => None,
+                Some(((_, vm), vstate)) if vm.blast => {
+                    if vstate.juggle < MAX_JUGGLE {
+                        vstate.juggle += 1;
+                        Some(Vec3::Y * JUGGLE_UP + flat * FLINCH_PUSH)
+                    } else {
+                        None
+                    }
                 }
-            } else {
-                match s.blow.effect {
+                Some(((_, vm), vstate)) => match s.blow.effect {
                     Effect::Flinch | Effect::Knockdown => {
                         let (clip, stand, push) = if s.blow.effect == Effect::Knockdown {
                             ("damage_down", true, KNOCKDOWN_PUSH)
@@ -919,7 +933,7 @@ fn resolve(
                         vstate.phase = Phase::Idle;
                         Some(Vec3::Y * MASSIVE_UP + flat * MASSIVE_BACK)
                     }
-                }
+                },
             };
             if let Some(push) = reaction {
                 commands.entity(e).insert(Push(push));

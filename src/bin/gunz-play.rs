@@ -1,4 +1,5 @@
-//! `gunz-play GAME_DIR [MAP] [OPTIONS]`: play a retail map as a GunZ character. Without MAP the
+//! `gunz-play [GAME_DIR] [MAP] [OPTIONS]`: play a retail map as a GunZ character. Without
+//! GAME_DIR the Steam install is found through `libraryfolders.vdf` (`src/steam.rs`). Without MAP the
 //! main menu opens (map, mode and limits, bots, character and outfit, loadout, sensitivity);
 //! Start re-executes this binary with the chosen options, and "Main menu" in the pause or
 //! match-end screen re-executes it back into the menu.
@@ -17,11 +18,22 @@
 //! MODE is `dm` (deathmatch), `tdm` (team deathmatch), `gladiator` / `team-gladiator` (melee
 //! weapons only), `elimination` (team rounds, no respawn until the round ends), `assassinate`
 //! (rounds, one VIP per team), `duel` (one-on-one rounds, the winner stays, the rest queue and
-//! watch) or `training` (no bots, dummy targets). In the round modes the kill limit counts
-//! rounds won and the time limit is for the match (duel: for one round).
+//! watch), `training` (no bots, dummy targets), `berserker` (everybody hunts one berserker; kill
+//! it to become it), `tournament` (knockout bracket of duels), `gunman` (a random melee weapon
+//! and gun every life) or `spy` (rounds: hidden spies with grenades against trackers). In the
+//! round modes the kill limit counts rounds won and the time limit is for the match (duel and
+//! tournament: for one round; spy: none, the round time is the map's).
+//! `blitzkrieg` plays the map `blitzkrieg` only: soldiers march along the lanes, destroy the
+//! enemy barricades and radar; `F` opens the honor upgrade panel (Up/Down, Enter buys); the time
+//! limit is optional, headless checks may set `GUNZ_BLITZ_BUY=SECS:N,..` and `GUNZ_BLITZ_HP=K`.
 //! Rules (not in the menu): `--respawn S` (seconds dead before the respawn, default 5),
 //! `--protect S` (spawn protection, default 3), `--round-time S` (round limit, default 180),
 //! `--ready S` (countdown before a round, default 3).
+//! Quest: `--mode quest --scenario NAME [--dice N] [--bots N]` plays a retail quest (no MAP: the
+//! scenario's first sector is the map). NAME is a scenario title (`"Quest Mansion QL0"`,
+//! `"Goblin King"`), `"Challenge 101"`, `"Survival Prison"` or a special id / challenge id;
+//! `--dice` picks the scenario's `<MAP dice>` (default the last, the longest route); the bots are
+//! allies. Clear a sector, then walk into its portal (or wait 30 s); see `docs/formats.md`, "Quest".
 //!
 //! Headless, reproducible runs (never opens a window):
 //! `gunz-play GAME_DIR [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z]
@@ -34,6 +46,9 @@
 //! the player then (the match clock starts with the first frame, 1.5 s before the script).
 //! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player` picks the
 //! screen and the options above set what it shows.
+//! `--npc NAME[,NAME..]` spawns quest monsters (`system/npc.xml` ids such as `11`, `16`, or
+//! `npc2.xml` names such as `knifeman`, `tower`) in a row in front of the player, `--bots-ahead M`
+//! metres away (default 8) and hostile to it; `GUNZ_NPC_HOLD=S` keeps them idle for S seconds.
 //!
 //! SCRIPT is `;`-separated steps run one after another: `KEYS:SECONDS` holds the `+`-joined
 //! keys for that long (`w a s d` move, `jump`, `attack`, `guard`, `reload`, `tab` scoreboard,
@@ -55,10 +70,11 @@ use gunz::{
     menu::{self, Config, Mode, Page, take_arg},
     modes::DieAt,
     mrs::Vfs,
+    quest::{Catalog, Quest},
     session::{EXIT_AGAIN, EXIT_MENU, PauseAt, Rules, StartVitals},
     view::{self, SCALE, Shot, to_bevy},
 };
-use std::{os::unix::process::CommandExt, process::Command, time::Duration};
+use std::{path::Path, process::Command, time::Duration};
 
 /// Simulated seconds before a headless script starts, so pipelines compile and actors land.
 const LEAD: f32 = 1.5;
@@ -74,7 +90,15 @@ fn relaunch(game: &str, config: &Config, menu: bool) -> AppExit {
         (Some(map), false) => cmd.arg(map),
         (None, _) => &mut cmd,
     };
-    let err = cmd.args(config.flags()).exec();
+    let cmd = cmd.args(config.flags());
+    // A fresh process: exec replaces this one on Unix; elsewhere spawn it and exit.
+    #[cfg(unix)]
+    let err = std::os::unix::process::CommandExt::exec(cmd);
+    #[cfg(not(unix))]
+    let err = match cmd.spawn() {
+        Ok(_) => return AppExit::Success,
+        Err(e) => e,
+    };
     eprintln!("cannot restart gunz-play: {err}");
     AppExit::from_code(1)
 }
@@ -83,11 +107,12 @@ fn main() -> AppExit {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || {
         eprintln!(
-            "usage: gunz-play GAME_DIR [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training]\n       \
+            "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
+             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S]\n       \
-             gunz-play GAME_DIR [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
-             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player]\n\
+             [--mode quest --scenario NAME [--dice N]]\n       \
+             gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
+             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory] [--npc NAME[,NAME..]]\n\
              (see the doc comment of src/bin/gunz-play.rs)"
         );
         AppExit::from_code(2)
@@ -111,12 +136,20 @@ fn main() -> AppExit {
     ) else {
         return usage();
     };
+    // `--npc NAME[,NAME..]`: quest monsters (npc.xml ids or npc2.xml names) ahead of the player.
+    let npc = take_arg::<String>(&mut args, "--npc");
+    if npc.is_err() {
+        return usage();
+    }
     let (Ok(respawn), Ok(protect), Ok(round_time), Ok(ready)) = (
         take_arg::<f32>(&mut args, "--respawn"),
         take_arg::<f32>(&mut args, "--protect"),
         take_arg::<f32>(&mut args, "--round-time"),
         take_arg::<f32>(&mut args, "--ready"),
     ) else {
+        return usage();
+    };
+    let Ok(dice) = take_arg::<u32>(&mut args, "--dice") else {
         return usage();
     };
     let mut config = match Config::parse(&mut args, shot.is_some()) {
@@ -133,18 +166,52 @@ fn main() -> AppExit {
             return usage();
         }
     };
-    let Some(game) = args.first().cloned() else {
-        return usage();
+    // GAME_DIR is the first argument when it is a directory (or looks like a path, so a typo
+    // is reported as a bad directory); otherwise find the Steam install.
+    let game = match args
+        .first()
+        .filter(|a| Path::new(a).is_dir() || a.contains(['/', '\\']))
+    {
+        Some(_) => args.remove(0),
+        None => match gunz::steam::find_game() {
+            Some(dir) => dir.to_string_lossy().into_owned(),
+            None => {
+                eprintln!("GUNZ THE DUEL not found in any Steam library; pass GAME_DIR");
+                return usage();
+            }
+        },
     };
     let vfs = Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
-    let Some(map_name) = args.get(1).cloned() else {
+    // Quest mode plays a scenario's sectors in turn: its first sector is the map. Without a
+    // scenario (or MAP) the menu picks one.
+    let quest = (config.mode == Mode::Quest && (config.scenario.is_some() || !args.is_empty()))
+        .then(|| {
+            let cat = Catalog::load(&vfs).unwrap_or_else(|e| panic!("quest data: {e}"));
+            let name = config
+                .scenario
+                .clone()
+                .unwrap_or_else(|| cat.names().remove(0));
+            let plan = cat.plan(&name, dice, 1).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2)
+            });
+            config.scenario = Some(name);
+            Quest::new(&vfs, plan, config.bots, 1).unwrap_or_else(|e| panic!("quest data: {e}"))
+        });
+    let first = quest.as_ref().map(|q| q.first_map().to_owned());
+    let Some(map_name) = first.clone().or_else(|| args.first().cloned()) else {
         // No MAP: the main menu; Start leaves the choice behind, then the game starts.
         return match menu::run(vfs, config, page.unwrap_or(Page::Match), shot) {
             Some(chosen) => relaunch(&game, &chosen, false),
             None => AppExit::Success,
         };
     };
-    config.map = Some(map_name.to_ascii_lowercase());
+    // A quest restarts from its scenario, not from a map.
+    config.map = first.is_none().then(|| map_name.to_ascii_lowercase());
+    if config.mode == Mode::Blitzkrieg && !map_name.eq_ignore_ascii_case("blitzkrieg") {
+        eprintln!("--mode blitzkrieg is played on the map blitzkrieg");
+        return AppExit::from_code(2);
+    }
     let rs = map::find_rs(&vfs, &map_name).unwrap_or_else(|| panic!("no map named {map_name}"));
     let col = MapCollision::load(&vfs, &rs).unwrap_or_else(|e| panic!("{rs} collision: {e}"));
     let map = map::load(&vfs, &rs).unwrap_or_else(|e| panic!("{rs}: {e}"));
@@ -169,11 +236,20 @@ fn main() -> AppExit {
     if let Some(ahead) = ahead {
         app.insert_resource(BotAhead(ahead));
     }
+    if let Ok(Some(names)) = npc {
+        app.insert_resource(gunz::npc::NpcDemo {
+            names: names.split(',').map(str::to_string).collect(),
+            ahead: ahead.unwrap_or(8.0),
+        });
+    }
     if let Some(s) = pause_at {
         app.insert_resource(PauseAt(s));
     }
     if let Some(s) = die_at {
         app.insert_resource(DieAt(s));
+    }
+    if let Some(q) = quest {
+        app.insert_resource(q);
     }
     let mut rules = Rules::new(config.mode, config.time_limit, config.kill_limit);
     rules.respawn = respawn.unwrap_or(rules.respawn);
@@ -191,7 +267,12 @@ fn main() -> AppExit {
     }
     let sensitivity = Settings::default().sensitivity * config.sens;
     let exit = app
-        .add_plugins((LevelPlugin, FxPlugin(None), GamePlugin))
+        .add_plugins((
+            LevelPlugin,
+            FxPlugin(None),
+            GamePlugin,
+            effect::WarmFxPlugin,
+        ))
         .insert_resource(PlayerSetup {
             at: at.map(|p| Vec3::from(to_bevy(p)) * SCALE),
             yaw: yaw.map(f32::to_radians),
@@ -199,7 +280,10 @@ fn main() -> AppExit {
             loadout: config.loadout.clone(),
             outfit: config.outfit,
         })
-        .insert_resource(Settings { sensitivity })
+        .insert_resource(Settings {
+            sensitivity,
+            ..default()
+        })
         .insert_resource(rules)
         .insert_resource(BotCount(bots))
         .insert_resource(BotSkill(config.skill))

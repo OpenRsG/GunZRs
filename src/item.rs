@@ -34,6 +34,10 @@ pub enum WeaponKind {
     Medikit,
     Potion,
     RepairKit,
+    /// Spy mode only (`model/weapon.xml` `spy_*`, no zitem): see [`SPY_BAG`] and the rest.
+    SpyCase,
+    Stun,
+    Mine,
 }
 
 impl WeaponKind {
@@ -73,13 +77,14 @@ impl WeaponKind {
             PistolX2 | RevolverX2 => 3,
             Shotgun | MachineGun => 4,
             Rifle => 5,
-            Frag | Flashbang | Smoke => 6,
+            Frag | Flashbang | Smoke | Stun => 6,
             Dagger => 7,
-            Medikit | Potion | RepairKit => 8,
+            Medikit | Potion | RepairKit | Mine => 8,
             Rocket => 9,
             Smg => 10,
             SmgX2 => 11,
             DoubleKatana => 13,
+            SpyCase => 15,
         }
     }
 
@@ -88,7 +93,7 @@ impl WeaponKind {
     pub fn dummies(self) -> &'static [&'static str] {
         use WeaponKind::*;
         match self {
-            Katana => &["eq_wd_katana"],
+            Katana | SpyCase => &["eq_wd_katana"],
             Dagger => &["eq_wr_dagger"],
             DoubleKatana => &["eq_wr_blade", "eq_wl_blade"],
             Pistol | Revolver => &["eq_wr_pistol"],
@@ -98,8 +103,8 @@ impl WeaponKind {
             Shotgun | MachineGun => &["eq_wd_shotgun"],
             Rifle => &["eq_wd_rifle"],
             Rocket => &["eq_wd_rl"],
-            Frag | Flashbang | Smoke => &["eq_wd_grenade"],
-            Medikit | Potion | RepairKit => &["eq_wd_medikit"],
+            Frag | Flashbang | Smoke | Stun => &["eq_wd_grenade"],
+            Medikit | Potion | RepairKit | Mine => &["eq_wd_medikit"],
         }
     }
 
@@ -145,6 +150,12 @@ pub struct Weapon {
     pub coll_dist: Option<u32>,
     pub life: Option<u32>,
     pub state_time: Option<u32>,
+    /// `limitspeed`: percent of run speed while this weapon is in hand (rocket, machine gun: 90).
+    pub limit_speed: Option<u32>,
+    /// `limitwall` = 1: no wall run or wall kick with this weapon (UI message 9317 "Disabled: Wall Climb").
+    pub limit_wall: bool,
+    /// Medikit / repair kit points: `system/worlditem.xml` `AMOUNT` of the entry named like `mesh_name`.
+    pub kit_points: Option<u32>,
     pub snd_fire: Option<String>,
     pub snd_reload: Option<String>,
     pub snd_dryfire: Option<String>,
@@ -219,6 +230,15 @@ impl Items {
                 return Err(bad(format!("zitem.xml: duplicate item id {id}")));
             }
         }
+        let kits = read_kits(vfs)?;
+        for item in items.values_mut() {
+            if let (Some(w), Some(m)) = (&mut item.weapon, &item.mesh_name)
+                && matches!(w.kind, WeaponKind::Medikit | WeaponKind::RepairKit)
+            {
+                w.kit_points = kits.get(&m.to_ascii_lowercase()).copied();
+            }
+        }
+        spy_items(&mut items, &models)?;
         Ok(Items { items, models })
     }
 
@@ -259,6 +279,24 @@ fn xml_text(vfs: &Vfs, path: &str) -> io::Result<String> {
     let bytes = vfs.read(path)?;
     let text = String::from_utf8(bytes).map_err(|e| bad(format!("{path}: {e}")))?;
     Ok(text.trim_start_matches('\u{feff}').to_owned())
+}
+
+/// `worlditem.xml` `<WORLDITEM name><AMOUNT>`: points per name (lowercased).
+fn read_kits(vfs: &Vfs) -> io::Result<HashMap<String, u32>> {
+    let text = xml_text(vfs, "system/worlditem.xml")?;
+    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("worlditem.xml: {e}")))?;
+    let mut out = HashMap::new();
+    for n in doc.descendants().filter(|n| n.has_tag_name("WORLDITEM")) {
+        let amount = n
+            .children()
+            .find(|c| c.has_tag_name("AMOUNT"))
+            .and_then(|c| c.text())
+            .and_then(|t| t.trim().parse().ok());
+        if let (Some(name), Some(a)) = (n.attribute("name"), amount) {
+            out.insert(name.to_ascii_lowercase(), a);
+        }
+    }
+    Ok(out)
 }
 
 fn read_strings(vfs: &Vfs) -> io::Result<HashMap<String, String>> {
@@ -372,6 +410,9 @@ fn read_item(n: roxmltree::Node, strings: &HashMap<String, String>) -> io::Resul
                     coll_dist: opt(n, "handweaponcolldist")?,
                     life: opt(n, "handweaponlife")?,
                     state_time: opt(n, "handweaponstatetime")?,
+                    limit_speed: opt(n, "limitspeed")?,
+                    limit_wall: n.attribute("limitwall") == Some("1"),
+                    kit_points: None,
                     snd_fire: n.attribute("snd_fire").map(str::to_owned),
                     snd_reload: n.attribute("snd_reload").map(str::to_owned),
                     snd_dryfire: n.attribute("snd_dryfire").map(str::to_owned),
@@ -394,4 +435,70 @@ fn read_item(n: roxmltree::Node, strings: &HashMap<String, String>) -> io::Resul
         mesh_name: n.attribute("mesh_name").map(str::to_owned),
         weapon,
     })
+}
+
+/// Spy items. **Observed**: the ids are `SPY_ITEM_DESC` of `system/spymode.xml` (601003 `ICE`, 601004
+/// `STUN`, 601005 `MINE`, 601006 `BAG`; 601001 `LIGHT` and 601002 `SMOKE` are the flashbang and smoke
+/// zitems); none is in `zitem.xml`. `model/weapon.xml` has the models `spy_stungrenade` (motion 6),
+/// `spy_landmine` (motion 8) and `katana_spycase` (motion 15, a melee set with its own clips), so
+/// the BAG is the spy case, a blade. **Inferred**: the stats are those of a stand-in zitem (below).
+pub const SPY_ICE: u32 = 601003;
+pub const SPY_STUN: u32 = 601004;
+pub const SPY_MINE: u32 = 601005;
+pub const SPY_BAG: u32 = 601006;
+
+fn spy_items(
+    items: &mut BTreeMap<u32, Item>,
+    models: &HashMap<String, WeaponModel>,
+) -> io::Result<()> {
+    // (id, name, stand-in zitem, kind and model of its own, magazine)
+    let table = [
+        // A revolver whose bullets slow the target: the data has no spy gun.
+        (SPY_ICE, "Frost Bullets", 2050000, None, None),
+        (
+            SPY_STUN,
+            "Stun Grenade",
+            2200001,
+            Some(WeaponKind::Stun),
+            Some("spy_stungrenade"),
+        ),
+        (
+            SPY_MINE,
+            "Antipersonnel Mine",
+            2200007,
+            Some(WeaponKind::Mine),
+            Some("spy_landmine"),
+        ),
+        (
+            SPY_BAG,
+            "Spy Case",
+            2010000,
+            Some(WeaponKind::SpyCase),
+            Some("katana_spycase"),
+        ),
+    ];
+    for (id, name, from, kind, mesh) in table {
+        let mut item = items
+            .get(&from)
+            .cloned()
+            .ok_or_else(|| bad(format!("spy item {id}: stand-in {from} missing")))?;
+        item.id = id;
+        item.name = Some(name.into());
+        if let (Some(kind), Some(mesh)) = (kind, mesh) {
+            if !models.contains_key(mesh) {
+                return Err(bad(format!("spy item {id}: {mesh} not in weapon.xml")));
+            }
+            item.mesh_name = Some(mesh.into());
+            if let Some(w) = &mut item.weapon {
+                w.kind = kind;
+            }
+        }
+        if id == SPY_MINE
+            && let Some(w) = &mut item.weapon
+        {
+            w.magazine = 1;
+        }
+        items.insert(id, item);
+    }
+    Ok(())
 }

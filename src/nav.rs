@@ -10,23 +10,35 @@
 
 use crate::{
     actor::{
-        GRAVITY, HEIGHT, JUMP, RADIUS, RUN, SLIDE_GRAVITY, WALL_MIN_HEIGHT, WALL_RUN_UP, climb,
+        GRAVITY, HEIGHT, JUMP, RADIUS, RUN, RUN_GRAVITY, SLIDE_GRAVITY, WALL_MIN_HEIGHT,
+        WALL_RUN_SIDE, WALL_RUN_UP, climb,
     },
     col::{MapCollision, STEP, WALKABLE},
 };
 use bevy::prelude::*;
-use std::{cmp::Ordering, collections::BinaryHeap, collections::HashMap, collections::HashSet};
+use std::{
+    cmp::Ordering, collections::BinaryHeap, collections::HashMap, collections::HashSet,
+    f32::consts::FRAC_PI_2,
+};
 
 /// Grid spacing of the floor samples (metres).
 const CELL: f32 = 0.5;
 /// Simulation step (seconds).
 const DT: f32 = 1.0 / 30.0;
 /// Longest horizontal hop and deepest fall a link may span (metres). *Inferred*: the port has no
-/// fall damage, so bots may jump off upper floors that have no other way down.
+/// fall damage (`combat.rs` never reads the fall), so bots may jump off any upper floor; 20 m
+/// covers the deepest map (Stairway: 8 more routes than 8 m).
 const REACH: f32 = 6.5;
-const DROP: f32 = 8.0;
+const DROP: f32 = 20.0;
 /// A wall climb jumps when the wall is this close (metres): the jump peaks at the wall.
 const CLIMB_LEAD: f32 = 2.0;
+/// A side wall run needs a wall within this distance (metres) at the side of the run-up, the jump
+/// turns into it by one of these angles (radians; glancing, so the controller's wall run is a
+/// side one, `fwd.dot(n) >= -0.7`) and may carry this far (`WALL_RUN_SIDE` x `RUN` = 12.6 m).
+/// *Inferred* values.
+const SIDE_WALL: f32 = 4.0;
+const SIDE_ANGLES: [f32; 2] = [0.35, 0.6];
+const SIDE_REACH: f32 = 14.0;
 /// A node is taken for a landing spot within this horizontal distance and height difference.
 const SNAP_XZ: f32 = 0.8;
 const SNAP_Y: f32 = 0.6;
@@ -61,6 +73,10 @@ struct Link {
     cost: f32,
     /// Where a [`Kind::Jump`] leaves the ground (the ledge or wall the run-up reaches).
     takeoff: Vec3,
+    /// Heading to face after the jump for `hold` seconds (a side wall run; zero: steer to the
+    /// next node).
+    turn: Vec3,
+    hold: f32,
 }
 
 /// One node of a route; `kind` is how it is reached from the previous node.
@@ -70,6 +86,9 @@ pub struct Step {
     pub kind: Kind,
     /// For [`Kind::Jump`]: the feet position to jump from (on the previous node's floor).
     pub takeoff: Vec3,
+    /// For a side wall run: the heading to hold for `hold` seconds after the jump.
+    pub turn: Vec3,
+    pub hold: f32,
 }
 
 #[derive(Resource)]
@@ -119,13 +138,20 @@ struct Sim {
     /// It left the ground other than by the jump (a ledge).
     air: bool,
     takeoff: Vec3,
+    /// A wall run along a side wall carried it.
+    side: bool,
+    /// Seconds from takeoff to landing.
+    secs: f32,
 }
 
 /// Runs the controller from `from` along the unit horizontal `dir` at full speed until it stands
 /// on a floor `want` metres away. With `jump` it first runs up to the ledge or wall (at most 1 m)
 /// and jumps from there; with a `lead` it instead runs until a wall stands within `lead` metres
 /// and jumps then, so that the jump peaks at the wall and the wall run (`actor.rs`) climbs on from
-/// there. `None` when it is blocked, falls too far or goes too far.
+/// there. A non-zero `turn` is the heading the actor faces after the jump (it keeps its speed and
+/// steers with the air control): into a side wall at a glancing angle it wall-runs along it for
+/// `WALL_RUN_SIDE` seconds. `None` when it is blocked, falls too far or goes farther than `reach`.
+#[allow(clippy::too_many_arguments)]
 fn simulate(
     col: &MapCollision,
     from: Vec3,
@@ -133,8 +159,9 @@ fn simulate(
     jump: bool,
     lead: f32,
     want: f32,
+    turn: Vec3,
+    reach: f32,
 ) -> Option<Sim> {
-    let hv = dir * RUN;
     let mut takeoff = from;
     if jump {
         let (steps, chest) = if lead > 0.0 {
@@ -148,7 +175,7 @@ fn simulate(
             }
             let m = col.slide_move(
                 takeoff,
-                Vec3::new(hv.x * DT, -0.05, hv.z * DT),
+                Vec3::new(dir.x * RUN * DT, -0.05, dir.z * RUN * DT),
                 RADIUS,
                 HEIGHT,
             );
@@ -162,25 +189,44 @@ fn simulate(
             takeoff = m.pos;
         }
     }
+    let face = if turn == Vec3::ZERO || !jump {
+        dir
+    } else {
+        turn
+    };
+    let wish = face * RUN;
+    let mut hv = dir * RUN;
     let (mut pos, mut vy, mut grounded, mut air) =
         (takeoff, if jump { JUMP } else { 0.0 }, !jump, false);
-    // Wall contact (normal, time) and the wall run in progress (normal, seconds left), as the
-    // controller keeps them.
-    let (mut wall, mut run, mut spent) = (None::<(Vec3, f32)>, None::<(Vec3, f32)>, false);
+    // Wall contact (normal, time) and the wall run in progress (normal, seconds left, along the
+    // wall), as the controller keeps them.
+    let (mut wall, mut run, mut spent) = (None::<(Vec3, f32)>, None::<(Vec3, f32, bool)>, false);
+    let mut side = false;
     for step in 0..90 {
         let t = step as f32 * DT;
         let mut gravity = 1.0;
         let mut fall = 40.0;
-        let mut hv = hv;
-        if let Some((n, left)) = run {
-            hv = -n * 1.5;
-            if left > 0.0 {
+        if let Some((n, left, along)) = run {
+            let speed = if left > 0.0 { RUN } else { RUN * 0.5 };
+            hv = if along {
+                (face - n * face.dot(n)).normalize_or_zero() * speed
+            } else {
+                Vec3::ZERO
+            } - n * 1.5;
+            if left <= 0.0 {
+                (gravity, fall) = (SLIDE_GRAVITY, 6.0);
+            } else if along {
+                gravity = RUN_GRAVITY;
+            } else {
                 vy = climb(WALL_RUN_UP - left);
                 gravity = 0.0;
-            } else {
-                (gravity, fall) = (SLIDE_GRAVITY, 6.0);
             }
-            run = Some((n, left - DT));
+            run = Some((n, left - DT, along));
+        } else if grounded {
+            hv = wish;
+        } else {
+            // air control
+            hv += (wish - hv).clamp_length_max(10.0 * DT);
         }
         vy = (vy - GRAVITY * gravity * DT).max(-fall);
         let mut d = Vec3::new(hv.x, vy, hv.z) * DT;
@@ -203,28 +249,40 @@ fn simulate(
         if grounded {
             (run, wall, spent) = (None, None, false);
         } else if let Some(w) = m.wall {
-            wall = Some((Vec3::new(w.x, 0.0, w.z).normalize_or_zero(), t));
+            let n = Vec3::new(w.x, 0.0, w.z).normalize_or_zero();
+            hv -= n * hv.dot(n).min(0.0);
+            wall = Some((n, t));
         }
         if jump && !grounded {
-            // A wall run ends when the wall is lost; one starts facing a wall with air below.
+            // A wall run ends when the wall is lost; one starts facing a wall (up) or at a
+            // glancing angle (along) with air below.
             if wall.is_none_or(|w| t - w.1 > 0.15) {
                 run = None;
             } else if run.is_none()
                 && !spent
                 && let Some((n, _)) = wall
-                && dir.dot(n) < -0.7
+                && face.dot(n) < 0.3
                 && col
                     .raycast(pos + Vec3::Y * 0.05, Vec3::NEG_Y, WALL_MIN_HEIGHT)
                     .is_none()
             {
-                (run, spent) = (Some((n, WALL_RUN_UP)), true);
-                vy = vy.max(climb(0.0));
+                let along = face.dot(n) >= -0.7;
+                (run, spent, side) = (
+                    Some((n, if along { WALL_RUN_SIDE } else { WALL_RUN_UP }, along)),
+                    true,
+                    side | along,
+                );
+                vy = if along {
+                    vy.min(2.0)
+                } else {
+                    vy.max(climb(0.0))
+                };
             }
         }
         let far = Vec2::new(pos.x - from.x, pos.z - from.z).length();
         // Pressing against a ledge while rising is fine; only a grounded stall means blocked.
         let blocked = grounded && m.wall.is_some() && moved < RUN * DT * 0.3;
-        if far > REACH || pos.y < from.y - DROP || blocked {
+        if far > reach || pos.y < from.y - DROP || blocked {
             return None;
         }
         if grounded && far >= want {
@@ -232,6 +290,8 @@ fn simulate(
                 land: pos,
                 air,
                 takeoff,
+                side,
+                secs: t,
             });
         }
     }
@@ -366,7 +426,7 @@ impl Nav {
                     1.0
                 };
             let mut walked = false;
-            if let Some(sim) = simulate(col, p, dir, false, 0.0, want)
+            if let Some(sim) = simulate(col, p, dir, false, 0.0, want, Vec3::ZERO, REACH)
                 && let Some(j) = self.snap(sim.land).filter(|&j| j != i)
             {
                 let d = p.distance(self.nodes[j as usize]);
@@ -383,6 +443,8 @@ impl Nav {
                     kind,
                     cost,
                     takeoff: p,
+                    turn: Vec3::ZERO,
+                    hold: 0.0,
                 });
                 walked = !sim.air;
             }
@@ -393,19 +455,40 @@ impl Nav {
             }
             let lands = |s: &Sim| self.snap(s.land).filter(|&j| j != i);
             let hop = if col.raycast(p + Vec3::Y * 1.4, dir, 1.0).is_none() {
-                simulate(col, p, dir, true, 0.0, want).filter(|s| lands(s).is_some())
+                simulate(col, p, dir, true, 0.0, want, Vec3::ZERO, REACH)
+                    .filter(|s| lands(s).is_some())
             } else {
                 None
             }
             .map(|s| (s, 1.3, 1.5));
             let climb = || {
                 if k % 2 == 0 && col.raycast(p + Vec3::Y, dir, CLIMB_LEAD + 1.0).is_some() {
-                    simulate(col, p, dir, true, CLIMB_LEAD, want)
+                    simulate(col, p, dir, true, CLIMB_LEAD, want, Vec3::ZERO, REACH)
                         .filter(|s| lands(s).is_some())
                         .map(|s| (s, 1.5, 4.0))
                 } else {
                     None
                 }
+            };
+            // Failing that, a pit or gap between side walls: jump off the ledge, turn into the
+            // wall at a glancing angle and wall-run along it (the sim sets the landing).
+            let side_run = || {
+                if col
+                    .raycast(p + dir * 0.9 + Vec3::Y * 0.5, Vec3::NEG_Y, 1.2)
+                    .is_some()
+                {
+                    return None;
+                }
+                [1.0f32, -1.0].into_iter().find_map(|s| {
+                    let wall = Quat::from_rotation_y(s * FRAC_PI_2) * dir;
+                    col.raycast(p + Vec3::Y, wall, SIDE_WALL)?;
+                    SIDE_ANGLES.into_iter().find_map(|a| {
+                        let turn = Quat::from_rotation_y(s * a) * dir;
+                        simulate(col, p, dir, true, 0.0, want, turn, SIDE_REACH)
+                            .filter(|s| s.side && lands(s).is_some())
+                            .map(|s| (s, turn))
+                    })
+                })
             };
             if let Some((sim, per_m, fixed)) = hop.or_else(climb)
                 && let Some(j) = lands(&sim)
@@ -416,6 +499,20 @@ impl Nav {
                     kind: Kind::Jump,
                     cost: d * per_m + fixed,
                     takeoff: sim.takeoff,
+                    turn: Vec3::ZERO,
+                    hold: 0.0,
+                });
+            } else if let Some((sim, turn)) = side_run()
+                && let Some(j) = lands(&sim)
+            {
+                let d = p.distance(self.nodes[j as usize]);
+                out.push(Link {
+                    to: j,
+                    kind: Kind::Jump,
+                    cost: d * 1.5 + 6.0,
+                    takeoff: sim.takeoff,
+                    turn,
+                    hold: sim.secs + 0.3,
                 });
             }
         }
@@ -491,6 +588,8 @@ impl Nav {
                 node: i,
                 kind: l.map_or(Kind::Walk, |l| l.kind),
                 takeoff: l.map_or(Vec3::ZERO, |l| l.takeoff),
+                turn: l.map_or(Vec3::ZERO, |l| l.turn),
+                hold: l.map_or(0.0, |l| l.hold),
             });
             if i == q.s {
                 break;
@@ -532,5 +631,79 @@ impl PartialOrd for Open {
 impl Ord for Open {
     fn cmp(&self, o: &Self) -> Ordering {
         o.0.total_cmp(&self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        level::Level,
+        map,
+        mrs::Vfs,
+        view::{SCALE, to_bevy},
+    };
+
+    /// The routing check (docs/formats.md "Bots"): per spawn point, one route to the next spawn
+    /// and one to the spawn half the list away; a route counts when it ends within 2 m of the
+    /// goal. Needs the retail install (`GUNZ_GAME=<dir>`, optional `GUNZ_MAPS=a,b`), so it is
+    /// ignored by default: `cargo test --release routing_pairs -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn routing_pairs() {
+        let Ok(game) = std::env::var("GUNZ_GAME") else {
+            return;
+        };
+        let vfs = Vfs::mount(&game).unwrap();
+        let first = map::find_rs(&vfs, "mansion").unwrap();
+        let mut level = Level {
+            map: map::load(&vfs, &first).unwrap(),
+            vfs,
+        };
+        let maps = std::env::var("GUNZ_MAPS").unwrap_or_else(|_| {
+            "battle arena,blitzkrieg,castle,catacomb,citadel,classic town,dungeon,factory,garden,hall,halloween town,high_haven,island,lost shrine,port,prison,prison ii,ruin,shower room,skirmishhall,snow_town,stairway,station,test_a,test_b,town,weaponshop,jail,mansion".into()
+        });
+        let (mut ok_all, mut all) = (0, 0);
+        for name in maps.split(',') {
+            let rs = map::find_rs(&level.vfs, name).unwrap();
+            let col = MapCollision::load(&level.vfs, &rs).unwrap();
+            level.map = map::load(&level.vfs, &rs).unwrap();
+            let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
+            for v in &level.map.vertices {
+                let p = Vec3::from(to_bevy(v.pos)) * SCALE;
+                (min, max) = (min.min(p), max.max(p));
+            }
+            let t = std::time::Instant::now();
+            let nav = Nav::new(&col, min, max);
+            let built = t.elapsed().as_secs_f32();
+            let spawns: Vec<Vec3> = level.spawn_points().iter().map(|s| s.0).collect();
+            let n = spawns.len();
+            let (mut ok, mut total, mut worst) = (0, 0, 0.0f32);
+            for (i, &a) in spawns.iter().enumerate() {
+                for j in [(i + 1) % n, (i + n / 2) % n] {
+                    let t = std::time::Instant::now();
+                    let route = nav.route(a, spawns[j]);
+                    worst = worst.max(t.elapsed().as_secs_f32());
+                    total += 1;
+                    let hit = route
+                        .last()
+                        .is_some_and(|s| nav.nodes[s.node as usize].distance(spawns[j]) < 2.0);
+                    if !hit && std::env::var("GUNZ_BAD").is_ok() {
+                        let end = route
+                            .last()
+                            .map_or(Vec3::ZERO, |s| nav.nodes[s.node as usize]);
+                        println!("  BAD {a:.1} -> {:.1} ended {end:.1}", spawns[j]);
+                    }
+                    ok += hit as u32;
+                }
+            }
+            println!(
+                "{name:16} {ok:4}/{total:<4} nodes {:6} build {built:5.1}s worst route {:.1} ms",
+                nav.nodes.len(),
+                worst * 1000.0
+            );
+            (ok_all, all) = (ok_all + ok, all + total);
+        }
+        println!("TOTAL {ok_all}/{all}");
     }
 }

@@ -9,3 +9,4 @@
 *.dll
 *.exe
 .env
+core.[0-9]*

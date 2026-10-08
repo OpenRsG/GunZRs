@@ -25,12 +25,13 @@ of the game; the port only reads its `.mrs` archives and never runs `Gunz.exe`.
    (or paste `steam://install/3139440` into your browser to open the Steam client).
 2. Install [Rust](https://rustup.rs). On Linux, Bevy also needs the ALSA and udev development
    packages (`libasound2-dev libudev-dev` on Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora).
-3. Point `GAME` at the install folder and play:
+3. Build and play. `gunz-play` finds the game through Steam's library folders on its own; pass
+   the install folder first if it lives somewhere unusual:
 
 ```sh
 git clone https://github.com/OpenRsG/GunZRs && cd GunZRs
-GAME="$HOME/.steam/steam/steamapps/common/GUNZ THE DUEL"
-cargo run --release --bin gunz-play -- "$GAME"
+cargo run --release --bin gunz-play                       # main menu, game found via Steam
+cargo run --release --bin gunz-play -- "/path/to/GUNZ THE DUEL"
 ```
 
 | Steam install | `GAME` folder |
@@ -40,7 +41,8 @@ cargo run --release --bin gunz-play -- "$GAME"
 | Windows | `C:\Program Files (x86)\Steam\steamapps\common\GUNZ THE DUEL` |
 
 Other library folder? In Steam, right-click the game, then Manage, Browse local files.
-The port is developed and tested on Linux; Windows and macOS builds have not been tried yet.
+The port is developed and tested on Linux. A cross-check of the Windows target compiles, and CI
+builds Linux, Windows and macOS, but nobody has played it on Windows or macOS yet.
 
 ## Controls
 
@@ -55,8 +57,14 @@ The port is developed and tested on Linux; Windows and macOS builds have not bee
 | 1-5, wheel | Switch weapon |
 | Tab | Scoreboard |
 | Esc | Pause menu (resume, sensitivity, main menu, quit) |
+| T, F5-F9 | Taunt, emotes (bow, wave, cry, laugh, dance) |
+| F | Blitzkrieg upgrade panel (Up/Down, Enter buys) |
 
 Dead in a round mode? Space or click cycles the player you spectate.
+
+Your profile (level, XP, bounty, inventory, equipped items) is saved in
+`$XDG_DATA_HOME/gunzrs/profile.txt` (`%APPDATA%\gunzrs\profile.txt` on Windows). Kills and match
+results pay XP and bounty; spend the bounty in the SHOP tab and equip items in INVENTORY.
 
 ## Status
 
@@ -66,28 +74,32 @@ Dead in a round mode? Space or click cycles the player you spectate.
 |---|---|
 | Maps | All 30 RS v7 maps plus quest maps, with lightmaps, skies and every prop (fires, light shafts, water, fans, waving flags and curtains) |
 | Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
-| Characters | Man and woman models, 170 / 259 outfit sets, skinned animation with cross-fades, upper-body layer and aim pitch |
-| Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls |
+| Characters | Man and woman models, 170 / 259 outfit sets, skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
+| Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls; rocket launchers and machine guns slow you and block wall moves, as their item data says |
 | Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
-| Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching |
-| Throwables and items | Frag, flashbang, smoke grenades, medikits; health, armour and ammo pickups placed from the maps' item spawn points |
-| Combat | HP / AP damage, hit reactions, knockback and blast states, death camera |
-| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, training |
-| Bots | Path-finding over the map (stairs, jumps, drops, climbs), weapon choice by range, guarding, dash-slashes, pickups, retreating, skill level |
-| Menus and HUD | Main menu with 3D character preview, loadout, scoreboard, kill feed, damage indicators, decals, end-of-match screen |
-| Sound | Weapon sounds, surface footsteps, voices, map ambience |
+| Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing from the data |
+| Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
+| Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera |
+| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy, blitzkrieg, training |
+| Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards |
+| Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons) and state-machine AI |
+| Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs), weapon choice by range, guarding, butterfly, grenade throws, pickups, retreating, skill level |
+| Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
+| Menus and HUD | Main menu with 3D character preview, scoreboard, kill feed, damage indicators, decals, end-of-match screen with XP and bounty earned |
+| Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades |
 
 ### Not done yet
 
 | Area | State |
 |---|---|
-| Online multiplayer | Not started; every match is local against bots |
-| Music | Background music is not mapped to maps in the data files yet |
-| Quests | Quest maps load, but there are no NPCs or quest logic |
-| Shop, inventory, accounts, clans | Not started; the loadout is picked in the menu |
-| A few animations | `guard_block1_ret`, `blast_dagger`, `blast_drop_dagger` and emotes are unused |
-| Bots | They do not throw grenades or butterfly; on Mansion they reach only part of the upper floors |
-| Exact feel | Movement speeds, damage piercing and some timings are inferred from the data, not measured against the original game (listed in `docs/formats.md`) |
+| Online multiplayer | Not started; every match is local, with bots as the other players |
+| Clans | Need a server; skipped |
+| Blitzkrieg extras | The six classes, medals, minimap and announcer sounds are missing; the match is won by destroying the enemy radar |
+| Quest extras | Sacrifice items, random dice rolls and the Dungeon survival are missing |
+| Music choice | The data does not say which track belongs to which map; the port picks one per map (fixed, by name) |
+| Korean-only names | 22 monster names exist only in Korean; the HUD font cannot draw them, so the model name shows instead |
+| Bots on Mansion | The top floors have no stairs in the collision, so bots never reach them |
+| Exact feel | Run speed, jump height, gravity and several timings are not in the data; they are estimates (listed as **inferred** in `docs/formats.md`) |
 
 ## More tools
 
@@ -105,16 +117,19 @@ cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked 
 <summary>All <code>gunz-play</code> options</summary>
 
 `--char man|woman`, `--outfit N`, `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
-`--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training`,
-`--time-limit S`, `--kill-limit N` (0 = none), `--respawn S`, `--protect S`,
-`--round-time S`, `--ready S`. A match ends at the time or kill/round limit (default per mode,
-e.g. 10 min / 30 kills) with victory, defeat or draw.
+`--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|training`,
+`--mode quest --scenario NAME [--dice N]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
+`"Challenge 101"`, `"Survival Prison"`), `--time-limit S`, `--kill-limit N` (0 = none),
+`--respawn S`, `--protect S`, `--round-time S`, `--ready S`. A match ends at the time or
+kill/round limit (defaults per mode from `gametypecfg.xml`) with victory, defeat or draw.
 
 Testing without a window: every viewer accepts `--shot OUT.png` to render one 1280x720 frame
-headlessly. `gunz-play` adds `--script`, `--time`, `--hp`, `--at` and `--menu-page match|player`
-for reproducible runs (syntax in `src/bin/gunz-play.rs`). With `GUNZ_SEQ=SECS` and a `%` in the
-shot path it also saves the last SECS seconds at 20 fps, which is how the GIF above was made.
-`RUST_LOG=gunz::bot=debug` logs bot decisions; `GUNZ_FRAMETIMES=1` logs frame times.
+headlessly. `gunz-play` adds `--script`, `--time`, `--hp`, `--ap`, `--at`, `--die-at`,
+`--npc NAME,..` (spawn quest monsters) and `--menu-page match|player|shop|inventory` for
+reproducible runs (syntax in `src/bin/gunz-play.rs`). With `GUNZ_SEQ=SECS` and a `%` in the shot
+path it also saves the last SECS seconds at 20 fps, which is how the GIF above was made.
+`GUNZ_PROFILE=PATH` uses another profile file. `RUST_LOG=gunz::bot=debug` logs bot decisions;
+`GUNZ_FRAMETIMES=1` logs frame times.
 
 </details>
 

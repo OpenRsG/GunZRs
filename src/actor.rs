@@ -23,7 +23,7 @@ use crate::{
     anim::{Animator, Loop},
     character::{self, Character, Outfit},
     col::MapCollision,
-    combat::SWITCH_DELAY,
+    combat::{SWITCH_DELAY, Vfx},
     elu,
     game::*,
     item::{Items, WeaponKind},
@@ -57,10 +57,10 @@ pub const WALL_OUT: f32 = 4.5;
 pub const WALL_UP: f32 = 6.5;
 /// Seconds a wall run lasts (along a side wall / up a wall) before the actor starts falling:
 /// the lengths of `runLW`/`runRW` (60 frames) and `runW` (18 frames).
-const WALL_RUN_SIDE: f32 = 2.0;
+pub const WALL_RUN_SIDE: f32 = 2.0;
 pub const WALL_RUN_UP: f32 = 0.6;
 /// Fraction of gravity felt while running along a wall / sliding down it after a run.
-const RUN_GRAVITY: f32 = 0.12;
+pub const RUN_GRAVITY: f32 = 0.12;
 pub const SLIDE_GRAVITY: f32 = 0.45;
 /// Vertical push (m/s) from which a `Push` launches the actor (uppercut, rocket and grenade
 /// blasts push with `y >= 6` near the centre). **Inferred.**
@@ -70,14 +70,27 @@ const LIE: f32 = 0.35;
 /// Air control of a launched actor (fraction of `RUN`) while it falls (`blast_airmove`).
 /// **Inferred.**
 const BLAST_STEER: f32 = 0.5;
-/// A taunt can be cancelled by a jump or dash after this many seconds. **Inferred.**
+/// An emote or taunt can be cancelled by a jump, dash or step after this many seconds.
+/// **Inferred.**
 const TAUNT_CANCEL: f32 = 0.5;
+/// Emotes: clip name (**observed**, `man01.xml`/`woman01.xml`: every motion type has `bow wave
+/// cry laugh dance`; `taunt` is the `T` key) and its keyboard key (**inferred**). Looping
+/// clips play one cycle.
+pub const EMOTES: [(&str, KeyCode); 5] = [
+    ("bow", KeyCode::F5),
+    ("wave", KeyCode::F6),
+    ("cry", KeyCode::F7),
+    ("laugh", KeyCode::F8),
+    ("dance", KeyCode::F9),
+];
 /// A trigger click this recent still fires once the shot delay is over. **Inferred.**
 const CLICK_BUFFER: f32 = 0.12;
 /// Seconds in the air beyond which touching ground makes the landing thud. **Inferred.**
 const LAND_AIR: f32 = 0.35;
-/// Fastest run-clip playback (feet slide slightly beyond it with guns). **Inferred.**
-const MAX_RUN_RATE: f32 = 1.5;
+/// Fastest run-clip playback: the full run speed over the slowest stride (`stride`, gun
+/// clips 3.8 m/s: 6.3 / 3.8 = 1.66, **observed** strides), so the feet stay planted at top
+/// speed. (A cap of 1.5 slid 10 % of the time.)
+const MAX_RUN_RATE: f32 = 1.7;
 /// Seconds without wall contact after which a wall run ends.
 const WALL_LOSE: f32 = 0.15;
 /// A wall run needs at least this much air under the feet (a step against a leaning stair
@@ -116,7 +129,9 @@ impl Plugin for ActorPlugin {
             .add_systems(
                 Update,
                 (
+                    equip.in_set(ActorSet::Input),
                     player_input.in_set(ActorSet::Input),
+                    status.in_set(ActorSet::Input).after(player_input),
                     drive.in_set(ActorSet::Drive),
                     follow_camera.in_set(ActorSet::Camera),
                 ),
@@ -227,6 +242,16 @@ impl ActorData {
         })
     }
 
+    /// A new map was loaded (quest sectors): take its spawn points and fall limit.
+    pub fn rebase(&mut self, level: &Level) {
+        self.spawns = level.spawn_points();
+        self.fall_limit = self
+            .spawns
+            .iter()
+            .map(|s| s.0.y - 40.0)
+            .fold(f32::MAX, f32::min);
+    }
+
     fn character(&self, woman: bool) -> &Character {
         if woman { &self.women } else { &self.men }
     }
@@ -296,6 +321,9 @@ enum State {
         stage: Blasted,
         /// Seconds in this stage.
         t: f32,
+        /// Thrown by a dagger blow: the `blast_dagger` / `blast_drop_dagger` clips play
+        /// instead of `blast` / `blast_drop` (**inferred** use of the dagger variants).
+        dagger: bool,
     },
     Dead,
 }
@@ -307,6 +335,10 @@ pub struct Actor {
     model: Entity,
     /// Weapon model roots per loadout slot (two for dual weapons).
     weapons: Vec<Vec<Entity>>,
+    /// Every weapon item the actor spawned with, parallel to `weapons`; [`Equip`] picks from it.
+    kit: Vec<u32>,
+    /// Loadout slot -> index into `kit`/`weapons` (identity until an [`Equip`]).
+    carry: Vec<usize>,
     /// Slot whose weapon models are visible.
     shown: usize,
     vel: Vec3,
@@ -331,7 +363,7 @@ pub struct Actor {
     prev_attack: bool,
     /// Time of the last trigger click (a click during the shot delay still fires).
     clicked: f32,
-    prev_taunt: bool,
+    prev_emote: Option<&'static str>,
     /// Last wall touched in the air: outward normal and time.
     wall: Option<(Vec3, f32)>,
     /// Per loadout slot: next time its weapon may fire / the empty-magazine click may sound.
@@ -376,6 +408,7 @@ pub struct ActorSpawner<'w, 's> {
     bindposes: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
     images: ResMut<'w, Assets<Image>>,
     standard: ResMut<'w, Assets<StandardMaterial>>,
+    arsenal: Option<Res<'w, Arsenal>>,
 }
 
 impl ActorSpawner<'_, '_> {
@@ -402,11 +435,12 @@ impl ActorSpawner<'_, '_> {
         )
         .unwrap_or_else(|e| panic!("character {}: {e}", ch.name));
 
-        let ids = if spec.loadout.is_empty() {
-            DEFAULT_LOADOUT.to_vec()
-        } else {
-            spec.loadout
+        let ids = match (&self.arsenal, spec.loadout.is_empty()) {
+            (Some(a), _) => a.0.clone(),
+            (None, true) => DEFAULT_LOADOUT.to_vec(),
+            (None, false) => spec.loadout,
         };
+        let kit = ids.clone();
         let (mut slots, mut weapons) = (Vec::new(), Vec::new());
         for (i, id) in ids.into_iter().enumerate() {
             let item = self
@@ -476,6 +510,8 @@ impl ActorSpawner<'_, '_> {
                     woman: spec.woman,
                     model: body.root,
                     weapons,
+                    carry: (0..kit.len()).collect(),
+                    kit,
                     shown: 0,
                     vel: Vec3::ZERO,
                     grounded: false,
@@ -492,7 +528,7 @@ impl ActorSpawner<'_, '_> {
                     prev_jump: false,
                     prev_attack: false,
                     clicked: f32::MIN,
-                    prev_taunt: false,
+                    prev_emote: None,
                     wall: None,
                     ready,
                     dry: 0.0,
@@ -545,12 +581,16 @@ struct Gear {
     reload: f32,
     magazine: u32,
     reserve: u32,
+    /// `limitspeed` / 100 (1.0 without it): run speed factor while this weapon is in hand.
+    speed: f32,
+    /// No `limitwall`: wall runs and wall kicks allowed.
+    wall: bool,
 }
 
 fn is_melee(kind: WeaponKind) -> bool {
     matches!(
         kind,
-        WeaponKind::Katana | WeaponKind::Dagger | WeaponKind::DoubleKatana
+        WeaponKind::Katana | WeaponKind::Dagger | WeaponKind::DoubleKatana | WeaponKind::SpyCase
     )
 }
 
@@ -582,6 +622,41 @@ fn gear(items: &Items, id: u32) -> Gear {
             .max_bullet
             .unwrap_or(w.magazine * 4)
             .saturating_sub(w.magazine),
+        speed: w.limit_speed.map_or(1.0, |p| p as f32 / 100.0),
+        wall: !w.limit_wall,
+    }
+}
+
+/// Applies [`Equip`]: re-picks the actor's loadout from the weapons it spawned with.
+fn equip(
+    data: Res<ActorData>,
+    mut requests: MessageReader<Equip>,
+    mut actors: Query<(&mut Actor, &mut Loadout)>,
+) {
+    for r in requests.read() {
+        let Ok((mut a, mut load)) = actors.get_mut(r.actor) else {
+            continue;
+        };
+        let (mut carry, mut slots) = (Vec::new(), Vec::new());
+        for &(id, count) in &r.items {
+            let Some(k) = a.kit.iter().position(|k| *k == id) else {
+                continue;
+            };
+            let mut s = fresh_slot(&data.items, id);
+            if let Some(n) = count {
+                s.magazine = n.min(s.magazine);
+                s.reserve = n - s.magazine;
+            }
+            carry.push(k);
+            slots.push(s);
+        }
+        if carry.is_empty() {
+            continue;
+        }
+        load.slots = slots;
+        load.current = r.current.min(carry.len() - 1);
+        a.carry = carry;
+        a.shown = usize::MAX;
     }
 }
 
@@ -682,13 +757,15 @@ struct Held {
     slot: Option<usize>,
     guard: bool,
     taunt: bool,
+    emote: Option<&'static str>,
     /// Scripts hold Tab (scoreboard) by pressing it in `ButtonInput<KeyCode>`.
     tab: bool,
 }
 
 /// Scripted player input for headless runs (`gunz-play --script`): `;`-separated steps
 /// `KEYS:SECONDS` run one after another, or `yaw=DEG` / `pitch=DEG` (instant). `KEYS` is
-/// `+`-joined from `w a s d jump attack guard reload tab 1..9 wait`.
+/// `+`-joined from `w a s d jump attack guard reload taunt bow wave cry laugh dance tab 1..9
+/// wait` (the emote keys are F5-F9 on the keyboard).
 #[derive(Resource)]
 pub struct Script {
     steps: Vec<Step>,
@@ -743,8 +820,9 @@ impl Script {
                         "reload" => step.held.reload = true,
                         "tab" => step.held.tab = true,
                         "wait" => {}
-                        n => match n.parse::<usize>() {
-                            Ok(n @ 1..=9) => step.held.slot = Some(n - 1),
+                        n => match (n.parse::<usize>(), EMOTES.iter().find(|e| e.0 == n)) {
+                            (Ok(n @ 1..=9), _) => step.held.slot = Some(n - 1),
+                            (_, Some(&(clip, _))) => step.held.emote = Some(clip),
                             _ => return Err(format!("unknown key {n:?}")),
                         },
                     }
@@ -849,6 +927,7 @@ fn player_input(
                 reload: keys.pressed(KeyCode::KeyR),
                 slot,
                 taunt: keys.pressed(KeyCode::KeyT),
+                emote: EMOTES.iter().find(|e| keys.pressed(e.1)).map(|e| e.0),
                 tab: false,
             }
         }
@@ -862,6 +941,7 @@ fn player_input(
     intent.attack = held.attack;
     intent.guard = held.guard;
     intent.taunt = held.taunt;
+    intent.emote = held.emote;
     intent.reload = held.reload;
     intent.slot = held.slot;
 }
@@ -945,14 +1025,18 @@ fn blend_for(name: &str) -> f32 {
 }
 
 /// Toe speed of a run clip relative to the body in m/s (**observed**, foot forward
-/// kinematics of `man_*_run*.ani`, see `docs/formats.md`): playing the clip at
-/// `speed / stride` keeps the feet from sliding.
+/// kinematics of `man_*_run*.ani` contact frames, `.local/py/stride.py`, `docs/formats.md`):
+/// playing the clip at `speed / stride` keeps the feet from sliding. Guns and `spycase` 3.8
+/// (stable from 2.5 to 8 cm contact height), medikit 4.6 (low confidence, 3 contact frames),
+/// the melee weapons 5.2-6.0. The woman's clips are not measured separately (**inferred**
+/// equal; her contact frames are too noisy).
 fn stride(motion: u32, back: bool) -> f32 {
     match (back, motion) {
         (true, _) => 4.8,
         (_, 12) => 5.18,
         (_, 7 | 14) => 5.98,
-        (_, 1 | 13 | 15) => 5.64,
+        (_, 1 | 13) => 5.64,
+        (_, 8) => 4.6,
         _ => 3.8,
     }
 }
@@ -995,6 +1079,104 @@ fn begin_reload(
     });
 }
 
+/// Merges [`Afflict`]s into [`Status`], ticks it (paying its damage over time) and keeps the
+/// [`Intent`] of a rooted actor from walking or jumping and that of a stunned one from doing
+/// anything but turning; `drive` slows the run and plays the `stun` clip. The status goes with
+/// the actor's death.
+fn status(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut hits: MessageReader<Afflict>,
+    mut damage: MessageWriter<Damage>,
+    mut vfx: MessageWriter<Vfx>,
+    mut rounds: MessageReader<NewRound>,
+    mut actors: Query<(
+        Entity,
+        &GlobalTransform,
+        &Motor,
+        &mut Intent,
+        Option<&mut Status>,
+        Option<&Name>,
+        Has<Dead>,
+    )>,
+) {
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
+    let mut fresh: HashMap<Entity, Status> = HashMap::new();
+    // A new round wipes every effect (spy rounds respawn everybody).
+    let reset = rounds.read().count() > 0;
+    for a in hits.read() {
+        let Ok((_, g, _, _, st, name, dead)) = actors.get_mut(a.target) else {
+            continue;
+        };
+        if dead {
+            continue;
+        }
+        match st {
+            Some(mut s) => s.add(a),
+            None => fresh.entry(a.target).or_default().add(a),
+        }
+        info!(
+            "t={now:.2} status: {} <- slow x{:.2}, stun {}, root {}, dot {:.0} for {:.1} s",
+            name.map_or("?", |n| n.as_str()),
+            a.slow,
+            a.stun,
+            a.root,
+            a.dot,
+            a.secs
+        );
+        // The retail `ef_stun` (stars) and `ef_slow_dam` (zskill 351, 151) where the hit landed.
+        for (on, name) in [
+            (a.stun, "ef_stun"),
+            (a.slow < 1.0 && !a.stun, "ef_slow_dam"),
+        ] {
+            if on {
+                vfx.write(Vfx::Named {
+                    name: name.into(),
+                    at: Transform::from_translation(g.translation() + Vec3::Y * 1.0),
+                });
+            }
+        }
+    }
+    for (e, s) in fresh {
+        commands.entity(e).insert(s);
+    }
+    for (e, g, motor, mut intent, st, name, dead) in &mut actors {
+        let Some(mut s) = st else { continue };
+        let due = s.tick(dt);
+        if s.slow_left > 0.0 && (now * 2.0).floor() != ((now - dt) * 2.0).floor() {
+            debug!(
+                "t={now:.2} status: {} slowed x{:.2}, ground speed {:.2} m/s",
+                name.map_or("?", |n| n.as_str()),
+                s.speed(),
+                Vec2::new(motor.vel.x, motor.vel.z).length()
+            );
+        }
+        if due > 0.0 {
+            damage.write(Damage {
+                target: e,
+                attacker: s.dot_by.unwrap_or(e),
+                amount: due,
+                item: 0,
+                point: g.translation() + Vec3::Y,
+                dir: Vec3::Y,
+                pierce: None,
+            });
+        }
+        if dead || reset || s.over() {
+            commands.entity(e).remove::<Status>();
+        }
+        if s.rooted() {
+            intent.walk = Vec2::ZERO;
+            intent.jump = false;
+        }
+        if s.stunned() {
+            (intent.attack, intent.reload, intent.guard, intent.taunt) =
+                (false, false, false, false);
+            (intent.slot, intent.emote) = (None, None);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn drive(
     mut commands: Commands,
@@ -1012,6 +1194,8 @@ fn drive(
         Option<&SpawnAt>,
         Has<Dead>,
         Has<Player>,
+        Option<&Status>,
+        Option<&Mods>,
     )>,
     mut dead: Query<&mut Dead>,
     pushes: Query<&Push>,
@@ -1049,6 +1233,8 @@ fn drive(
         spawn_at,
         is_dead,
         is_player,
+        status,
+        mods,
     ) in &mut actors
     {
         let a = &mut *a;
@@ -1105,9 +1291,12 @@ fn drive(
             if cancelled {
                 a.state = State::Free;
             }
+            let to_gear = gear(&data.items, load.slots[to].item);
             info!(
-                "t={now:.2} switch: {} slot {from} -> {to}{}",
+                "t={now:.2} switch: {} slot {from} -> {to} (run x{:.2}, wall moves {}){}",
                 item_name(&data.items, load.slots[to].item),
+                to_gear.speed,
+                if to_gear.wall { "on" } else { "off" },
                 match load.slots.get(from) {
                     Some(s) if cancelled => format!(
                         " (reload cancelled, mag {}/{})",
@@ -1120,7 +1309,7 @@ fn drive(
             for (i, roots) in a.weapons.iter().enumerate() {
                 for &r in roots {
                     if let Ok(mut v) = visibility.get_mut(r) {
-                        *v = if i == to {
+                        *v = if i == a.carry[to] {
                             Visibility::Inherited
                         } else {
                             Visibility::Hidden
@@ -1151,8 +1340,13 @@ fn drive(
         let walk = if alive { intent.walk } else { Vec2::ZERO };
         let jump_edge = intent.jump && !a.prev_jump;
         a.prev_jump = intent.jump;
-        let taunt_edge = alive && intent.taunt && !a.prev_taunt;
-        a.prev_taunt = intent.taunt;
+        let emote = if intent.taunt {
+            Some("taunt")
+        } else {
+            intent.emote
+        };
+        let emote_edge = emote.filter(|_| alive && emote != a.prev_emote);
+        a.prev_emote = emote;
         if intent.attack && !a.prev_attack {
             a.clicked = now;
         }
@@ -1178,6 +1372,28 @@ fn drive(
                 cancel_from: r.cancel_from,
             };
             a.restart = true;
+        }
+
+        // Stunned: the looping `stun` clip plays exactly as long as the status.
+        let stunned = status.is_some_and(Status::stunned);
+        let stun_clip = matches!(a.state, State::Action { clip: "stun", .. });
+        if alive
+            && stunned
+            && !stun_clip
+            && !matches!(a.state, State::Blast { .. })
+            && data.clip(woman, g.motion, "stun").is_some()
+        {
+            a.state = State::Action {
+                clip: "stun",
+                t: 0.0,
+                total: f32::INFINITY,
+                speed: 1.0,
+                moving: ActionMove::Locked,
+                cancel_from: f32::INFINITY,
+            };
+            a.restart = true;
+        } else if !stunned && stun_clip {
+            a.state = State::Free;
         }
 
         // Hit reaction: a bullet flinches the upper body (blade hits are melee.rs's).
@@ -1209,9 +1425,19 @@ fn drive(
                     a.state = State::Free;
                 }
             }
-            State::Action { t, total, .. } => {
+            State::Action {
+                clip,
+                t,
+                total,
+                cancel_from,
+                ..
+            } => {
                 *t += dt;
-                if *t >= *total {
+                // an emote ends when the actor walks off (after `cancel_from`)
+                let walked_off = *t >= *cancel_from
+                    && walk.length() > 0.5
+                    && (*clip == "taunt" || EMOTES.iter().any(|e| e.0 == *clip));
+                if *t >= *total || walked_off {
                     a.state = State::Free;
                 }
             }
@@ -1230,16 +1456,19 @@ fn drive(
                     a.state = State::Free;
                 }
             }
-            State::Blast { stage, t } => {
+            State::Blast { stage, t, dagger } => {
                 *t += dt;
                 let secs = |n: &str| data.clip(woman, g.motion, n).map_or(0.5, |c| c.secs);
+                let (rise, drop) = if *dagger {
+                    ("blast_dagger", "blast_drop_dagger")
+                } else {
+                    ("blast", "blast_drop")
+                };
                 let next = match *stage {
                     Blasted::Rise if a.grounded && *t > 0.1 => Some(Some(Blasted::Drop)),
-                    Blasted::Rise if !a.grounded && *t >= secs("blast") => {
-                        Some(Some(Blasted::Fall))
-                    }
+                    Blasted::Rise if !a.grounded && *t >= secs(rise) => Some(Some(Blasted::Fall)),
                     Blasted::Fall if a.grounded => Some(Some(Blasted::Drop)),
-                    Blasted::Drop if *t >= secs("blast_drop") + LIE => Some(Some(Blasted::Stand)),
+                    Blasted::Drop if *t >= secs(drop) + LIE => Some(Some(Blasted::Stand)),
                     Blasted::Stand if *t >= secs("blast_stand") => Some(None),
                     _ => None,
                 };
@@ -1311,6 +1540,7 @@ fn drive(
             && (cancelable || matches!(a.state, State::WallRun { .. }))
             && !a.grounded
             && let Some((n, t)) = a.wall
+            && g.wall
             && now - t < WALL_GRACE
         {
             let facing = fwd.dot(n);
@@ -1339,6 +1569,7 @@ fn drive(
             && matches!(a.state, State::Free)
             && !a.grounded
             && !a.wall_spent
+            && g.wall
             && walk.y > 0.5
             && !jump_edge
             && let Some((n, t)) = a.wall
@@ -1381,14 +1612,14 @@ fn drive(
             });
         }
 
-        // Taunt: the weapon's `taunt` clip, standing.
-        if taunt_edge
+        // Taunt and emotes: the weapon's clip of that name, standing.
+        if let Some(clip) = emote_edge
             && a.grounded
             && matches!(a.state, State::Free)
-            && let Some(c) = data.clip(woman, g.motion, "taunt")
+            && let Some(c) = data.clip(woman, g.motion, clip)
         {
             a.state = State::Action {
-                clip: "taunt",
+                clip,
                 t: 0.0,
                 total: c.secs,
                 speed: 1.0,
@@ -1417,7 +1648,7 @@ fn drive(
                 let s = &mut load.slots[slot];
                 if s.magazine > 0 {
                     s.magazine -= 1;
-                    a.ready[slot] = now + g.delay;
+                    a.ready[slot] = now + g.delay * mods.map_or(1.0, |m| m.shot_delay);
                     a.shot = true;
                     fire.write(Fire {
                         shooter: e,
@@ -1461,7 +1692,11 @@ fn drive(
             } => c,
             _ => 0.0,
         };
-        let speed = RUN * if walk.y < 0.0 { BACK } else { 1.0 } * control;
+        let speed = RUN
+            * g.speed
+            * if walk.y < 0.0 { BACK } else { 1.0 }
+            * control
+            * status.map_or(1.0, Status::speed);
         let wish = (right * walk.x + fwd * walk.y) * speed;
         let mut hv = Vec3::new(a.vel.x, 0.0, a.vel.z);
         match a.state {
@@ -1505,6 +1740,14 @@ fn drive(
                 a.state = State::Blast {
                     stage: Blasted::Rise,
                     t: 0.0,
+                    dagger: hits.iter().any(|&(who, by)| {
+                        who == e
+                            && data.items.get(by).is_some_and(|i| {
+                                i.weapon
+                                    .as_ref()
+                                    .is_some_and(|w| w.kind == WeaponKind::Dagger)
+                            })
+                    }),
                 };
             }
             commands.entity(e).remove::<Push>();
@@ -1603,10 +1846,12 @@ fn drive(
             State::Dead => a.die,
             State::Tumble { anim, .. } | State::Wall { anim, .. } => anim,
             State::Action { clip, .. } => clip,
-            State::Blast { stage, .. } => match stage {
+            State::Blast { stage, dagger, .. } => match stage {
+                Blasted::Rise if dagger => "blast_dagger",
                 Blasted::Rise => "blast",
                 Blasted::Fall if walk != Vec2::ZERO => "blast_airmove",
                 Blasted::Fall => "blast_fall",
+                Blasted::Drop if dagger => "blast_drop_dagger",
                 Blasted::Drop => "blast_drop",
                 Blasted::Stand => "blast_stand",
             },
@@ -1663,6 +1908,16 @@ fn drive(
                             });
                         }
                         an.play(c.ani.clone(), c.looping, blend_for(name));
+                        if !matches!(a.state, State::Free | State::Reload { .. }) {
+                            if is_player {
+                                info!(
+                                    "t={now:.2} clip {name} (motion {}) {:.2}s",
+                                    g.motion, c.secs
+                                );
+                            } else {
+                                debug!("t={now:.2} {e} clip {name} (motion {})", g.motion);
+                            }
+                        }
                     }
                     None => warn!(
                         "character has no animation {name} for motion type {}",
@@ -1777,5 +2032,19 @@ mod tests {
         assert!((look.0 - 90f32.to_radians()).abs() < 1e-6);
         assert!(!s.held(1.6, &mut look).jump);
         assert!(Script::parse("q:1").is_err());
+    }
+
+    #[test]
+    fn feet_stay_planted_at_full_speed() {
+        // every weapon's run clip can play fast enough for RUN without sliding
+        for motion in 1..=15 {
+            assert!(
+                RUN / stride(motion, false) <= MAX_RUN_RATE,
+                "motion {motion}"
+            );
+        }
+        let s = Script::parse("wave:1;taunt+dance:1").unwrap();
+        assert_eq!(s.steps[0].held.emote, Some("wave"));
+        assert_eq!(s.steps[1].held.emote, Some("dance"));
     }
 }

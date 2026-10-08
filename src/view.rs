@@ -103,13 +103,22 @@ fn take_shot(
     mut exit: MessageWriter<AppExit>,
 ) {
     shot.frame += 1;
-    if shot.frame == shot.capture {
-        let RenderTarget::Image(target) = *camera else {
-            return;
-        };
+    let RenderTarget::Image(target) = *camera else {
+        return;
+    };
+    // `GUNZ_SEQ=SECS` with a `%` in the path: also save every 3rd frame (20 fps) of the SECS
+    // before the capture frame, `%` replaced by the frame number (for demo GIFs).
+    let span = std::env::var("GUNZ_SEQ")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|_| shot.path.contains('%'))
+        .map_or(0, |s| (s * 60.0) as u32);
+    let lead = shot.capture.saturating_sub(shot.frame);
+    if shot.frame <= shot.capture && lead <= span && lead % 3 == 0 {
+        let path = shot.path.replace('%', &format!("{:05}", shot.frame));
         commands
             .spawn(Screenshot::image(target.handle.clone()))
-            .observe(save_to_disk(shot.path.clone()));
+            .observe(save_to_disk(path));
     } else if shot.frame == shot.capture + 60 {
         exit.write(AppExit::Success);
     }

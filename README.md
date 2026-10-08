@@ -1,66 +1,129 @@
-# Gunz2Rust
+<div align="center">
 
-Rust/Bevy port of GunZ: The Duel (Steam), built on the GamePort2Rust
-reverse-engineering framework. Requires a local retail install; no game data is
-shipped or committed.
+# GunZRs
 
-## Port
+A clean-room Rust port of **GunZ: The Duel**, built on [Bevy](https://bevyengine.org).
+It loads the maps, characters, weapons and effects straight from your Steam install.
 
-Install the game from Steam first: [GunZ: The Duel](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
-(`steam://install/3139440` opens the Steam client directly). The port reads the installed
-`.mrs` archives and never runs `Gunz.exe`. Set `GAME` to your install folder; the default
-Steam library is `~/.steam/steam/steamapps/common/GUNZ THE DUEL` (native Steam),
-the path below (Flatpak Steam), or `C:\Program Files (x86)\Steam\steamapps\common\GUNZ THE DUEL`
-on Windows (Steam: right-click the game, Manage, Browse local files).
+[![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)](https://www.rust-lang.org)
+[![Bevy](https://img.shields.io/badge/Bevy-0.19-232326)](https://bevyengine.org)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Get the game on Steam](https://img.shields.io/badge/Steam-GunZ%3A%20The%20Duel-1b2838?logo=steam)](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
+
+<img src="docs/media/demo.gif" alt="Third-person fight against three bots in Mansion" width="720">
+
+<sub>Mansion against three bots, recorded headlessly with <code>--shot</code> and <code>GUNZ_SEQ</code>.</sub>
+
+</div>
+
+No game data lives in this repository. You need your own copy of the game; the port only reads
+its `.mrs` archives and never runs `Gunz.exe`.
+
+## Quick start
+
+1. Install [GunZ: The Duel on Steam](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
+   (or paste `steam://install/3139440` into your browser to open the Steam client).
+2. Install [Rust](https://rustup.rs). On Linux, Bevy also needs the ALSA and udev development
+   packages (`libasound2-dev libudev-dev` on Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora).
+3. Point `GAME` at the install folder and play:
 
 ```sh
-GAME="$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/GUNZ THE DUEL"
-cargo run --release --bin gunz-play -- "$GAME"                    # main menu (map, mode, bots, character, loadout)
-cargo run --release --bin gunz-play -- "$GAME" Mansion --bots 3   # straight into a match
-cargo run --release -- "$GAME" Mansion     # any folder in Maps.mrs, e.g. Castle, "Battle Arena"
-cargo run --release --bin gunz-char -- "$GAME" man          # assembled character, bind pose
-cargo run --release --bin gunz-anim -- "$GAME" man run      # character-XML animation name
-cargo run --release --bin gunz-anim -- "$GAME" man run --type 2 --time 0.2 --upper attackS --pitch 20   # layered upper-body clip + aim pitch
-cargo run --release --bin gunz-weapon -- "$GAME" "Raptor 50 RP" --on man --idle
-cargo run --release --bin gunz-fx -- "$GAME" flame_rifle    # sfx/effect_list.xml name; --list
-cargo run --release --bin mrs -- list "$GAME/system.mrs"
-cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked dump
+git clone https://github.com/OpenRsG/GunZRs && cd GunZRs
+GAME="$HOME/.steam/steam/steamapps/common/GUNZ THE DUEL"
+cargo run --release --bin gunz-play -- "$GAME"
 ```
 
-Main menu (no MAP given): pick a map, a mode (deathmatch, team DM, gladiator and
-team gladiator = melee only, elimination = team rounds, assassinate = rounds with
-a VIP per team, duel = one-on-one with a queue, training = dummy targets) with the
-limits retail offers for it, bot count and skill on MATCH; character, outfit (170 man / 259
-woman sets), loadout and mouse sensitivity with a 3D preview on PLAYER; START
-launches the match. Game controls: mouse aims (cursor grabbed), WASD run, Space
-jump (near a wall in the air: wall kick; jumping along a wall with W held: wall run), double-tap a direction to tumble, left
-mouse attack, right mouse guard (melee), R reload, 1-5 / wheel switch weapon, Tab scoreboard, Esc pause
-menu (resume, mouse sensitivity, return to menu, quit); dead in a round mode, Space or
-click cycles the spectated player. A match ends at the time
-or kill/round limit (default per mode, e.g. 10 min / 30 kills) with VICTORY / DEFEAT / DRAW, the
-scoreboard, and play again / main menu / quit. Options: `--char man|woman`,
-`--outfit N`, `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
+| Steam install | `GAME` folder |
+|---|---|
+| Linux (native) | `~/.steam/steam/steamapps/common/GUNZ THE DUEL` |
+| Linux (Flatpak) | `~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/GUNZ THE DUEL` |
+| Windows | `C:\Program Files (x86)\Steam\steamapps\common\GUNZ THE DUEL` |
+
+Other library folder? In Steam, right-click the game, then Manage, Browse local files.
+The port is developed and tested on Linux; Windows and macOS builds have not been tried yet.
+
+## Controls
+
+| Key | Action |
+|---|---|
+| Mouse | Aim (cursor is grabbed) |
+| W A S D | Run; double-tap a direction to tumble |
+| Space | Jump; near a wall in the air: wall kick; along a wall with W held: wall run |
+| Left mouse | Attack (hold for automatic guns, chain slashes into a combo) |
+| Right mouse | Guard (melee) |
+| R | Reload |
+| 1-5, wheel | Switch weapon |
+| Tab | Scoreboard |
+| Esc | Pause menu (resume, sensitivity, main menu, quit) |
+
+Dead in a round mode? Space or click cycles the player you spectate.
+
+## Status
+
+### Working
+
+| Area | What you get |
+|---|---|
+| Maps | All 30 RS v7 maps plus quest maps, with lightmaps, skies and every prop (fires, light shafts, water, fans, waving flags and curtains) |
+| Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
+| Characters | Man and woman models, 170 / 259 outfit sets, skinned animation with cross-fades, upper-body layer and aim pitch |
+| Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls |
+| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
+| Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching |
+| Throwables and items | Frag, flashbang, smoke grenades, medikits; health, armour and ammo pickups placed from the maps' item spawn points |
+| Combat | HP / AP damage, hit reactions, knockback and blast states, death camera |
+| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, training |
+| Bots | Path-finding over the map (stairs, jumps, drops, climbs), weapon choice by range, guarding, dash-slashes, pickups, retreating, skill level |
+| Menus and HUD | Main menu with 3D character preview, loadout, scoreboard, kill feed, damage indicators, decals, end-of-match screen |
+| Sound | Weapon sounds, surface footsteps, voices, map ambience |
+
+### Not done yet
+
+| Area | State |
+|---|---|
+| Online multiplayer | Not started; every match is local against bots |
+| Music | Background music is not mapped to maps in the data files yet |
+| Quests | Quest maps load, but there are no NPCs or quest logic |
+| Shop, inventory, accounts, clans | Not started; the loadout is picked in the menu |
+| A few animations | `guard_block1_ret`, `blast_dagger`, `blast_drop_dagger` and emotes are unused |
+| Bots | They do not throw grenades or butterfly; on Mansion they reach only part of the upper floors |
+| Exact feel | Movement speeds, damage piercing and some timings are inferred from the data, not measured against the original game (listed in `docs/formats.md`) |
+
+## More tools
+
+```sh
+cargo run --release --bin gunz-play -- "$GAME" Mansion --bots 3   # straight into a match
+cargo run --release -- "$GAME" Castle                             # fly through any map
+cargo run --release --bin gunz-char -- "$GAME" man                # assembled character, bind pose
+cargo run --release --bin gunz-anim -- "$GAME" man run            # one animation
+cargo run --release --bin gunz-weapon -- "$GAME" "Raptor 50 RP" --on man --idle
+cargo run --release --bin gunz-fx -- "$GAME" flame_rifle          # one effect; --list
+cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked dump of every archive
+```
+
+<details>
+<summary>All <code>gunz-play</code> options</summary>
+
+`--char man|woman`, `--outfit N`, `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
 `--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training`,
 `--time-limit S`, `--kill-limit N` (0 = none), `--respawn S`, `--protect S`,
-`--round-time S`, `--ready S`; headless menu
-shots: `--shot OUT.png --menu-page match|player`.
-Bots route over a floor graph built from the map collision (stairs, jumps, drops, wall
-climbs), switch weapon by range, guard and dash-slash with blades, fetch health/armour/ammo
-pickups, retreat when hurt and respect `--skill`; team mode makes
-them fight the other team (`RUST_LOG=gunz::bot=debug` logs their state).
+`--round-time S`, `--ready S`. A match ends at the time or kill/round limit (default per mode,
+e.g. 10 min / 30 kills) with victory, defeat or draw.
 
-Viewer controls: WASD, Space/C up/down, Shift fast, hold right mouse to look,
-Esc quits. Every viewer accepts `--shot OUT.png` to render one 1280x720 frame
-headlessly (no window); `gunz-play` also takes `--script` and `--time` for
-reproducible runs (syntax in `src/bin/gunz-play.rs`). Working today: MRS
-archives, all 30 RS v7 maps (plus the quest and challenge-quest maps, `gunz MAP`
-takes any directory name) with lightmaps, skies and every `OBJECTLIST` prop
-(fires, light shafts, water, fans, waving flags and curtains), map
-collision (`.RS.col`), every retail `.elu`/`.elu.ani`, skinned characters,
-weapons, sfx effects, a third-person deathmatch against bots with HUD and
-sound. Movement constants and the cloth motion are inferred (not in the data).
-Not yet: rockets/grenades/medikits, wall running, network.
-Format notes: `docs/formats.md`.
+Testing without a window: every viewer accepts `--shot OUT.png` to render one 1280x720 frame
+headlessly. `gunz-play` adds `--script`, `--time`, `--hp`, `--at` and `--menu-page match|player`
+for reproducible runs (syntax in `src/bin/gunz-play.rs`). With `GUNZ_SEQ=SECS` and a `%` in the
+shot path it also saves the last SECS seconds at 20 fps, which is how the GIF above was made.
+`RUST_LOG=gunz::bot=debug` logs bot decisions; `GUNZ_FRAMETIMES=1` logs frame times.
+
+</details>
+
+## How it works
+
+GunZ's `.mrs` archives are ZIP files with XOR-scrambled headers; maps, models and animations
+are the original binary formats. `Gunz.exe` is Themida-packed, so every format here was recovered
+from the data files themselves. The notes are in [`docs/formats.md`](docs/formats.md), and
+`CREDITS.md` lists outside sources.
 
 # Reverse-engineering framework
 

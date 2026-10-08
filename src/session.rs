@@ -8,7 +8,7 @@
 use crate::{
     game::{Frozen, Player, Score, Settings, Team, Vitals},
     menu::{Art, Mode, button, heading, hover, panel},
-    modes::{ModesPlugin, Phase, Round},
+    modes::{Berserker, ModesPlugin, Phase, Round},
     view::Shot,
 };
 use bevy::{
@@ -41,7 +41,8 @@ pub struct Rules {
     pub mode: Mode,
     /// Match time limit in seconds.
     pub time_limit: Option<u32>,
-    /// Kills to win; in the round modes rounds (duel: duels) won to end the match.
+    /// Kills to win; in the round modes rounds (duel: duels, Spy: rounds the player's side
+    /// won or lost) to end the match.
     pub kill_limit: Option<u32>,
     /// Seconds a dead actor waits to respawn (deathmatch modes).
     pub respawn: f32,
@@ -54,11 +55,11 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// The retail limits of `mode`; the duel's time limit is per round (`LIMITTIME` 1-5
-    /// minutes, *inferred*), not for the match.
+    /// The retail limits of `mode`; the duel's and the tournament's time limit is per round
+    /// (`LIMITTIME` 1-5 minutes, *inferred*), not for the match.
     pub fn new(mode: Mode, time_limit: Option<u32>, kill_limit: Option<u32>) -> Self {
         let (time_limit, round_secs) = match (mode, time_limit) {
-            (Mode::Duel, t) => (None, t.map_or(ROUND_SECS, |s| s as f32)),
+            (m, t) if m.duel() => (None, t.map_or(ROUND_SECS, |s| s as f32)),
             (_, t) => (t, ROUND_SECS),
         };
         Self {
@@ -80,6 +81,8 @@ pub struct Clock {
     pub over: Option<String>,
     /// The HUD's top line: score, round and time for the current mode.
     pub header: String,
+    /// Extra HUD text of the mode (the quest's sector and NPC count), written by its plugin.
+    pub note: String,
 }
 
 /// Headless runs: open the pause menu when the match clock reaches this many seconds.
@@ -147,7 +150,7 @@ fn teams(
     }
 }
 
-fn freeze(commands: &mut Commands, time: &mut Time<Virtual>, on: bool) {
+pub fn freeze(commands: &mut Commands, time: &mut Time<Virtual>, on: bool) {
     if on {
         commands.insert_resource(Frozen);
         time.pause();
@@ -164,6 +167,9 @@ fn standing(
     round: &Round,
     actors: &Query<(&Score, Has<Player>, Option<&Team>)>,
 ) -> (u32, u32) {
+    if rules.mode == Mode::Spy {
+        return (round.mine[0], round.mine[1]);
+    }
     if rules.mode.rounds() && rules.mode.teams() {
         return (round.wins[0], round.wins[1]);
     }
@@ -194,6 +200,7 @@ fn header(
     clock: &Clock,
     (mine, theirs): (u32, u32),
     names: &Query<&Name>,
+    boss: Option<&str>,
 ) -> String {
     let mmss = |s: u32| format!("{}:{:02}", s / 60, s % 60);
     let left = |limit: f32, used: f32| mmss((limit - used).max(0.0).ceil() as u32);
@@ -218,19 +225,31 @@ fn header(
                 round.n.max(1)
             )
         }
-        Mode::Duel => {
+        Mode::Duel | Mode::DuelTournament => {
             let name = |e| names.get(e).map_or("?", |n| n.as_str());
             match round.duelists() {
+                Some((a, b)) if in_round && rules.mode == Mode::DuelTournament => {
+                    format!("{}   {} vs {}   {round_t}", round.stage(), name(a), name(b))
+                }
                 Some((a, b)) if in_round => {
                     format!("ROUND {}   {} vs {}   {round_t}", round.n, name(a), name(b))
                 }
                 _ => total,
             }
         }
-        Mode::Deathmatch | Mode::Gladiator => match rules.kill_limit {
+        Mode::Spy => format!(
+            "YOU {mine} : {theirs} THEM   ROUND {}   {round_t}",
+            round.n.max(1)
+        ),
+        Mode::Berserker => match rules.kill_limit {
+            Some(k) => format!("BERSERKER {}   {total}   first to {k}", boss.unwrap_or("-")),
+            None => format!("BERSERKER {}   {total}", boss.unwrap_or("-")),
+        },
+        Mode::Deathmatch | Mode::Gladiator | Mode::Gunman => match rules.kill_limit {
             Some(k) => format!("{total}   first to {k}"),
             None => total,
         },
+        Mode::Quest | Mode::Blitzkrieg => format!("{}   {total}", clock.note),
         Mode::Training => total,
     }
 }
@@ -244,15 +263,26 @@ fn clock(
     mut vtime: ResMut<Time<Virtual>>,
     actors: Query<(&Score, Has<Player>, Option<&Team>)>,
     names: Query<&Name>,
+    boss: Query<&Name, With<Berserker>>,
 ) {
     if clock.over.is_some() {
         return;
     }
     clock.elapsed += time.delta_secs();
     let (mine, theirs) = standing(&rules, &round, &actors);
-    let text = header(&rules, &round, &clock, (mine, theirs), &names);
+    let boss = boss
+        .single()
+        .ok()
+        .and_then(|n| n.as_str().split(" [").next());
+    let text = header(&rules, &round, &clock, (mine, theirs), &names, boss);
     if clock.header != text {
         clock.header = text;
+    }
+    // The tournament bracket decides the match by itself, once its last screen has shown.
+    if let (Some(v), Phase::Done) = (round.verdict, round.phase) {
+        clock.over = Some(v.into());
+        freeze(&mut commands, &mut vtime, true);
+        return;
     }
     // A decided round shows its win screen before the match can end on it.
     let settled = !rules.mode.rounds() || round.phase != Phase::Over;

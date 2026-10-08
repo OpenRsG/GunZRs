@@ -7,7 +7,7 @@ publish = false
 default-run = "gunz"
 
 [dependencies]
-bevy = { version = "0.19", features = ["dds", "bmp", "tga", "jpeg", "wav"] }
+bevy = { version = "0.19", features = ["dds", "bmp", "tga", "jpeg", "wav", "mp3"] }
 flate2 = "1"
 roxmltree = "0.21"
 

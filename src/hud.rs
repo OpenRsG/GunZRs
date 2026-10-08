@@ -10,6 +10,7 @@ use crate::{
     level::Level,
     menu::Art,
     mrs::Vfs,
+    profile::{MatchGain, Profile, Ranks},
     session::{Clock, HOLD},
     view::decode,
 };
@@ -35,6 +36,7 @@ impl Plugin for HudPlugin {
                         spawn_ui.run_if(not(any_with_component::<Root>)),
                         track,
                         update,
+                        earned,
                         indicators,
                     )
                         .chain()
@@ -620,6 +622,18 @@ fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<C
                                 ),
                             ],
                         ),
+                        (
+                            Earned,
+                            Text::new(""),
+                            TextFont::from_font_size(20.0),
+                            TextColor(Color::srgb(1.0, 0.85, 0.3)),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: px(24),
+                                bottom: px(16),
+                                ..default()
+                            }
+                        ),
                     ],
                 ),
             ],
@@ -798,6 +812,7 @@ fn decals(
         let roll = rand(&mut dec.seed) * std::f32::consts::TAU;
         let e = commands
             .spawn((
+                crate::game::MapEntity,
                 Mesh3d(dec.quad.clone()),
                 MeshMaterial3d(material),
                 Transform {
@@ -987,4 +1002,36 @@ fn update(
             *g = vignette(0.65 * level * pulse);
         }
     }
+}
+
+/// The scoreboard's last line once the match is over: level, XP and bounty earned (`profile.rs`).
+#[derive(Component)]
+struct Earned;
+
+fn earned(
+    clock: Res<Clock>,
+    gain: Res<MatchGain>,
+    profile: Res<Profile>,
+    ranks: Option<Res<Ranks>>,
+    text: Single<&mut Text, With<Earned>>,
+) {
+    let level = profile.level();
+    let s = match clock.over {
+        None => String::new(),
+        Some(_) => format!(
+            "{}   +{} XP   +{} bounty   (bounty {})",
+            if level > gain.from_level {
+                format!("LEVEL UP {} -> {level}", gain.from_level)
+            } else {
+                format!(
+                    "Level {level} [{}]",
+                    ranks.as_ref().map_or("", |r| r.code(level))
+                )
+            },
+            gain.xp,
+            gain.bounty,
+            profile.bounty
+        ),
+    };
+    set(&mut text.into_inner(), s);
 }

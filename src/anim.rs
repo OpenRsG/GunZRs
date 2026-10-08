@@ -5,6 +5,7 @@
 //! (positions `(x, y, -z)`, matrices `S M^T S`), in centimetres. Scaling to metres is the
 //! model root's job (`view::SCALE`), so animated local translations stay in centimetres.
 
+use crate::mrs::Vfs;
 use crate::{
     ani::{Ani, FPS, Key, Kind, Node, TICKS_PER_FRAME, VertexTrack},
     elu::{Elu, Node as EluNode},
@@ -12,7 +13,7 @@ use crate::{
     view::SCALE,
 };
 use bevy::prelude::*;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, io, sync::Arc};
 
 pub struct AnimPlugin;
 
@@ -101,6 +102,74 @@ pub fn root_delta(ani: &Ani, t0: f32, t1: f32) -> Vec3 {
         .iter()
         .find(|n| n.name == ROOT)
         .map_or(Vec3::ZERO, |n| root_move(n, t0, t1))
+}
+
+/// One `<AddAnimEvent eventtype="sound">` of `system/animationevent.xml`: `sound` (a name under
+/// `sound/`, no extension; `Cue::Anim` takes it as is) starts `secs` into the clip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimEvent {
+    pub secs: f32,
+    pub sound: String,
+}
+
+/// `system/animationevent.xml`: sound events per quest NPC id and clip name. **Observed**: the
+/// file has no entry for the player characters and no event type but `sound`, so melee hit
+/// frames and footsteps cannot come from it. `beginframe` is in 3ds Max ticks (4800/s): all
+/// events of the goblin clips fall inside the clip that way (`neglect2` is 14400 ticks long,
+/// its event sits at 10232), while frames or milliseconds put them far beyond the clip.
+#[derive(Default)]
+pub struct AnimEvents(HashMap<(u32, String), Vec<AnimEvent>>);
+
+impl AnimEvents {
+    pub fn load(vfs: &Vfs) -> io::Result<Self> {
+        let bytes = vfs.read("system/animationevent.xml")?;
+        let text = String::from_utf8(bytes).map_err(bad)?;
+        Self::parse(text.trim_start_matches('\u{feff}'))
+    }
+
+    pub fn parse(text: &str) -> io::Result<Self> {
+        let doc = roxmltree::Document::parse(text).map_err(bad)?;
+        let mut events: HashMap<(u32, String), Vec<AnimEvent>> = HashMap::new();
+        for npc in doc.descendants().filter(|n| n.has_tag_name("NPC")) {
+            let id = npc.attribute("id").and_then(|v| v.parse().ok());
+            let id = id.ok_or_else(|| bad("NPC without a numeric id"))?;
+            for clip in npc.children().filter(|n| n.has_tag_name("Animation")) {
+                let name = clip
+                    .attribute("name")
+                    .ok_or_else(|| bad("Animation without name"))?;
+                for ev in clip.children().filter(|n| n.has_tag_name("AddAnimEvent")) {
+                    let (kind, file, at) = (
+                        ev.attribute("eventtype"),
+                        ev.attribute("filename"),
+                        ev.attribute("beginframe")
+                            .and_then(|v| v.parse::<u32>().ok()),
+                    );
+                    let (Some("sound"), Some(file), Some(at)) = (kind, file, at) else {
+                        return Err(bad(format!("NPC {id} {name}: unsupported event {kind:?}")));
+                    };
+                    events
+                        .entry((id, name.to_owned()))
+                        .or_default()
+                        .push(AnimEvent {
+                            secs: at as f32 / (TICKS_PER_FRAME as f32 * FPS),
+                            sound: file.trim().to_owned(),
+                        });
+                }
+            }
+        }
+        Ok(Self(events))
+    }
+
+    /// Events of clip `clip` of NPC type `npc`, in file order (empty when there are none).
+    pub fn get(&self, npc: u32, clip: &str) -> &[AnimEvent] {
+        self.0
+            .get(&(npc, clip.to_owned()))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+fn bad(e: impl ToString) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
 
 /// An upper-body clip played over the main one.
@@ -859,5 +928,21 @@ mod tests {
         );
         let t = app.world().get::<Transform>(bip).unwrap().translation;
         assert!(t.x == 0.0 && t.z == 0.0 && t.y > 89.0, "locked root {t}");
+    }
+
+    #[test]
+    fn animation_events() {
+        // beginframe is in ticks: 10232 ticks = 2.13 s, `neglect2` of the goblin is 3 s long
+        let ev = AnimEvents::parse(
+            "<XML><NPC id=\"11\"><Animation name=\"neglect2\">\
+             <AddAnimEvent eventtype=\"sound\" filename=\"quest/goblin/GoblinClan_neglect\" \
+             beginframe=\"10232\"> </AddAnimEvent></Animation></NPC></XML>",
+        )
+        .unwrap();
+        let e = &ev.get(11, "neglect2")[0];
+        assert_eq!(e.sound, "quest/goblin/GoblinClan_neglect");
+        assert!((e.secs - 10232.0 / 4800.0).abs() < 1e-6);
+        assert!(ev.get(11, "die").is_empty() && ev.get(12, "neglect2").is_empty());
+        assert!(AnimEvents::parse("<XML><NPC id=\"1\"><Animation name=\"a\"><AddAnimEvent eventtype=\"effect\" filename=\"x\" beginframe=\"0\"/></Animation></NPC></XML>").is_err());
     }
 }

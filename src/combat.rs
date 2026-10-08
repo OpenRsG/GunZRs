@@ -10,13 +10,13 @@ use crate::{
     effect::{self, EffectDef, FxAssets, Loader},
     elu,
     game::{
-        Bot, Damage, Dead, Fire, Impact, Killed, Player, Protected, Push, Score, Team, Vitals,
-        friendly,
+        Afflict, Bot, Damage, Dead, Fire, HitShape, Impact, Killed, Mods, Player, Protected, Push,
+        Score, Team, Vitals, friendly,
     },
-    item::WeaponKind,
+    item::{SPY_ICE, WeaponKind},
     level::Level,
     mrs::Vfs,
-    projectile, view,
+    projectile, spy, view,
 };
 use bevy::{image::ImageSampler, prelude::*};
 use std::{
@@ -94,14 +94,15 @@ impl Plugin for CombatPlugin {
 // ---------------------------------------------------------------------------------------------
 // Pure rules
 
-/// Fraction of a hit that goes to health even while armour remains (*inferred*; the retail data
-/// has no piercing ratio): blades cut through armour, shotgun pellets are mostly stopped by it.
+/// Fraction of a hit that goes to health even while armour remains. **Observed** in
+/// `system/zactoraction.xml` (NPC attacks): every `RANGESHOT` `pierce="50"` (225, rifle and machine
+/// gun shots included), every `MELEESHOT` and `GRENADESHOT` `pierce="0"` (80 and 62). Player blades
+/// take the melee value and rockets the grenade value (*inferred*: same kind of attack); pistols,
+/// SMGs and shotguns take the ranged value (*inferred*: no NPC fires them).
 fn piercing(k: WeaponKind) -> f32 {
     use WeaponKind::*;
     match k {
-        Katana | Dagger | DoubleKatana => 0.7,
-        Shotgun => 0.3,
-        Rifle | MachineGun => 0.6,
+        Katana | Dagger | DoubleKatana | SpyCase | Frag | Mine | Rocket => 0.0,
         _ => 0.5,
     }
 }
@@ -173,10 +174,15 @@ fn track_spread(
     }
 }
 
-/// Distance along the unit ray `o + t d` to the vertical capsule standing on `f`;
-/// `Some(0)` when `o` is inside.
-pub(crate) fn ray_capsule(o: Vec3, d: Vec3, f: Vec3) -> Option<f32> {
-    let (r, lo, hi) = (HIT_RADIUS, f.y + HIT_RADIUS, f.y + HIT_HEIGHT - HIT_RADIUS);
+/// (radius, height) of an actor's hit capsule: its [`HitShape`] (quest monsters) or the human one.
+pub(crate) fn shape(s: Option<&HitShape>) -> (f32, f32) {
+    s.map_or((HIT_RADIUS, HIT_HEIGHT), |s| (s.radius, s.height))
+}
+
+/// Distance along the unit ray `o + t d` to the vertical capsule of `radius` and `height` standing
+/// on `f`; `Some(0)` when `o` is inside.
+pub(crate) fn ray_capsule(o: Vec3, d: Vec3, f: Vec3, (r, height): (f32, f32)) -> Option<f32> {
+    let (lo, hi) = (f.y + r, f.y + height - r);
     let sphere = |c: Vec3| {
         let m = o - c;
         let (b, c) = (m.dot(d), m.length_squared() - r * r);
@@ -227,7 +233,7 @@ pub(crate) fn yaw_of(d: Vec3) -> f32 {
 pub(crate) fn is_melee(k: WeaponKind) -> bool {
     matches!(
         k,
-        WeaponKind::Katana | WeaponKind::Dagger | WeaponKind::DoubleKatana
+        WeaponKind::Katana | WeaponKind::Dagger | WeaponKind::DoubleKatana | WeaponKind::SpyCase
     )
 }
 
@@ -271,6 +277,11 @@ pub(crate) enum Vfx {
         name: &'static str,
         at: Transform,
     },
+    /// Like [`Vfx::Elu`] for a name read from data at run time.
+    Named {
+        name: String,
+        at: Transform,
+    },
     Blood {
         point: Vec3,
         dir: Vec3,
@@ -309,7 +320,7 @@ pub(crate) struct Fx {
     vfs: &'static Vfs,
     loader: Loader<'static>,
     defs: Vec<EffectDef>,
-    cache: HashMap<&'static str, Option<Cached>>,
+    cache: HashMap<String, Option<Cached>>,
     /// zeffect.xml `id` -> knockback.
     knockback: HashMap<u32, f32>,
     quad: Handle<Mesh>,
@@ -400,34 +411,39 @@ impl Fx {
     /// Spawns effect-list effect `name` at `at`; it despawns itself when its animation ends.
     pub(crate) fn spawn(
         &mut self,
-        name: &'static str,
+        name: &str,
         at: Transform,
         assets: &mut FxAssets,
         commands: &mut Commands,
     ) {
         let (vfs, defs) = (self.vfs, &self.defs);
-        let cached = self.cache.entry(name).or_insert_with(|| {
-            let Some(def) = effect::find(defs, name) else {
-                warn!("effect {name} not in effect_list.xml");
-                return None;
-            };
-            let load = || -> std::io::Result<Cached> {
-                let elu = Arc::new(elu::load(&vfs.read(&def.model)?)?);
-                let ani = match &def.animation {
-                    Some((p, looping)) => Some((
-                        Arc::new(ani::load(&vfs.read(p)?)?),
-                        if *looping { Loop::Wrap } else { Loop::Hold },
-                    )),
-                    None => None,
+        if !self.cache.contains_key(name) {
+            let loaded = (|| {
+                let Some(def) = effect::find(defs, name) else {
+                    warn!("effect {name} not in effect_list.xml");
+                    return None;
                 };
-                let life = ani
-                    .as_ref()
-                    .map_or(0.5, |(a, _)| a.max_frame as f32 / 160.0 + 0.1);
-                Ok(Cached { elu, ani, life })
-            };
-            load().map_err(|e| warn!("effect {name}: {e}")).ok()
-        });
-        let Some(c) = cached else { return };
+                let load = || -> std::io::Result<Cached> {
+                    let elu = Arc::new(elu::load(&vfs.read(&def.model)?)?);
+                    let ani = match &def.animation {
+                        Some((p, looping)) => Some((
+                            Arc::new(ani::load(&vfs.read(p)?)?),
+                            if *looping { Loop::Wrap } else { Loop::Hold },
+                        )),
+                        None => None,
+                    };
+                    let life = ani
+                        .as_ref()
+                        .map_or(0.5, |(a, _)| a.max_frame as f32 / 160.0 + 0.1);
+                    Ok(Cached { elu, ani, life })
+                };
+                load().map_err(|e| warn!("effect {name}: {e}")).ok()
+            })();
+            self.cache.insert(name.to_owned(), loaded);
+        }
+        let Some(Some(c)) = self.cache.get(name) else {
+            return;
+        };
         let model = self
             .loader
             .spawn(assets, commands, "sfx/", &c.elu, c.ani.clone(), at);
@@ -488,6 +504,7 @@ fn spawn_elu_fx(
     for v in vfx.read() {
         match *v {
             Vfx::Elu { name, at } => fx.spawn(name, at, &mut assets, &mut commands),
+            Vfx::Named { ref name, at } => fx.spawn(name, at, &mut assets, &mut commands),
             Vfx::Facing {
                 name,
                 at,
@@ -731,6 +748,7 @@ fn update_sprites(
 fn resolve_fire(
     mut fires: MessageReader<Fire>,
     mut damage: MessageWriter<Damage>,
+    mut afflict: MessageWriter<Afflict>,
     mut vfx: MessageWriter<Vfx>,
     mut impacts: MessageWriter<Impact>,
     mut commands: Commands,
@@ -739,7 +757,13 @@ fn resolve_fire(
     col: Res<MapCollision>,
     time: Res<Time>,
     actors: Query<
-        (Entity, &GlobalTransform, Option<&Team>, Has<Bot>),
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&Team>,
+            Has<Bot>,
+            Option<&HitShape>,
+        ),
         (With<Vitals>, Without<Dead>),
     >,
     mut spreads: Query<(&mut Spread, Has<Player>)>,
@@ -762,7 +786,7 @@ fn resolve_fire(
         let mine = actors
             .get(f.shooter)
             .ok()
-            .map(|(_, _, t, b)| (t.copied(), b));
+            .map(|(_, _, t, b, _)| (t.copied(), b));
         let ally = |t: Option<&Team>, b: bool| mine.is_some_and(|m| friendly(m, (t.copied(), b)));
         let shooter_pos = actors
             .get(f.shooter)
@@ -790,8 +814,8 @@ fn resolve_fire(
             let wall = col.raycast(f.origin, d, GUN_RANGE);
             let mut best = wall.as_ref().map_or(GUN_RANGE, |h| h.distance);
             let mut who = None;
-            for (e, g, team, bot) in &actors {
-                if let Some(dist) = ray_capsule(f.origin, d, g.translation())
+            for (e, g, team, bot, hs) in &actors {
+                if let Some(dist) = ray_capsule(f.origin, d, g.translation(), shape(hs))
                     .filter(|t| e != f.shooter && *t < best && !ally(team, bot))
                 {
                     (best, who) = (dist, Some(e));
@@ -866,7 +890,12 @@ fn resolve_fire(
                 item: f.item,
                 point,
                 dir: d,
+                pierce: None,
             });
+            // Frost bullets (spy mode) slow whoever they hit.
+            if f.item == SPY_ICE {
+                afflict.write(spy::frost(target, f.shooter));
+            }
             vfx.write(Vfx::Blood { point, dir: d });
             if push > 0.0 {
                 commands.entity(target).insert(Push(flat * push));
@@ -883,6 +912,8 @@ fn apply_damage(
     protected: Query<(), With<Protected>>,
     names: Query<&Name>,
     sides: Query<(Option<&Team>, Has<Bot>)>,
+    mods: Query<&Mods>,
+    humans: Query<(), Or<(With<Player>, With<Bot>)>>,
     mut killed: MessageWriter<Killed>,
     time: Res<Time>,
     mut commands: Commands,
@@ -896,25 +927,32 @@ fn apply_damage(
         {
             continue;
         }
+        // A mode's multipliers (Blitzkrieg upgrades, building resistances).
+        let amount = d.amount
+            * mods.get(d.attacker).map_or(1.0, |m| m.dealt)
+            * mods
+                .get(d.target)
+                .map_or(1.0, |m| m.against(humans.contains(d.attacker)));
         let Ok(mut v) = vitals.get_mut(d.target) else {
             continue;
         };
         if v.hp <= 0.0 || protected.contains(d.target) {
             continue;
         }
-        let pierce = data
-            .items
-            .get(d.item)
-            .and_then(|i| i.weapon.as_ref())
-            .map_or(0.5, |w| piercing(w.kind));
+        let pierce = d.pierce.unwrap_or_else(|| {
+            data.items
+                .get(d.item)
+                .and_then(|i| i.weapon.as_ref())
+                .map_or(0.5, |w| piercing(w.kind))
+        });
         let (ap, hp) = (v.ap, v.hp);
-        absorb(&mut v, d.amount, pierce);
+        absorb(&mut v, amount, pierce);
         info!(
             "t={:.2} damage: {} -> {} {:.0} (pierce {pierce}; ap {ap:.0} -> {:.0}, hp {hp:.0} -> {:.0})",
             time.elapsed_secs(),
             name(d.attacker),
             name(d.target),
-            d.amount,
+            amount,
             v.ap,
             v.hp.max(0.0)
         );
@@ -955,14 +993,18 @@ mod tests {
     fn capsule_and_armour() {
         let f = Vec3::new(0.0, 1.0, -5.0);
         // Straight at the body: surface at z = -5 + HIT_RADIUS.
-        let t = ray_capsule(Vec3::new(0.0, 2.0, 0.0), Vec3::NEG_Z, f).unwrap();
+        let t = ray_capsule(Vec3::new(0.0, 2.0, 0.0), Vec3::NEG_Z, f, shape(None)).unwrap();
         assert!((t - (5.0 - HIT_RADIUS)).abs() < 1e-4, "{t}");
         // Over the head, beside the body, behind the origin and straight down onto the head.
-        assert!(ray_capsule(Vec3::new(0.0, 3.0, 0.0), Vec3::NEG_Z, f).is_none());
-        assert!(ray_capsule(Vec3::new(1.0, 2.0, 0.0), Vec3::NEG_Z, f).is_none());
-        assert!(ray_capsule(Vec3::new(0.0, 2.0, -9.0), Vec3::NEG_Z, f).is_none());
-        let t = ray_capsule(Vec3::new(0.0, 5.0, -5.0), Vec3::NEG_Y, f).unwrap();
+        let c = |o, d| ray_capsule(o, d, f, shape(None));
+        assert!(c(Vec3::new(0.0, 3.0, 0.0), Vec3::NEG_Z).is_none());
+        assert!(c(Vec3::new(1.0, 2.0, 0.0), Vec3::NEG_Z).is_none());
+        assert!(c(Vec3::new(0.0, 2.0, -9.0), Vec3::NEG_Z).is_none());
+        let t = c(Vec3::new(0.0, 5.0, -5.0), Vec3::NEG_Y).unwrap();
         assert!((t - (5.0 - 1.0 - HIT_HEIGHT)).abs() < 1e-4, "{t}");
+        // A monster-sized capsule (radius 1.25 m) is hit where a human one is missed.
+        assert!(c(Vec3::new(1.0, 2.0, 0.0), Vec3::NEG_Z).is_none());
+        assert!(ray_capsule(Vec3::new(1.0, 2.0, 0.0), Vec3::NEG_Z, f, (1.25, 4.0)).is_some());
         // Armour takes the non-piercing share, the rest (and what armour cannot hold) hurts health.
         let mut v = Vitals {
             hp: 100.0,
@@ -972,6 +1014,8 @@ mod tests {
         };
         absorb(&mut v, 30.0, 0.5);
         assert_eq!((v.ap, v.hp), (5.0, 85.0));
+        assert_eq!(piercing(WeaponKind::Katana), 0.0);
+        assert_eq!(piercing(WeaponKind::Rifle), 0.5);
         absorb(&mut v, 30.0, 0.5);
         assert_eq!((v.ap, v.hp), (0.0, 60.0));
         let s = Spread {

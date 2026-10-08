@@ -3,16 +3,21 @@
 //! zitem `snd_*` (guns), the `sound` attribute of character animations (`man_jump`, `fx_dash`),
 //! `effect.xml` (distances, 2D/3D type) and the map's `AMBIENTSOUNDLIST`. Which retail file is
 //! which cue beyond that is **inferred** from names and lengths; notes: `docs/formats.md`.
+//! Other modules play a named stem with `Cue::Anim(stem)` (at an actor) or `PlaySound` (at a
+//! point); background music is `music.rs`.
 
 use crate::{
     actor::{Actor, ActorData},
-    game::{ActorSound, Blast, Blocked, Cue, Damage, Dead, Fire, Impact, Killed, Loadout, Player},
+    game::{
+        ActorSound, Blast, Blocked, Cue, Damage, Dead, Fire, Impact, Killed, Loadout, PlaySound,
+        Player,
+    },
     item::Item,
     level::Level,
     map::Map,
     mrs::Vfs,
     pickup::{Picked, SOUND as PICKUP_SOUND},
-    view::{to_bevy, Shot, SCALE},
+    view::{SCALE, Shot, to_bevy},
 };
 use bevy::prelude::*;
 use std::collections::{BTreeSet, HashMap};
@@ -43,7 +48,7 @@ impl Plugin for AudioPlugin {
             (
                 load.run_if(resource_exists::<Level>.and_then(resource_exists::<ActorData>))
                     .run_if(not(resource_exists::<Sounds>)),
-                (combat_sounds, actor_sounds, later, ambient, reap)
+                (combat_sounds, actor_sounds, requested, later, ambient, reap)
                     .run_if(resource_exists::<Sounds>),
             ),
         );
@@ -429,6 +434,12 @@ fn load(
             index.insert(stem.to_owned(), p.to_owned());
         }
     }
+    // zitem 300012 has `snd_fire="swing"` and no `swing` file exists; every other melee item
+    // (and `animationevent.xml`'s `melee_attack`) uses `blade_swing`, so it is the same
+    // sound (**inferred**).
+    if let Some(p) = index.get("blade_swing").cloned() {
+        index.insert("swing".to_owned(), p);
+    }
     let reach = vfs
         .read("sound/effect/effect.xml")
         .ok()
@@ -542,10 +553,11 @@ struct Sfx<'w, 's> {
 }
 
 impl Sfx<'_, '_> {
-    /// `name` is a sound stem. `local` sounds (the player's own) are 2D and prefer the `_2d`
-    /// variant; the rest are positioned at `at`.
+    /// `name` is a sound stem, or the `dir/stem` form `animationevent.xml` uses (the directory
+    /// is dropped: stems are unique across `sound/`). `local` sounds (the player's own) are 2D
+    /// and prefer the `_2d` variant; the rest are positioned at `at`.
     fn play(&mut self, name: &str, local: bool, at: Vec3) {
-        let mut stem = name.to_ascii_lowercase();
+        let mut stem = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
         if local && self.sounds.exists(&format!("{stem}_2d")) {
             stem.push_str("_2d");
         }
@@ -597,11 +609,7 @@ fn reap(mut commands: Commands, time: Res<Time>, q: Query<(Entity, &Expires)>) {
 
 /// Voice stem prefix of an actor.
 fn voice(woman: bool) -> &'static str {
-    if woman {
-        "fem"
-    } else {
-        "mal"
-    }
+    if woman { "fem" } else { "mal" }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -771,6 +779,13 @@ fn actor_sounds(
             sfx.play("we_weapon_rdy", true, Vec3::ZERO);
         }
         *current = Some(l.current);
+    }
+}
+
+/// `PlaySound` requests from other modules (NPC/quest sounds, animation events).
+fn requested(mut req: MessageReader<PlaySound>, mut sfx: Sfx) {
+    for r in req.read() {
+        sfx.play(&r.stem, false, r.at);
     }
 }
 

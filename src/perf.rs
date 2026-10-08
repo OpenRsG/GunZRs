@@ -49,6 +49,7 @@ impl Plugin for PerfPlugin {
             at: vec![Instant::now(); last + 1],
             prev_start: None,
             dts: Vec::new(),
+            work: Vec::new(),
             counts: [0; 4],
         })
         .add_systems(Last, summary);
@@ -62,6 +63,8 @@ struct Perf {
     prev_start: Option<Instant>,
     /// Frame periods in ms.
     dts: Vec<f32>,
+    /// Main-thread schedule time per frame in ms (the period minus the wait for the next frame).
+    work: Vec<f32>,
     /// Image, mesh, material, audio asset and entity counts at the previous frame's end.
     counts: [usize; 4],
 }
@@ -81,6 +84,7 @@ impl Perf {
         {
             let dt = ms(prev, now);
             self.dts.push(dt);
+            self.work.push(ms(self.at[0], self.at[self.names.len()]));
             let counts = [
                 count::<Image>(world),
                 count::<Mesh>(world),
@@ -143,4 +147,5 @@ fn summary(mut exit: MessageReader<AppExit>, perf: Res<Perf>) {
     let warm = WARM.min(perf.dts.len());
     stats("load", &perf.dts[..warm]);
     stats("play", &perf.dts[warm..]);
+    stats("play main-thread work", &perf.work[warm..]);
 }

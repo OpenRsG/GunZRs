@@ -147,25 +147,38 @@ fn axis_angle([x, y, z, a]: [f32; 4]) -> [f32; 4] {
 }
 
 fn node(r: &mut Reader, kind: Kind, version: u32) -> io::Result<Node> {
-    let mut n = Node { name: r.name()?, ..Node::default() };
+    let mut n = Node {
+        name: r.name()?,
+        ..Node::default()
+    };
     match kind {
         Kind::Bone => {
             n.base = Some(r.vec()?);
             n.pos = r.keys(16, |r| r.vec())?;
             let quat = version == VER_QUAT;
-            n.rot = r.keys(20, |r| r.vec::<4>().map(|q| if quat { q } else { axis_angle(q) }))?;
+            n.rot = r.keys(20, |r| {
+                r.vec::<4>().map(|q| if quat { q } else { axis_angle(q) })
+            })?;
         }
         Kind::Transform => n.tm = r.keys(68, |r| r.vec())?,
         Kind::Vertex => {
             let frames = r.count(4)?;
             let vertex_count = r.u32()? as usize;
-            let ticks = (0..frames).map(|_| r.u32()).collect::<io::Result<Vec<_>>>()?;
+            let ticks = (0..frames)
+                .map(|_| r.u32())
+                .collect::<io::Result<Vec<_>>>()?;
             let total = frames
                 .checked_mul(vertex_count)
                 .filter(|t| t.saturating_mul(12) <= r.buf.len() - r.pos)
                 .ok_or_else(|| bad("vertex data exceeds file"))?;
-            let positions = (0..total).map(|_| r.vec()).collect::<io::Result<Vec<_>>>()?;
-            n.vertex = Some(VertexTrack { vertex_count, ticks, positions });
+            let positions = (0..total)
+                .map(|_| r.vec())
+                .collect::<io::Result<Vec<_>>>()?;
+            n.vertex = Some(VertexTrack {
+                vertex_count,
+                ticks,
+                positions,
+            });
         }
     }
     if version != VER_OLD {
@@ -194,7 +207,10 @@ pub fn load(bytes: &[u8]) -> io::Result<Ani> {
     let mut nodes = Vec::with_capacity(node_count);
     for i in 0..node_count {
         let start = r.pos;
-        nodes.push(node(&mut r, kind, version).map_err(|e| bad(format!("ani node {i} at {start}: {e}")))?);
+        nodes.push(
+            node(&mut r, kind, version)
+                .map_err(|e| bad(format!("ani node {i} at {start}: {e}")))?,
+        );
     }
     if r.pos != bytes.len() {
         return Err(bad(format!("ani: {} trailing bytes", bytes.len() - r.pos)));

@@ -173,6 +173,7 @@ pub fn spawn_props(mut commands: Commands, level: Res<Level>, mut fx: FxAssets) 
             ani.map(|a| (Arc::new(a), Loop::Wrap)),
             placement,
         );
+        commands.entity(model.root).insert(crate::game::MapEntity);
         let wind = flags.iter().find(|(n, _)| file.ends_with(n.as_str()));
         if let Some((_, &wind)) = wind {
             for (i, n) in elu.nodes.iter().enumerate() {

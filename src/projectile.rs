@@ -1,15 +1,19 @@
 //! Rockets, grenades and consumables: `Fire` of a rocket launcher / grenade / medikit item becomes
 //! a flying projectile (splash damage, knockback, explosion effect) or a heal. Retail data gives
 //! damage, delay, magazine, grenade radius/duration and potion power/duration; speeds, gravity,
-//! fuse, splash falloff and the medikit amounts are *inferred* (docs/formats.md "Combat").
+//! fuse and splash falloff are *inferred* (docs/formats.md "Combat").
 
 use crate::{
     actor::ActorData,
     col::MapCollision,
-    combat::{EYE, Fx, HIT_HEIGHT, HIT_RADIUS, Lifetime, SELF_BLAST, Vfx},
+    combat::{EYE, Fx, Lifetime, SELF_BLAST, Vfx, shape},
     effect::FxAssets,
-    game::{Blast, Damage, Dead, Fire, Player, Protected, Push, Vitals},
+    game::{
+        Afflict, Blast, Bot, Damage, Dead, Fire, HitShape, Player, Protected, Push, Team, Vitals,
+        friendly,
+    },
     item::WeaponKind,
+    spy::{self, Mine},
 };
 use bevy::prelude::*;
 use std::f32::consts::FRAC_PI_2;
@@ -24,23 +28,22 @@ const ROCKET_LIFE: f32 = 8.0;
 const TRAIL_EVERY: f32 = 0.04;
 /// Grenade throw speed (m/s), upward bias of the throw direction, gravity (m/s²), bounce factor
 /// along the surface normal and friction along the surface.
-const THROW_SPEED: f32 = 10.0;
-const THROW_LIFT: f32 = 0.3;
-const GRAVITY: f32 = 14.0;
-const BOUNCE: f32 = 0.45;
-const FRICTION: f32 = 0.6;
+pub(crate) const THROW_SPEED: f32 = 10.0;
+pub(crate) const THROW_LIFT: f32 = 0.3;
+pub(crate) const GRAVITY: f32 = 14.0;
+pub(crate) const BOUNCE: f32 = 0.45;
+pub(crate) const FRICTION: f32 = 0.6;
 /// Seconds between the throw button and the release (the throw animation's wind-up), and the
 /// fuse after the release (flashbang `handweaponlife` is 1500 ms; frag has none).
-const THROW_DELAY: f32 = 0.3;
-const FUSE: f32 = 1.5;
+pub(crate) const THROW_DELAY: f32 = 0.3;
+pub(crate) const FUSE: f32 = 1.5;
 /// Knockback of a blast at its centre: m/s away from it and m/s up. The lift is what launches a
 /// victim into the blast-fall animation (the actor controller launches from 5 m/s up).
 const BLAST_PUSH: f32 = 9.0;
 const BLAST_LIFT: f32 = 8.0;
 /// Frag radius when the item has no `handweaponcolldist`.
-const FRAG_RADIUS: f32 = 4.0;
-/// Medikit / repair kit (instant, no `itempower`): points restored.
-const KIT_POINTS: f32 = 50.0;
+pub(crate) const FRAG_RADIUS: f32 = 4.0;
+/// Points of a medikit / repair kit come from `worlditem.xml` (`Weapon::kit_points`).
 
 /// A smoke grenade's cloud: a sphere around the entity's `Transform` that blocks line of sight
 /// (see [`smoke_blocks`]) until its `Lifetime` ends.
@@ -76,6 +79,22 @@ pub struct Projectile {
     fuse: f32,
     trail: f32,
     at_rest: bool,
+}
+
+impl Projectile {
+    /// A blast of `item` (kind `kind`) at the entity's position on the next step: a mine going off.
+    pub(crate) fn blast(kind: WeaponKind, item: u32, owner: Entity) -> Self {
+        Self {
+            kind,
+            item,
+            owner,
+            vel: Vec3::ZERO,
+            wind: 0.0,
+            fuse: 0.0,
+            trail: 0.0,
+            at_rest: true,
+        }
+    }
 }
 
 /// Blinded by a flashbang; `total` is the initial duration (the HUD fades on `left / total`).
@@ -197,10 +216,11 @@ pub(crate) fn launch(
                         Transform::from_rotation(Quat::from_rotation_x(FRAC_PI_2)),
                     ));
             }
-            WeaponKind::Frag | WeaponKind::Flashbang | WeaponKind::Smoke => {
+            WeaponKind::Frag | WeaponKind::Flashbang | WeaponKind::Smoke | WeaponKind::Stun => {
                 let path = match w.kind {
                     WeaponKind::Frag => "model/weapon/grenade/grenade01.elu",
                     WeaponKind::Flashbang => "model/weapon/grenade/flashbang01.elu",
+                    WeaponKind::Stun => "model/weapon/grenade/spy_stungrenade.elu",
                     _ => "model/weapon/grenade/smoke01.elu",
                 };
                 let model = fx.model(path, Transform::default(), &mut assets, &mut commands);
@@ -214,12 +234,42 @@ pub(crate) fn launch(
                             wind: THROW_DELAY,
                             fuse: w
                                 .life
-                                .filter(|_| w.kind == WeaponKind::Flashbang)
+                                .filter(|_| {
+                                    matches!(w.kind, WeaponKind::Flashbang | WeaponKind::Stun)
+                                })
                                 .map_or(FUSE, |ms| ms as f32 / 1000.0),
                             trail: 0.0,
                             at_rest: false,
                         },
                         Transform::from_translation(chest),
+                        Visibility::Hidden,
+                    ))
+                    .add_child(model);
+            }
+            WeaponKind::Mine => {
+                // Laid on the floor just ahead of the layer (else under it); needs a floor within 3 m.
+                let ahead = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
+                let Some(h) = [0.8, 0.0]
+                    .into_iter()
+                    .find_map(|d| col.raycast(feet + ahead * d + Vec3::Y * 0.8, Vec3::NEG_Y, 3.0))
+                else {
+                    continue;
+                };
+                info!(
+                    "t={:.2} mine: {name} lays one at {:.1}",
+                    time.elapsed_secs(),
+                    h.point
+                );
+                let model = fx.model(
+                    "model/weapon/item/spy_landmine.elu",
+                    Transform::default(),
+                    &mut assets,
+                    &mut commands,
+                );
+                commands
+                    .spawn((
+                        Mine::new(f.shooter),
+                        Transform::from_translation(h.point),
                         Visibility::Hidden,
                     ))
                     .add_child(model);
@@ -233,7 +283,7 @@ pub(crate) fn launch(
                     (&mut v.ap, v.max_ap)
                 };
                 let before = *cur;
-                *cur = (*cur + KIT_POINTS).min(max);
+                *cur = (*cur + w.kit_points.unwrap_or(0) as f32).min(max);
                 info!(
                     "t={:.2} {}: {name} {} {before:.0} -> {:.0}",
                     time.elapsed_secs(),
@@ -285,10 +335,22 @@ pub(crate) fn launch(
     }
 }
 
-/// The point of an actor's capsule axis nearest to `at`: what a blast measures its distance to.
-fn nearest(g: &GlobalTransform, at: Vec3) -> Vec3 {
+type Targets<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static GlobalTransform, Option<&'static HitShape>),
+    (With<Vitals>, Without<Dead>),
+>;
+
+/// The point of an actor's capsule axis nearest to `at` (what a blast measures its distance to)
+/// and the capsule radius.
+fn nearest(g: &GlobalTransform, hs: Option<&HitShape>, at: Vec3) -> (Vec3, f32) {
+    let (r, height) = shape(hs);
     let feet = g.translation();
-    feet + Vec3::Y * (at.y - feet.y).clamp(HIT_RADIUS, HIT_HEIGHT - HIT_RADIUS)
+    (
+        feet + Vec3::Y * (at.y - feet.y).clamp(r, (height - r).max(r)),
+        r,
+    )
 }
 
 /// Damage and knockback of a blast at `at` with `radius` and centre damage `damage`; falls off
@@ -299,7 +361,7 @@ fn splash(
     damage: f32,
     p: &Projectile,
     col: &MapCollision,
-    targets: &Query<(Entity, &GlobalTransform), (With<Vitals>, Without<Dead>)>,
+    targets: &Targets,
     protected: &Query<(), With<Protected>>,
     damage_out: &mut MessageWriter<Damage>,
     vfx: &mut MessageWriter<Vfx>,
@@ -308,15 +370,15 @@ fn splash(
     time: &Time,
 ) {
     let name = |e| names.get(e).map_or("?", |n| n.as_str());
-    for (e, g) in targets {
+    for (e, g, hs) in targets {
         // Spawn protection: neither hurt nor pushed.
         if protected.contains(e) {
             continue;
         }
-        let c = nearest(g, at);
+        let (c, r) = nearest(g, hs, at);
         let v = c - at;
         let dist = v.length();
-        let factor = (1.0 - (dist - HIT_RADIUS).max(0.0) / radius).clamp(0.0, 1.0);
+        let factor = (1.0 - (dist - r).max(0.0) / radius).clamp(0.0, 1.0);
         if factor <= 0.0 {
             continue;
         }
@@ -346,6 +408,7 @@ fn splash(
             item: p.item,
             point: c,
             dir: d,
+            pierce: None,
         });
         vfx.write(Vfx::Blood { point: c, dir: d });
     }
@@ -358,13 +421,15 @@ pub(crate) fn fly(
     data: Res<ActorData>,
     col: Res<MapCollision>,
     mut projectiles: Query<(Entity, &mut Transform, &mut Projectile, &mut Visibility)>,
-    targets: Query<(Entity, &GlobalTransform), (With<Vitals>, Without<Dead>)>,
+    targets: Targets,
     names: Query<&Name>,
     players: Query<(), With<Player>>,
     protected: Query<(), With<Protected>>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut damage: MessageWriter<Damage>,
     mut vfx: MessageWriter<Vfx>,
+    mut afflict: MessageWriter<Afflict>,
+    sides: Query<(Option<&Team>, Has<Bot>)>,
     mut blast: MessageWriter<Blast>,
 ) {
     let dt = time.delta_secs().min(0.05);
@@ -381,11 +446,11 @@ pub(crate) fn fly(
                 let step = p.vel * dt;
                 let (len, d) = (step.length(), step.normalize_or(Vec3::NEG_Z));
                 let mut best = col.raycast(pos, d, len + 0.05).map(|h| h.distance);
-                for (a, g) in &targets {
+                for (a, g, hs) in &targets {
                     if a == p.owner && p.wind > ROCKET_LIFE - 0.2 {
                         continue;
                     }
-                    if let Some(t) = crate::combat::ray_capsule(pos, d, g.translation())
+                    if let Some(t) = crate::combat::ray_capsule(pos, d, g.translation(), shape(hs))
                         && t <= len
                         && best.is_none_or(|b| t < b)
                     {
@@ -416,7 +481,7 @@ pub(crate) fn fly(
                 if p.wind > 0.0 {
                     // Winding up: held at the thrower's chest, released at the end of the wind-up.
                     p.wind -= dt;
-                    if let Ok((_, g)) = targets.get(p.owner) {
+                    if let Ok((_, g, _)) = targets.get(p.owner) {
                         tf.translation = g.translation() + Vec3::Y * (EYE - 0.25);
                     }
                     if p.wind <= 0.0 {
@@ -471,8 +536,10 @@ pub(crate) fn fly(
         // chosen so the fireball spans about the blast radius (*inferred*).
         let (effect, sound, scale) = match p.kind {
             WeaponKind::Rocket => ("rocket_effect", "fx_explosion01", 1.0),
-            WeaponKind::Frag => ("ef_exgrenade", "we_grenade_explosion", 16.0),
-            WeaponKind::Flashbang => ("ef_gre_ex", "we_flashbang_explosion", 4.0),
+            WeaponKind::Frag | WeaponKind::Mine => ("ef_exgrenade", "we_grenade_explosion", 16.0),
+            WeaponKind::Flashbang | WeaponKind::Stun => {
+                ("ef_gre_ex", "we_flashbang_explosion", 4.0)
+            }
             _ => ("ef_gunsmoke", "we_gasgrenade_explosion", 2.0),
         };
         vfx.write(Vfx::Facing {
@@ -483,11 +550,34 @@ pub(crate) fn fly(
         });
         blast.write(Blast { at, sound });
         match p.kind {
+            WeaponKind::Stun => {
+                // Stuns whoever the grenade's thrower is not friendly with, within its radius
+                // and in the open (the retail tip 2206: "briefly stunned").
+                let mine = sides.get(p.owner).ok().map(|(t, b)| (t.copied(), b));
+                for (a, g, hs) in &targets {
+                    let (c, _) = nearest(g, hs, at);
+                    let v = c - at;
+                    let dist = v.length();
+                    let ally = a == p.owner
+                        || sides
+                            .get(a)
+                            .is_ok_and(|(t, b)| mine.is_some_and(|m| friendly(m, (t.copied(), b))));
+                    if ally
+                        || dist > radius
+                        || col
+                            .raycast(at, v, dist)
+                            .is_some_and(|h| h.distance < dist - 0.4)
+                    {
+                        continue;
+                    }
+                    afflict.write(spy::stun(a, p.owner));
+                }
+            }
             WeaponKind::Flashbang => {
                 let secs = w.state_time.unwrap_or(2000) as f32 / 1000.0;
                 let look = camera.iter().next().map(|c| c.forward());
-                for (a, g) in &targets {
-                    let c = nearest(g, at);
+                for (a, g, hs) in &targets {
+                    let (c, _) = nearest(g, hs, at);
                     let v = c - at;
                     let dist = v.length();
                     if dist > radius

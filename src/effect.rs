@@ -4,6 +4,7 @@
 use crate::{
     ani::Ani,
     anim::{AnimPlugin, Animator, Loop, NodeAlpha},
+    combat::Vfx,
     elu::Elu,
     model::{self, Model, Textures},
     mrs::Vfs,
@@ -232,6 +233,61 @@ impl Plugin for FxPlugin {
             .init_resource::<TxaRegistry>()
             .add_plugins(AnimPlugin)
             .add_systems(Update, (tag_txa, flip_txa, fade_nodes).chain());
+    }
+}
+
+/// Effect names the match code spawns (`combat`, `melee`, `projectile`): muzzle flashes, sword
+/// hits and flashes, explosions, smoke trails, heal/repair auras.
+const WARM: &[&str] = &[
+    "flame_pistol",
+    "flame_rifle",
+    "flame_mg",
+    "flame_shotgun",
+    "ef_sword_flash",
+    "sword_damage1",
+    "sword_damage2",
+    "sword_damage3",
+    "rocket_effect",
+    "rocket_smoke",
+    "ef_exgrenade",
+    "ef_gre_ex",
+    "ef_heal_instant",
+    "ef_repair_instant",
+    "ef_heal_overtime_begin",
+    "ef_heal_overtime",
+    "ef_repair_overtime_begin",
+    "ef_repair_overtime",
+];
+
+/// Spawns every [`WARM`] effect once, 1/1000 of its size, a metre in front of the camera, so the
+/// ELU parse, texture decode, material creation and pipeline compile happen while the match
+/// loads instead of at the first muzzle flash. The entities expire with their own lifetime.
+pub struct WarmFxPlugin;
+
+impl Plugin for WarmFxPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, warm);
+    }
+}
+
+/// Waits for the camera's transform to propagate (second frame it exists), then runs once.
+fn warm(
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    mut vfx: MessageWriter<Vfx>,
+    mut seen: Local<u8>,
+) {
+    let Ok(cam) = camera.single() else { return };
+    *seen = seen.saturating_add(1);
+    if *seen != 2 {
+        return;
+    }
+    let at = Transform {
+        translation: cam.translation() + cam.forward() * 1.0,
+        scale: Vec3::splat(0.001),
+        ..default()
+    };
+    for &name in WARM {
+        vfx.write(Vfx::Elu { name, at });
     }
 }
 

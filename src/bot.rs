@@ -214,7 +214,7 @@ fn spawn_bots(
             pos,
             yaw,
             woman: i % 2 == 1,
-            loadout: [&DEFAULT_LOADOUT[..], &[BOT_GRENADE]].concat(),
+            loadout: [&DEFAULT_LOADOUT[..], &[BOT_GRENADE, BOT_SMOKE]].concat(),
             bot: true,
             outfit: None,
         });
@@ -286,6 +286,26 @@ fn seg_dist(a: Vec3, b: Vec3, p: Vec3) -> f32 {
 /// Bots carry the default loadout plus this frag grenade (zitem `2200007`, `item_source` DEFAULT;
 /// *inferred* choice).
 const BOT_GRENADE: u32 = 2200007;
+/// Bots also carry a smoke bomb (zitem `2200002`, the `SMOKE` of `modes.rs`; *inferred* choice).
+const BOT_SMOKE: u32 = 2200002;
+/// A hurt bot throws its smoke this far (metres) towards the enemy it is running from, so the
+/// cloud (radius 0.6 x the item's blast radius) stands between them. *Inferred*.
+const SMOKE_AHEAD: f32 = 4.0;
+/// `plan_throw`'s radius for a smoke bomb: it must land within 0.6 x this of the point
+/// `SMOKE_AHEAD` in front and more than this from the thrower. *Inferred*.
+const SMOKE_PLAN: f32 = 3.0;
+
+/// Whether slot `i` holds a smoke bomb with one left.
+fn is_smoke(load: &Loadout, data: &ActorData, i: usize) -> bool {
+    load.slots.get(i).is_some_and(|s| {
+        s.magazine > 0
+            && data
+                .items
+                .get(s.item)
+                .and_then(|it| it.weapon.as_ref())
+                .is_some_and(|w| w.kind == WeaponKind::Smoke)
+    })
+}
 /// Seconds a butterfly holds the guard, which must end before the blade's next blow is ready
 /// (katana: strike 0.17 s, ready 0.33 s) or the held click would become the guard's uppercut.
 /// *Inferred* from `melee.rs`.
@@ -295,12 +315,14 @@ const BUTTERFLY_GUARD: f32 = 0.1;
 const LAY_AFTER: f32 = 0.6;
 const LAY_GIVE_UP: f32 = 8.0;
 
-/// A grenade throw: the slot, seconds since it began, and the second the button was pressed.
+/// A grenade throw: the slot, seconds since it began, the second the button was pressed, and
+/// whether it is a smoke bomb thrown at a point in front of the bot (not at the enemy).
 #[derive(Clone, Copy)]
 struct Throw {
     slot: usize,
     t: f32,
     release: f32,
+    smoke: bool,
 }
 
 /// Where a grenade released from `chest` along unit `dir` ends up after `fuse` seconds: the same
@@ -574,6 +596,12 @@ fn bot_ai(
                 .as_ref()?;
             grenade_stats(w)
         };
+        // A bot hurt in the enemy's sight and with a smoke bomb left throws it (below).
+        let smoke_slot = (seen.is_some()
+            && (4.0..20.0).contains(&dist)
+            && vitals.hp < vitals.max_hp * (0.3 + 0.3 * skill))
+            .then(|| (0..loadout.slots.len()).find(|&i| is_smoke(loadout, &data, i)))
+            .flatten();
         if let Some(mut th) = ai.throw {
             th.t += dt;
             if target.is_none() || blind || th.t > 3.0 || th.t > th.release + 0.9 {
@@ -584,14 +612,25 @@ fn bot_ai(
                     intent.slot = Some(th.slot);
                 } else if th.release == f32::MAX
                     && th.t >= 0.5
-                    && let (Some(t), Some((radius, fuse))) = (target, stats(th.slot))
+                    && let Some(t) = target
+                    && let Some((radius, fuse)) = if th.smoke {
+                        Some((SMOKE_PLAN, FUSE))
+                    } else {
+                        stats(th.slot)
+                    }
                 {
                     let yaw = yaw_of(flat(t - pos));
+                    let at = if th.smoke {
+                        pos + flat(t - pos).normalize_or_zero() * SMOKE_AHEAD
+                    } else {
+                        t
+                    };
                     if ((yaw - ai.yaw + PI).rem_euclid(TAU) - PI).abs() < 0.1 {
-                        match plan_throw(&col, pos, t, yaw, fuse, radius) {
+                        match plan_throw(&col, pos, at, yaw, fuse, radius) {
                             Some(pitch) => {
                                 (th.release, press) = (th.t, Some(pitch));
-                                ai.hold = THROW_DELAY + fuse + 0.2;
+                                // A smoke bomb needs no waiting: the retreat goes on.
+                                ai.hold = THROW_DELAY + if th.smoke { 0.3 } else { fuse + 0.2 };
                             }
                             None => th.t = f32::MAX,
                         }
@@ -604,6 +643,7 @@ fn bot_ai(
             && !blind
             && ai.react <= 0.0
             && (5.0..14.0).contains(&dist)
+            && smoke_slot.is_none()
             && let Some(t) = target
             && let Some(slot) = (0..loadout.slots.len())
                 .find(|&i| loadout.slots[i].magazine > 0 && stats(i).is_some())
@@ -632,6 +672,31 @@ fn bot_ai(
                     slot,
                     t: 0.0,
                     release: f32::MAX,
+                    smoke: false,
+                });
+            }
+        } else if ai.throw_cd <= 0.0
+            && !planned
+            && !blind
+            && ai.react <= 0.0
+            && let Some(t) = target
+            && let Some(slot) = smoke_slot
+        {
+            // Hurt in the enemy's sight: put a smoke cloud between us (the retreat then runs
+            // behind it; `smoke_blocks` cuts the bots' own sight the same way).
+            planned = true;
+            ai.throw_cd = 1.0;
+            let ahead = pos + flat(t - pos).normalize_or_zero() * SMOKE_AHEAD;
+            if plan_throw(&col, pos, ahead, yaw_of(flat(t - pos)), FUSE, SMOKE_PLAN).is_some() {
+                debug!(
+                    "bot {name}: smoke slot {slot} at {dist:.1} m (hp {:.0})",
+                    vitals.hp
+                );
+                ai.throw = Some(Throw {
+                    slot,
+                    t: 0.0,
+                    release: f32::MAX,
+                    smoke: true,
                 });
             }
         }

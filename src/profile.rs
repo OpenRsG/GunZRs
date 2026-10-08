@@ -7,7 +7,8 @@
 
 use crate::{
     actor::{ActorData, DEFAULT_LOADOUT},
-    game::{Killed, Player, Reward, Vitals},
+    clan::Clan,
+    game::{Killed, Player, QuestLoot, Reward, Vitals},
     level::Level,
     menu::Mode,
     mrs::Vfs,
@@ -16,7 +17,12 @@ use crate::{
     view::Shot,
 };
 use bevy::prelude::*;
-use std::{collections::BTreeSet, fs, io, path::PathBuf, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs, io,
+    path::PathBuf,
+    str::FromStr,
+};
 
 /// Highest level (**inferred**; `grank.xml` lists 35 ranks but no level numbers).
 pub const MAX_LEVEL: u32 = 99;
@@ -75,6 +81,10 @@ pub struct Profile {
     pub owned: BTreeSet<u32>,
     /// zitem id per slot ([`SLOTS`]); 0 = empty (only item and armour slots may be empty).
     pub equipped: [u32; SLOTS],
+    /// `zquestitem.xml` id -> how many are kept (quest drops: [`QuestLoot`]; sacrifices spend them).
+    pub quest_items: BTreeMap<u32, u32>,
+    /// The offline clan (`clan.rs`); `None` = not in one.
+    pub clan: Option<Clan>,
     /// Where [`Profile::save`] writes; `None` = throwaway.
     path: Option<PathBuf>,
 }
@@ -95,6 +105,8 @@ impl Profile {
             bounty: START_BOUNTY,
             owned: DEFAULT_LOADOUT.into_iter().collect(),
             equipped,
+            quest_items: BTreeMap::new(),
+            clan: None,
             path: None,
         }
     }
@@ -141,8 +153,8 @@ impl Profile {
     pub fn to_text(&self) -> String {
         let ids =
             |v: &mut dyn Iterator<Item = &u32>| v.map(u32::to_string).collect::<Vec<_>>().join(",");
-        format!(
-            "name={}\nwoman={}\noutfit={}\nxp={}\nbounty={}\nowned={}\nequipped={}\n",
+        let mut text = format!(
+            "name={}\nwoman={}\noutfit={}\nxp={}\nbounty={}\nowned={}\nequipped={}\nquest_items={}\n",
             self.name.replace('\n', " "),
             self.woman,
             self.outfit.map_or("none".into(), |o| o.to_string()),
@@ -150,7 +162,16 @@ impl Profile {
             self.bounty,
             ids(&mut self.owned.iter()),
             ids(&mut self.equipped.iter()),
-        )
+            self.quest_items
+                .iter()
+                .map(|(id, n)| format!("{id}:{n}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        if let Some(c) = &self.clan {
+            text += &format!("clan={}\n", c.to_text());
+        }
+        text
     }
 
     /// Parses [`Profile::to_text`]; missing keys keep the new-profile values, unknown keys and
@@ -193,6 +214,18 @@ impl Profile {
                         .try_into()
                         .map_err(|_| format!("equipped: need {SLOTS} ids"))?
                 }
+                "quest_items" => {
+                    p.quest_items = v
+                        .split(',')
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| {
+                            let (id, n) =
+                                s.split_once(':').ok_or(format!("{k}: bad item {s:?}"))?;
+                            Ok((num(k, id)?, num(k, n)?))
+                        })
+                        .collect::<Result<_, String>>()?
+                }
+                "clan" => p.clan = Some(Clan::parse(v)?),
                 _ => return Err(format!("unknown key {k:?}")),
             }
         }
@@ -211,6 +244,25 @@ impl Profile {
             .and_then(|()| fs::rename(&tmp, path));
         if let Err(e) = done {
             eprintln!("profile: cannot save {}: {e}", path.display());
+        }
+    }
+
+    /// Keeps quest items (a finished quest's [`QuestLoot`]).
+    pub fn add_quest_items(&mut self, items: &[(u32, u32)]) {
+        for &(id, n) in items {
+            *self.quest_items.entry(id).or_default() += n;
+        }
+    }
+
+    /// Spends one of each of `items`; the caller checked that they are there.
+    pub fn spend_quest_items(&mut self, items: &[u32]) {
+        for id in items {
+            if let Some(n) = self.quest_items.get_mut(id) {
+                *n -= 1;
+                if *n == 0 {
+                    self.quest_items.remove(id);
+                }
+            }
         }
     }
 }
@@ -280,12 +332,29 @@ impl Plugin for ProfilePlugin {
         })
         .insert_resource(profile)
         .add_systems(Startup, load_ranks)
-        .add_systems(Update, (gear_bonus, earn, finish, save).chain());
+        .add_systems(Update, (gear_bonus, earn, keep_loot, finish, save).chain());
     }
 }
 
 fn load_ranks(mut commands: Commands, level: Res<Level>) {
     commands.insert_resource(Ranks::load(&level.vfs).unwrap_or_else(|e| panic!("profile: {e}")));
+}
+
+/// A finished quest's drops stay in the profile. Only `zquestitem.xml` ids (six digits) are kept;
+/// the shop items a quest can drop are rentals, which the profile does not model.
+fn keep_loot(mut loot: MessageReader<QuestLoot>, mut profile: ResMut<Profile>) {
+    for l in loot.read() {
+        let kept: Vec<_> = l
+            .items
+            .iter()
+            .copied()
+            .filter(|i| i.0 < 1_000_000)
+            .collect();
+        if !kept.is_empty() {
+            profile.add_quest_items(&kept);
+            println!("profile: kept quest items {kept:?}");
+        }
+    }
 }
 
 /// Equipped armour adds its `hp`/`ap` to the player's maxima (zitem.xml `hp`/`ap`).
@@ -389,6 +458,16 @@ mod tests {
         p.add(1234, 77);
         p.owned.insert(2000000);
         p.equipped[4] = 3010013;
+        p.quest_items.insert(200008, 2);
+        p.clan = Some(Clan {
+            name: "Phoenix 1".into(),
+            emblem: 1000005,
+            bg: 2000003,
+            points: 1042,
+            wins: 3,
+            losses: 1,
+            members: vec!["Ash".into(), "Bolt".into(), "Cinder".into()],
+        });
         assert_eq!(Profile::parse(&p.to_text()).unwrap().to_text(), p.to_text());
         let path = std::env::temp_dir().join(format!("gunzrs-profile-{}.txt", std::process::id()));
         p.path = Some(path.clone());
@@ -400,6 +479,7 @@ mod tests {
         assert_eq!(back, p);
         assert!(Profile::parse("bogus=1").is_err());
         assert!(Profile::parse("equipped=1,2").is_err());
+        assert!(Profile::parse("clan=Phoenix|1|2|3").is_err());
     }
 
     #[test]
@@ -410,6 +490,29 @@ mod tests {
         assert_eq!(progress(u32::MAX as u64).0, MAX_LEVEL);
         let ranks = Ranks((1..=35).map(|i| i.to_string()).collect());
         assert_eq!((ranks.code(1), ranks.code(MAX_LEVEL)), ("1", "35"));
+    }
+
+    /// A finished quest's quest items are kept (shop items are not) and a sacrifice spends them.
+    #[test]
+    fn quest_loot_is_kept_and_sacrifices_are_spent() {
+        let mut app = App::new();
+        app.add_message::<QuestLoot>()
+            .insert_resource(Profile::new())
+            .add_systems(Update, keep_loot);
+        for items in [vec![(200011, 2), (3000042, 1)], vec![(200011, 1)]] {
+            app.world_mut()
+                .resource_mut::<Messages<QuestLoot>>()
+                .write(QuestLoot { items });
+            app.update();
+        }
+        let mut p = app.world().resource::<Profile>().clone();
+        assert_eq!(p.quest_items, BTreeMap::from([(200011, 3)]));
+        assert_eq!(
+            Profile::parse(&p.to_text()).unwrap().quest_items,
+            p.quest_items
+        );
+        p.spend_quest_items(&[200011, 200011, 200011]);
+        assert!(p.quest_items.is_empty());
     }
 
     /// Kills by the player pay, other kills do not; the result bonus is paid once at the end.

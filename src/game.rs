@@ -14,6 +14,7 @@ impl Plugin for GamePlugin {
             .add_message::<ActorSound>()
             .add_message::<Blocked>()
             .add_message::<Blast>()
+            .add_message::<CameraShake>()
             .add_message::<PlaySound>()
             .add_message::<Impact>()
             .add_message::<ActionRequest>()
@@ -36,6 +37,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::session::SessionPlugin)
             .add_plugins(crate::profile::ProfilePlugin)
             .add_plugins(crate::quest::QuestPlugin)
+            .add_plugins(crate::clan::ClanPlugin)
             .add_plugins(crate::npc::NpcPlugin)
             .add_plugins(crate::blitz::BlitzPlugin)
             .add_plugins(crate::perf::PerfPlugin);
@@ -76,15 +78,18 @@ pub struct Routes {
     pub boost: f32,
 }
 
-/// Per-actor multipliers a mode sets (Blitzkrieg's honor upgrades and buildings); combat applies
-/// `dealt` of the attacker and `taken` of the target (`vs_actors` too when the attacker is a
-/// player or bot), the actor controller stretches the gun delay by `shot_delay`. All 1 = none.
+/// Per-actor multipliers a mode sets (Blitzkrieg's honor upgrades, classes and buildings); combat
+/// applies `dealt` of the attacker (`vs_buildings` too against a `building`) and `taken` of the
+/// target (`vs_actors` too when the attacker is a player or bot), the actor controller stretches
+/// the gun delay by `shot_delay`. All 1 (`building` false) = none.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Mods {
     pub dealt: f32,
     pub taken: f32,
     pub vs_actors: f32,
     pub shot_delay: f32,
+    pub vs_buildings: f32,
+    pub building: bool,
 }
 
 impl Default for Mods {
@@ -94,6 +99,8 @@ impl Default for Mods {
             taken: 1.0,
             vs_actors: 1.0,
             shot_delay: 1.0,
+            vs_buildings: 1.0,
+            building: false,
         }
     }
 }
@@ -102,6 +109,16 @@ impl Mods {
     /// Multiplier on a blow of an attacker (given whether it is a player or bot) against `self`.
     pub fn against(&self, from_actor: bool) -> f32 {
         self.taken * if from_actor { self.vs_actors } else { 1.0 }
+    }
+
+    /// Multiplier an attacker with `self` puts on its blows against `target`.
+    pub fn dealing(&self, target: Option<&Mods>) -> f32 {
+        self.dealt
+            * if target.is_some_and(|t| t.building) {
+                self.vs_buildings
+            } else {
+                1.0
+            }
     }
 }
 
@@ -166,6 +183,15 @@ pub struct Blast {
     pub sound: &'static str,
 }
 
+/// A heavy hit or skill shakes the player's camera when within `range` metres of `at`; `trauma`
+/// (0..=1) is the strongest shake (see `hud::Shake`).
+#[derive(Message, Clone, Copy, Debug)]
+pub struct CameraShake {
+    pub at: Vec3,
+    pub trauma: f32,
+    pub range: f32,
+}
+
 /// A shot or blade struck map geometry (not an actor): bullet holes, sparks, impact sounds.
 /// `normal` is the unit surface normal facing the shooter; `blade` is a melee blow.
 #[derive(Message, Clone, Debug)]
@@ -222,6 +248,11 @@ impl Default for Settings {
 /// a neutral `Intent` and ignores the mouse. `Time<Virtual>` is paused at the same time.
 #[derive(Resource)]
 pub struct Frozen;
+
+/// A mode's pre-match screen (Blitzkrieg's class select) holds the match: the game is frozen
+/// like a pause, but without the pause menu and without Esc resuming it.
+#[derive(Resource)]
+pub struct Hold;
 
 /// What an actor wants to do this frame. Player input or bot AI writes it; the actor
 /// controller consumes it (movement, animation, weapon use).

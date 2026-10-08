@@ -269,6 +269,11 @@ pub struct Skill {
     pub speed_pct: f32,
     pub root: bool,
     pub heal: f32,
+    /// `mod.criticalrate` as a probability (0..1).
+    pub crit: f32,
+    /// `camera.power`, `camera.duration` (s), `camera.range` (cm); all 0 when the skill shakes
+    /// nothing.
+    pub camera: [f32; 3],
     /// `castinganimation` N plays clip `special_attack<N>` (0: the melee clip).
     pub cast_anim: u32,
     pub trail: String,
@@ -312,6 +317,12 @@ pub fn parse_skills(xml: &str) -> io::Result<HashMap<u32, Skill>> {
                 .unwrap_or(100.0),
             root: flag(n, "mod.root"),
             heal: num(n, "mod.heal"),
+            crit: num(n, "mod.criticalrate") * 0.01,
+            camera: [
+                num(n, "camera.power"),
+                num(n, "camera.duration"),
+                num(n, "camera.range"),
+            ],
             cast_anim: num(n, "castinganimation") as u32,
             trail: string(n, "traileffect"),
             trail_scale: n
@@ -506,7 +517,7 @@ pub enum Cond {
     Groggy(f32),
     /// `hpEqual:N`
     Hp(f32),
-    /// `dice:N`: true with probability N/1000 each time it is evaluated.
+    /// `dice:N`: a share of N in the state's stored random number (see `fsm::next`).
     Dice(f32),
     /// `timeElapsedSinceEntered:ms`
     Elapsed(f32),
@@ -797,6 +808,34 @@ pub struct Data {
     pub strings: HashMap<String, String>,
 }
 
+/// English names for the monsters whose `strings.xml` entry is Korean in every locale dir
+/// (`system/*/strings.xml`; `interface/monsterillust` holds only pictures). **Inferred**:
+/// translated from the Korean string (리쟈드 = lizard, 팜포우/팜포아 = "Pampow", Korean spelling).
+const ENGLISH_NAMES: &[(&str, &str)] = &[
+    ("NPC_NAME_21", "Lizard"),
+    ("NPC_NAME_22", "Lizard Shaman"),
+    ("NPC_NAME_23", "Lizard Captain"),
+    ("NPC_NAME_24", "Lizard King"),
+    ("NPC_NAME_25", "Lizard King (Boss)"),
+    ("NPC_NAME_26", "Broken Golem"),
+    ("NPC_NAME_31", "Skeleton"),
+    ("NPC_NAME_32", "Skeleton Mage"),
+    ("NPC_NAME_33", "Skeleton Captain"),
+    ("NPC_NAME_34", "Giant Skeleton"),
+    ("NPC_NAME_35", "Cursed Corpse"),
+    ("NPC_NAME_36", "Lich Pawn"),
+    ("NPC_NAME_37", "Superion (Boss)"),
+    ("NPC_NAME_38", "Anelamon (Boss)"),
+    ("NPC_NAME_39", "Lich (Boss)"),
+    ("NPC_NAME_41", "Pampow Baby"),
+    ("NPC_NAME_42", "Pampoa"),
+    ("NPC_NAME_44", "Pampow"),
+    ("NPC_NAME_45", "Cursed Pampow"),
+    ("NPC_NAME_46", "Captain Pampoa (Boss)"),
+    ("NPC_NAME_47", "Pampow (Boss)"),
+    ("NPC_NAME_48", "Pampow Baby"),
+];
+
 impl Data {
     pub fn load(vfs: &Vfs) -> io::Result<Self> {
         let (ai, npcs) = parse_npcs(&text(vfs, "system/npc.xml")?)?;
@@ -805,11 +844,17 @@ impl Data {
             models.extend(parse_registry(&text(vfs, reg)?)?);
         }
         let strings = text(vfs, "system/strings.xml")?;
-        let strings = doc(&strings, "strings.xml")?
+        let mut strings: HashMap<String, String> = doc(&strings, "strings.xml")?
             .descendants()
             .filter(|n| n.has_tag_name("STR"))
             .filter_map(|n| Some((n.attribute("id")?.to_owned(), n.text()?.to_owned())))
             .collect();
+        // No locale ships these names in Latin script, so overlay the English table.
+        for (key, en) in ENGLISH_NAMES {
+            if strings.get(*key).is_none_or(|s| !s.is_ascii()) {
+                strings.insert((*key).to_owned(), (*en).to_owned());
+            }
+        }
         Ok(Self {
             ai,
             npcs: npcs.into_iter().map(|n| (n.id, n)).collect(),

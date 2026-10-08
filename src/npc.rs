@@ -20,8 +20,8 @@ use crate::{
     combat::{HIT_HEIGHT, HIT_RADIUS, Vfx, rnd, yaw_of},
     elu::{self, Elu},
     game::{
-        Afflict, Blocked, Bot, Damage, Dead, Guarding, HitShape, Mods, Motor, Npc, NpcState,
-        PlaySound, Player, Protected, Push, Routes, SpawnNpc, Team, Vitals, friendly,
+        Afflict, Blocked, Bot, CameraShake, Damage, Dead, Guarding, HitShape, Mods, Motor, Npc,
+        NpcState, PlaySound, Player, Protected, Push, Routes, SpawnNpc, Team, Vitals, friendly,
     },
     item::Items,
     level::Level,
@@ -39,13 +39,21 @@ use std::{
 };
 
 /// Seconds between AI decisions: `npc.xml` `<SHAKING pathfinding_update attack_update>` (both
-/// 0.1, **observed**; the state machines use the same step, **inferred**). With `dice:N` read as
-/// N/1000 per step the retail rows pace plausibly: the knifeman's table never sums above 1000,
-/// `orbit`'s three 25-rows leave it in about 1.3 s.
+/// 0.1, **observed**; the state machines use the same step, **inferred**). `dice:N` is a share of
+/// the state's stored random number, see `fsm::next`.
 const TICK: f32 = 0.1;
 /// How far a classic monster notices a player or bot (m). **Inferred**: `view_angle` is the only
 /// sight datum in `npc.xml`.
 const AGGRO: f32 = 45.0;
+/// A monster notices a player within this many metres even with no line of sight (a hit on the
+/// other side of a wall or floor, footsteps). **Inferred**: the data has no hearing range.
+const HEARING: f32 = 12.0;
+/// Damage multiplier of a critical hit (`mod.criticalrate` of `zskill.xml` is the chance; the
+/// multiplier is not in the data). **Inferred.**
+const CRIT: f32 = 1.5;
+/// `camera.power` x `camera.duration` that shakes the camera at full trauma (the strongest skills
+/// in `zskill.xml`: 3.0 x 1.5). **Inferred** mapping onto the HUD's trauma shake.
+const SHAKE_FULL: f32 = 4.5;
 /// Fraction of a classic melee clip at which the blow lands. **Inferred**: no hit time in the data.
 const MELEE_AT: f32 = 0.45;
 /// Melee damage of a classic monster with no `weaponitem_id` (palmpoas). **Inferred.**
@@ -364,6 +372,8 @@ struct Brain {
     flinch_ready: f32,
     idle_for: f32,
     seed: u32,
+    /// The state's stored random number (`dice` functions), see `fsm::next`.
+    dice: f32,
     /// Seconds since the death sequence began.
     dying: Option<f32>,
     dead_for: f32,
@@ -462,6 +472,7 @@ struct Out<'w> {
     vfx: MessageWriter<'w, Vfx>,
     sound: MessageWriter<'w, PlaySound>,
     summon: MessageWriter<'w, Summon>,
+    shake: MessageWriter<'w, CameraShake>,
 }
 
 /// A summoner's request, spawned like a `SpawnNpc` with a link back (for `SummonLess`).
@@ -476,10 +487,15 @@ struct Summoned(Entity);
 
 fn play(out: &mut Out, stem: &str, at: Vec3) {
     if !stem.is_empty() {
-        out.sound.write(PlaySound {
-            stem: stem.replace('\\', "/"),
-            at,
-        });
+        let stem = stem.replace('\\', "/");
+        // `lab_chaser_summon` (chaser_summon, chaser_summon2) has no wav in the data: the lab
+        // bots' only other summon cue stands in. **Inferred** (`lab_tower_summon`, same dust puff).
+        let stem = if stem.ends_with("lab_chaser_summon") {
+            "challenge_quest/researchlab/lab_tower_summon".into()
+        } else {
+            stem
+        };
+        out.sound.write(PlaySound { stem, at });
     }
 }
 
@@ -621,6 +637,12 @@ impl Brain {
                 self.pi = 0;
                 self.path_t = 0.6;
                 self.failed = self.path.is_empty();
+                if self.failed {
+                    debug!(
+                        "t={:.2} npc: {} no route {from:?} -> {to:?}",
+                        cx.now, self.spec.name
+                    );
+                }
             }
             while self.pi < self.path.len() && flat(self.path[self.pi] - from).length() < 0.7 {
                 self.pi += 1;
@@ -669,6 +691,7 @@ fn demo(
         return;
     }
     *done = true;
+    debug!("npc demo: player at {:?}", p.translation);
     let n = d.names.len() as f32;
     for (i, name) in d.names.iter().enumerate() {
         let side = (i as f32 - (n - 1.0) / 2.0) * 3.0 + 0.35;
@@ -846,6 +869,7 @@ fn spawn(
             flinch_ready: 0.0,
             idle_for: 0.0,
             seed,
+            dice: 0.0,
             dying: None,
             dead_for: 0.0,
             hold_until: now
@@ -1122,14 +1146,17 @@ fn angle_to(b: &Brain, from: Vec3, to: Vec3) -> f32 {
 
 /// A classic monster's decision: target, skill, blow, or the way to the target.
 fn classic(b: &mut Brain, anim: &mut Animator, cx: &Cx, pos: Vec3, d: &NpcDef, hp_frac: f32) {
-    // Target: whoever hurt it last, else the nearest player or bot it sees.
+    // Target: whoever hurt it last, else the one it sees within AGGRO or hears within HEARING
+    // (through floors and walls; it then follows the nav graph). The foe it already has is kept
+    // while within AGGRO * 1.5, sight or not, so a detour round a wall does not drop it.
     let mut tgt = b
-        .foe(cx, b.attacker)
+        .foe(cx, b.target)
+        .or_else(|| b.foe(cx, b.attacker))
         .filter(|f| f.feet.distance(pos) < AGGRO * 1.5);
     if tgt.is_none() {
-        tgt = b
-            .nearest(cx, pos, AGGRO, None)
-            .filter(|f| sees(cx.col, pos + Vec3::Y * 1.2, f.chest()));
+        tgt = b.nearest(cx, pos, AGGRO, None).filter(|f| {
+            f.feet.distance(pos) < HEARING || sees(cx.col, pos + Vec3::Y * 1.2, f.chest())
+        });
     }
     b.target = tgt.map(|f| f.e);
     let hurt = std::mem::take(&mut b.hurt);
@@ -1361,6 +1388,7 @@ fn machine(
     if !b.started {
         // The entry state's action begins at once (a radar's first wave).
         b.started = true;
+        b.dice = rnd(&mut b.seed);
         let entry = fsm.states[b.state].action.as_ref();
         if let Some(a) = entry.and_then(|a| cx.roster.data.actions.get(a)) {
             b.start(anim, a.clone(), cx);
@@ -1372,6 +1400,10 @@ fn machine(
             Func::FindTarget => b.nearest(cx, pos, f32::MAX, None),
             Func::FindInHeight(cm) => b.nearest(cx, pos, f32::MAX, Some(cm * 0.01)),
             Func::FindInDist(cm) => b.nearest(cx, pos, cm * 0.01, None),
+            Func::Dice => {
+                b.dice = rnd(&mut b.seed);
+                continue;
+            }
             _ => continue,
         };
         b.target = found.map(|f| f.e);
@@ -1410,19 +1442,18 @@ fn machine(
         path_failed: b.failed,
         summons: cx.summons.get(&me).copied().unwrap_or(0),
         empty: &empty,
+        dice: b.dice,
     };
     let forced = b
         .forced
         .take()
         .and_then(|n| fsm.states.iter().position(|s| s.name == n));
-    let seed = &mut b.seed;
-    let mut roll = || rnd(seed);
     let now = cx.now;
     let seen = &b.seen;
     let since = |i: usize| (now - seen[i]) * 1000.0;
     let Some(next) = forced
         .map(Next::State)
-        .or_else(|| fsm::next(fsm, b.state, &sense, &since, &mut roll))
+        .or_else(|| fsm::next(fsm, b.state, &sense, &since))
     else {
         return;
     };
@@ -1482,6 +1513,7 @@ fn apply_enter(b: &mut Brain, f: &Func, cx: &Cx, pos: Vec3) {
             b.failed = false;
         }
         Func::TurnOrbit => b.orbit = -b.orbit,
+        Func::Dice => b.dice = rnd(&mut b.seed),
         _ => {}
     }
 }
@@ -1539,9 +1571,25 @@ fn locomote(b: &mut Brain, cx: &Cx, tf: &mut Transform, root: Vec3, alive: bool)
     let delta = (walk + b.kick) * dt + travel + Vec3::Y * b.vy * dt;
     b.kick *= (1.0 - 6.0 * dt).max(0.0);
     let radius = b.spec.radius.min(MOVE_RADIUS);
-    let m = cx
+    let mut m = cx
         .col
         .slide_move(tf.translation, delta, radius, b.spec.height.min(2.0));
+    let want = flat(delta).length();
+    if goal > 0.0 && flat(m.pos - tf.translation).length() < want * 0.3 {
+        // Wedged on a seam the capsule sweep catches but the map does not show (a goblin stood
+        // 2 m from the player in Mansion): the first of a few headings off the intended one that
+        // makes headway takes over. **Inferred** remedy; the data has no walking rules.
+        for deg in [30.0f32, -30.0, 60.0, -60.0, 90.0, -90.0] {
+            let d = Quat::from_rotation_y(deg.to_radians()) * delta;
+            let alt = cx
+                .col
+                .slide_move(tf.translation, d, radius, b.spec.height.min(2.0));
+            if flat(alt.pos - tf.translation).length() >= want * 0.5 {
+                m = alt;
+                break;
+            }
+        }
+    }
     tf.translation = m.pos;
     b.grounded = m.grounded;
     if m.grounded && b.vy < 0.0 {
@@ -1764,6 +1812,7 @@ fn fire(
             m.boom = s.sound_explosion.clone();
             m.guide = s.guidable.then_some(b.target).flatten();
             m.status = afflict(s, me, Entity::PLACEHOLDER);
+            m.crit = s.crit;
             commands.spawn(m.bundle(cx.roster, from, s.resist as usize));
         }
         Ev::Area(skill) => {
@@ -1801,12 +1850,16 @@ fn fire(
                 }
                 let d = flat(f.feet - pos).normalize_or(fwd);
                 if s.damage > 0.0 {
+                    let k = crit(s.crit, cx.now, f.e);
+                    if k > 1.0 {
+                        debug!("t={:.2} npc: {} {} crits", cx.now, b.spec.name, s.name);
+                    }
                     hurt(
                         out,
                         commands,
                         me,
                         f,
-                        s.damage,
+                        s.damage * k,
                         item,
                         None,
                         pos + Vec3::Y,
@@ -1819,6 +1872,17 @@ fn fire(
                 hit += 1;
             }
             debug!("t={:.2} npc: {} {} hits {hit}", cx.now, b.spec.name, s.name);
+            if s.camera[2] > 0.0 {
+                debug!(
+                    "t={:.2} npc: {} {} shakes the camera (power {} x {} s within {} cm)",
+                    cx.now, b.spec.name, s.name, s.camera[0], s.camera[1], s.camera[2]
+                );
+                out.shake.write(CameraShake {
+                    at: pos,
+                    trauma: (s.camera[0] * s.camera[1] / SHAKE_FULL).min(1.0),
+                    range: s.camera[2] * 0.01,
+                });
+            }
             play(out, &s.sound_explosion, pos);
         }
         Ev::Heal(skill) => {
@@ -1829,6 +1893,13 @@ fn fire(
             }
         }
     }
+}
+
+/// [`CRIT`] when a `mod.criticalrate` roll (seeded by the clock and the victim) succeeds, else 1.
+fn crit(rate: f32, now: f32, victim: Entity) -> f32 {
+    let mut seed =
+        ((now * 1000.0) as u32 ^ (victim.to_bits() as u32).wrapping_mul(2_654_435_761)) | 1;
+    if rnd(&mut seed) < rate { CRIT } else { 1.0 }
 }
 
 /// One blow on `f`: damage, blood and the knockback push.
@@ -1920,6 +1991,8 @@ struct Missile {
     pierce: Option<f32>,
     /// Slow, stun, root, dot of the skill, applied to what it hits.
     status: Option<Afflict>,
+    /// `mod.criticalrate` of the skill: chance of [`CRIT`] times the damage on a direct hit.
+    crit: f32,
 }
 
 impl Missile {
@@ -1944,6 +2017,7 @@ impl Missile {
             impact: true,
             pierce: None,
             status: None,
+            crit: 0.0,
         }
     }
 
@@ -1961,8 +2035,11 @@ impl Missile {
         Missile,
     ) {
         (
-            Transform::from_translation(at)
-                .with_scale(Vec3::splat((self.radius / 0.12).clamp(0.6, 8.0))),
+            Transform::from_translation(at).with_scale(Vec3::splat(
+                // The glow is a core inside the trail effect: never wider than its scale (the
+                // golem rocket's 90 cm `colradius` is only the hit test). **Inferred.**
+                (self.radius / 0.12).min(self.scale).clamp(0.6, 8.0),
+            )),
             Mesh3d(r.orb.clone()),
             MeshMaterial3d(r.orb_material[resist.min(r.orb_material.len() - 1)].clone()),
             Visibility::default(),
@@ -2089,7 +2166,7 @@ fn fly(
                 &mut commands,
                 m.owner,
                 &f,
-                m.damage,
+                m.damage * crit(m.crit, time.elapsed_secs(), f.e),
                 0,
                 m.pierce,
                 at - d,

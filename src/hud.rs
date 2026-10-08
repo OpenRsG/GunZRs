@@ -6,7 +6,10 @@
 use crate::{
     actor::ActorData,
     col::MapCollision,
-    game::{Blast, Damage, Dead, Impact, Killed, Loadout, Player, Score, Team, Vitals},
+    game::{
+        Blast, CameraShake, Damage, Dead, Impact, Killed, Loadout, Player, Score, Status, Team,
+        Vitals,
+    },
     level::Level,
     menu::Art,
     mrs::Vfs,
@@ -230,6 +233,8 @@ enum Label {
     Clock,
     /// Centre-screen kill notice.
     Notice,
+    /// Slow / stun / root / burn timers of the player (`Status`).
+    Status,
 }
 
 /// Bars whose width is a percentage.
@@ -461,6 +466,15 @@ fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<C
                     Node {
                         position_type: PositionType::Absolute,
                         left: px(24),
+                        bottom: px(110),
+                        ..default()
+                    },
+                    children![label(Label::Status, 22.0, Color::srgb(0.45, 0.8, 1.0))],
+                ),
+                (
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(24),
                         bottom: px(24),
                         flex_direction: FlexDirection::Column,
                         row_gap: px(6),
@@ -672,6 +686,7 @@ fn track(
     mut damage: MessageReader<Damage>,
     mut killed: MessageReader<Killed>,
     mut blasts: MessageReader<Blast>,
+    mut shakes: MessageReader<CameraShake>,
     players: Query<&GlobalTransform, With<Player>>,
     transforms: Query<&GlobalTransform>,
     names: Query<&Name>,
@@ -716,6 +731,12 @@ fn track(
         if let Ok(p) = players.single() {
             let near = (1.0 - p.translation().distance(b.at) / SHAKE_RANGE).clamp(0.0, 1.0);
             shake.0 = (shake.0 + SHAKE_BLAST * near * near).min(1.0);
+        }
+    }
+    for s in shakes.read() {
+        if let Ok(p) = players.single() {
+            let near = (1.0 - p.translation().distance(s.at) / s.range.max(0.1)).clamp(0.0, 1.0);
+            shake.0 = shake.0.max(s.trauma * near);
         }
     }
     let now = time.elapsed_secs();
@@ -870,7 +891,7 @@ fn update(
     feed: Res<Feed>,
     keys: Res<ButtonInput<KeyCode>>,
     clock: Option<Res<Clock>>,
-    player: Query<(&Vitals, &Loadout, &Score, Option<&Dead>), With<Player>>,
+    player: Query<(&Vitals, &Loadout, &Score, Option<&Dead>, Option<&Status>), With<Player>>,
     actors: Query<(&Name, &Score, Has<Player>, Option<&Team>)>,
     mut texts: Query<(&Label, &mut Text)>,
     mut fills: Query<(&Fill, &mut Node, &mut BackgroundGradient)>,
@@ -882,8 +903,9 @@ fn update(
         (With<LowHp>, Without<Fill>, Without<Show>),
     >,
     real: Res<Time<Real>>,
+    war: Option<Res<crate::clan::ClanWar>>,
 ) {
-    let Ok((vitals, loadout, score, dead)) = player.single() else {
+    let Ok((vitals, loadout, score, dead, status)) = player.single() else {
         return;
     };
     let slot = &loadout.slots[loadout.current];
@@ -908,6 +930,8 @@ fn update(
             Label::Weapon => item
                 .and_then(|i| i.name.clone())
                 .unwrap_or_else(|| format!("item {}", slot.item)),
+            // a clan war draws its own feed with emblems (`clan.rs`)
+            Label::Feed if war.is_some() => String::new(),
             Label::Feed => feed
                 .0
                 .iter()
@@ -924,6 +948,22 @@ fn update(
             Label::Score => format!("Kills {}   Deaths {}", score.kills, score.deaths),
             Label::Notice if marks.notice.0 > 0.0 => marks.notice.1.clone(),
             Label::Notice => String::new(),
+            Label::Status => status.map_or_else(String::new, |s| {
+                let mut v = Vec::new();
+                if s.stun > 0.0 {
+                    v.push(format!("STUNNED {:.1}s", s.stun));
+                }
+                if s.root > 0.0 {
+                    v.push(format!("ROOTED {:.1}s", s.root));
+                }
+                if s.slow_left > 0.0 {
+                    v.push(format!("SLOWED {:.0}% {:.1}s", s.slow * 100.0, s.slow_left));
+                }
+                if s.dot_left > 0.0 {
+                    v.push(format!("BURNING {:.0}/s {:.1}s", s.dot, s.dot_left));
+                }
+                v.join("\n")
+            }),
             Label::Names => column("Name", &|(n, _, you, team)| {
                 let tag = match team {
                     Some(Team::Red) => " [RED]",

@@ -1,13 +1,13 @@
-//! Offline quest play (`gunz-play --mode quest --scenario NAME [--dice N]`): the retail quest
-//! data (`system/scenario.xml`, `scenario2.xml`, `questmap.xml`, `survivalmap.xml`,
-//! `droptable.xml`, `zquestitem.xml`, `npc.xml`) is parsed into a [`Plan`] (a chain of sectors,
+//! Offline quest play (`gunz-play --mode quest --scenario NAME [--dice N] [--sacrifice A,B]`): the
+//! retail quest data (`system/scenario.xml`, `scenario2.xml`, `questmap.xml`, `survivalmap.xml`,
+//! `sacrificetable.xml`, `droptable.xml`, `zquestitem.xml`, `npc.xml`) is parsed into a [`Plan`] (a chain of sectors,
 //! each a map with NPC groups), and [`QuestPlugin`] plays it: NPCs are spawned in waves at the
 //! map's `spawn_npc_*` dummies (through `game::SpawnNpc`, `npc.rs` makes them), a cleared sector
 //! opens its `linkNN` portal, and walking into it (or a timer) swaps the map in-process for the
 //! next sector. Formats and *inferred* constants: `docs/formats.md`, "Quest".
 
 use crate::{
-    actor::ActorData,
+    actor::{ActorData, PlayerSetup},
     bot::BotCount,
     col::MapCollision,
     combat::yaw_of,
@@ -23,14 +23,18 @@ use crate::{
     view::{SCALE, to_bevy},
 };
 use bevy::{prelude::*, ui::UiTargetCamera};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// NPCs of a standard sector at quest level 0, plus [`PER_QL`] for every further level
 /// (*inferred*: the data only gives the NPC sets).
 const BASE_NPCS: u32 = 8;
 const PER_QL: u32 = 2;
-/// Most NPCs alive at once; the rest of a sector's NPCs follow as these die (*inferred*).
-const MAX_LIVE: usize = 8;
+/// Bonus XP/BP of a challenge quest cleared within its `good_time_sec`, as a share of what its
+/// sectors paid (*inferred*: the data only gives the recommended time).
+const GOOD_TIME_BONUS: f32 = 0.25;
+/// Faces of the quest die: every `scenario.xml` scenario has one `<MAP dice>` for each of 1..=6
+/// (**observed**).
+const DICE_SIDES: u32 = 6;
 /// Seconds between two spawns of the wave queue (*inferred*).
 const SPAWN_GAP: f32 = 0.4;
 /// Seconds of "SECTOR n" before the first NPC spawns (*inferred*).
@@ -60,11 +64,15 @@ pub struct MapSet {
     pub sectors: Vec<Sector>,
 }
 
-/// `<SECTOR id title>`; the map is the directory `title` (lower case) under `quest/maps/`.
+/// `<SECTOR id title melee_spawn range_spawn>`; the map is the directory `title` (lower case)
+/// under `quest/maps/`. `melee_spawn`/`range_spawn` (**observed**: 15 in every sector) are taken
+/// as how many NPCs of that kind may live at once (*inferred* meaning).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sector {
     pub id: u32,
     pub title: String,
+    pub melee_spawn: u32,
+    pub range_spawn: u32,
     pub links: Vec<Link>,
 }
 
@@ -103,6 +111,8 @@ pub struct ScenarioDef {
     pub mapset: String,
     pub xp: u32,
     pub bp: u32,
+    /// `<SACRI_ITEM itemid>` of a special scenario: the two items it costs.
+    pub sacri: Vec<u32>,
     pub maps: Vec<MapDef>,
 }
 
@@ -123,6 +133,8 @@ pub struct Challenge {
     pub reward_item: u32,
     pub players: u32,
     pub level: u32,
+    /// `good_time_sec`: the recommended clear time, seconds.
+    pub good_secs: u32,
     pub sectors: Vec<(String, u32, u32, Vec<Spawn>)>,
 }
 
@@ -152,6 +164,8 @@ pub fn parse_mapsets(xml: &str) -> Result<Vec<MapSet>, String> {
                 .map(|s| Sector {
                     id: num(s, "id"),
                     title: text(s, "title"),
+                    melee_spawn: num(s, "melee_spawn"),
+                    range_spawn: num(s, "range_spawn"),
                     links: s
                         .children()
                         .filter(|n| n.has_tag_name("LINK"))
@@ -182,6 +196,11 @@ pub fn parse_scenarios(xml: &str) -> Result<Vec<ScenarioDef>, String> {
             mapset: text(s, "mapset"),
             xp: num(s, "XP"),
             bp: num(s, "BP"),
+            sacri: s
+                .children()
+                .filter(|n| n.has_tag_name("SACRI_ITEM"))
+                .map(|n| num(n, "itemid"))
+                .collect(),
             maps: s
                 .children()
                 .filter(|n| n.has_tag_name("MAP"))
@@ -224,6 +243,7 @@ pub fn parse_challenges(xml: &str) -> Result<Vec<Challenge>, String> {
             reward_item: num(s, "reward_item"),
             players: num(s, "players"),
             level: num(s, "level_limit"),
+            good_secs: num(s, "good_time_sec"),
             sectors: s
                 .children()
                 .filter(|n| n.has_tag_name("SECTOR"))
@@ -244,6 +264,118 @@ pub fn parse_challenges(xml: &str) -> Result<Vec<Challenge>, String> {
                 .collect(),
         })
         .collect())
+}
+
+/// One `<ITEM>` of `sacrificetable.xml` (**observed**): at quest level `ql` the page
+/// `default_item` opens a standard quest, the `special` items draw the boss `npc`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sacrifice {
+    pub ql: u32,
+    pub default_item: u32,
+    pub special: [u32; 2],
+    pub npc: String,
+}
+
+pub fn parse_sacrifice(xml: &str) -> Result<Vec<Sacrifice>, String> {
+    Ok(doc(xml)?
+        .descendants()
+        .filter(|n| n.has_tag_name("ITEM"))
+        .map(|n| Sacrifice {
+            ql: num(n, "ql"),
+            default_item: num(n, "default_item_id"),
+            special: [num(n, "special_item_id1"), num(n, "special_item_id2")],
+            npc: text(n, "significant_npc"),
+        })
+        .collect())
+}
+
+/// One `<ITEM>` of `zquestitem.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QItem {
+    pub id: u32,
+    pub name: String,
+    /// The English `QITEM_DESC_<id>`; empty where the data has Korean only.
+    pub desc: String,
+    pub kind: String,
+    /// `level` (**observed**: 5/10/15/20 on the four pages, else 0).
+    pub level: u32,
+    pub price: u32,
+    /// `secrifice="1"`: may go into a sacrifice slot.
+    pub sacrifice: bool,
+}
+
+/// Quest items by id.
+#[derive(Clone, Default, Debug)]
+pub struct QItems(pub BTreeMap<u32, QItem>);
+
+/// English names (**inferred** translations) of the quest items whose `QITEM_NAME_<id>` is Korean
+/// in `strings.xml` and in all ten locale directories (none has an English name for them), plus
+/// 210001, which has no string at all (named after its `monbible` type).
+const KOREAN_NAMES: [(u32, &str); 20] = [
+    (200005, "Small Skull"),
+    (200006, "Large Skull"),
+    (200007, "Mysterious Skull"),
+    (200010, "Giant Remains"),
+    (200019, "Skeleton Doll"),
+    (200023, "Rabbit Doll"),
+    (200024, "Teddy Bear"),
+    (200025, "Cursed Teddy Bear"),
+    (200028, "Devil's Dictionary"),
+    (200029, "Scryder's Roster, Part 1"),
+    (200030, "Scryder's Roster, Part 2"),
+    (200031, "Blessed Cross"),
+    (200032, "Cursed Cross"),
+    (200034, "Talking Pebble"),
+    (200035, "Ice Crystal"),
+    (200040, "Superion's Sword"),
+    (200041, "Aneramon's Sword"),
+    (200042, "Lich's Tail"),
+    (200043, "Pampow's Ice Sword"),
+    (210001, "Monster Bible"),
+];
+
+impl QItems {
+    pub fn parse(items: &str, strings: &str) -> Result<Self, String> {
+        let strs: HashMap<String, String> = doc(strings)?
+            .descendants()
+            .filter(|n| n.has_tag_name("STR"))
+            .filter_map(|n| Some((n.attribute("id")?.to_owned(), n.text()?.trim().to_owned())))
+            .collect();
+        Ok(Self(
+            doc(items)?
+                .descendants()
+                .filter(|n| n.has_tag_name("ITEM"))
+                .map(|n| {
+                    let id = num(n, "id");
+                    // the HUD font has no Hangul: only ASCII strings are used
+                    let ascii = |k: &str| strs.get(&format!("{k}_{id}")).filter(|v| v.is_ascii());
+                    let name = ascii("QITEM_NAME")
+                        .cloned()
+                        .or_else(|| {
+                            let k = KOREAN_NAMES.iter().find(|k| k.0 == id)?;
+                            Some(k.1.to_owned())
+                        })
+                        .unwrap_or_else(|| format!("item {id}"));
+                    let item = QItem {
+                        id,
+                        name,
+                        desc: ascii("QITEM_DESC").cloned().unwrap_or_default(),
+                        kind: text(n, "type"),
+                        level: num(n, "level"),
+                        price: num(n, "price"),
+                        sacrifice: num(n, "secrifice") == 1,
+                    };
+                    (id, item)
+                })
+                .collect(),
+        ))
+    }
+
+    pub fn name(&self, id: u32) -> String {
+        self.0
+            .get(&id)
+            .map_or_else(|| format!("item {id}"), |i| i.name.clone())
+    }
 }
 
 /// `droptable.xml`: set name -> quest level -> (item id, rate). Sets listed twice under one
@@ -332,6 +464,17 @@ pub struct Catalog {
     scenarios: Vec<ScenarioDef>,
     challenges: Vec<Challenge>,
     npcs: Npcs,
+    sacrifice: Vec<Sacrifice>,
+    pub items: QItems,
+}
+
+/// What a scenario costs and what [`Catalog::admit`] lets through.
+#[derive(Debug, PartialEq)]
+pub struct Admit {
+    /// The scenario that will be played (a sacrifice pair switches to its special scenario).
+    pub scenario: String,
+    /// Quest items the start consumes.
+    pub spend: Vec<u32>,
 }
 
 impl Catalog {
@@ -341,13 +484,19 @@ impl Catalog {
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
                 .map_err(|e| format!("{p}: {e}"))
         };
-        Self::parse(
+        let mut c = Self::parse(
             &read("system/questmap.xml")?,
             &read("system/survivalmap.xml")?,
             &read("system/scenario.xml")?,
             &read("system/scenario2.xml")?,
             &read("system/npc.xml")?,
-        )
+            &read("system/sacrificetable.xml")?,
+        )?;
+        c.items = QItems::parse(
+            &read("system/zquestitem.xml")?,
+            &read("system/strings.xml")?,
+        )?;
+        Ok(c)
     }
 
     pub fn parse(
@@ -356,6 +505,7 @@ impl Catalog {
         scenario: &str,
         scenario2: &str,
         npc: &str,
+        sacrifice: &str,
     ) -> Result<Self, String> {
         Ok(Self {
             mapsets: parse_mapsets(questmap)?,
@@ -363,6 +513,8 @@ impl Catalog {
             scenarios: parse_scenarios(scenario)?,
             challenges: parse_challenges(scenario2)?,
             npcs: parse_npcs(npc)?,
+            sacrifice: parse_sacrifice(sacrifice)?,
+            items: QItems::default(),
         })
     }
 
@@ -377,48 +529,128 @@ impl Catalog {
         let surv = self
             .survival
             .iter()
-            .filter(|m| self.survival_ok(m))
             .map(|m| format!("Survival {}", m.title));
         std.chain(ch).chain(surv).collect()
     }
 
-    /// Survival needs the NPC sets of the standard quests of its map set.
-    fn survival_ok(&self, m: &MapSet) -> bool {
+    fn find(&self, name: &str) -> Option<Found<'_>> {
+        let want = name.trim().to_ascii_lowercase();
+        let by_name = |t: &str| t.to_ascii_lowercase() == want;
+        let id = Some(want.clone());
         self.scenarios
             .iter()
-            .any(|s| s.mapset == m.title && s.id.is_none())
+            .find(|s| by_name(&s.title) || s.id.map(|i| i.to_string()) == id)
+            .map(Found::Scenario)
+            .or_else(|| {
+                let c = self.challenges.iter();
+                let mut c = c.filter(|c| {
+                    by_name(&format!("Challenge {}", c.id)) || c.id.to_string() == want
+                });
+                c.next().map(Found::Challenge)
+            })
+            .or_else(|| {
+                let mut m = self.survival.iter();
+                let m = m.find(|m| by_name(&format!("Survival {}", m.title)));
+                m.map(Found::Survival)
+            })
     }
 
     /// The plan of scenario `name`. `dice` picks a `<MAP dice>` of a `scenario.xml` scenario
-    /// (default: the last one, the longest route); `seed` drives the random NPC picks.
+    /// (`None`: roll it); `seed` drives the roll and the random NPC picks.
     pub fn plan(&self, name: &str, dice: Option<u32>, seed: u32) -> Result<Plan, String> {
-        let want = name.trim().to_ascii_lowercase();
-        let by_name = |t: &str| t.to_ascii_lowercase() == want;
-        if let Some(def) = self
-            .scenarios
-            .iter()
-            .find(|s| by_name(&s.title) || s.id.map(|i| i.to_string()) == Some(want.clone()))
-        {
-            return self.plan_standard(def, dice, seed);
+        match self.find(name) {
+            Some(Found::Scenario(def)) => self.plan_standard(def, dice, seed),
+            Some(Found::Challenge(c)) => Ok(Self::plan_challenge(c)),
+            Some(Found::Survival(m)) => self.plan_survival(m, seed),
+            None => Err(format!(
+                "unknown scenario {name:?}; known: {}",
+                self.names().join(", ")
+            )),
         }
-        if let Some(c) = self
-            .challenges
+    }
+
+    /// The special scenario whose two `SACRI_ITEM`s are exactly the items in `slots`.
+    pub fn special_for(&self, slots: &[u32]) -> Option<String> {
+        let sorted = |v: &[u32]| {
+            let mut v: Vec<u32> = v.iter().copied().filter(|&i| i != 0).collect();
+            v.sort();
+            v
+        };
+        let slots = sorted(slots);
+        self.scenarios
             .iter()
-            .find(|c| by_name(&format!("Challenge {}", c.id)) || c.id.to_string() == want)
-        {
-            return Ok(Self::plan_challenge(c));
+            .find(|d| d.id.is_some() && sorted(&d.sacri) == slots)
+            .map(|d| d.title.clone())
+    }
+
+    /// The boss `sacrificetable.xml` says a special item draws (`significant_npc`).
+    pub fn draws(&self, item: u32) -> Option<&str> {
+        let row = self.sacrifice.iter().find(|r| r.special.contains(&item));
+        row.map(|r| r.npc.as_str())
+    }
+
+    /// May `name` (`None`: the first scenario) start with the quest items in the two sacrifice
+    /// slots `sac` (0 = empty), out of the player's `have`, at character `level`?
+    ///
+    /// Rules: a slot pair that is a special scenario's two `SACRI_ITEM`s (**observed**,
+    /// `scenario.xml`) switches to that scenario; a standard quest of level n >= 2 costs the
+    /// `default_item_id` of the `sacrificetable.xml` row of level n (the Torn Pages; levels 0 and 1
+    /// are free, **observed**: their `default_item_id` is 0); a page needs its `level` (5/10/15/20)
+    /// and a challenge quest its `level_limit` (*inferred*: as the character level). Only
+    /// `secrifice="1"` items go into a slot. The start spends the items (*inferred*).
+    pub fn admit(
+        &self,
+        name: Option<&str>,
+        sac: [u32; 2],
+        have: &BTreeMap<u32, u32>,
+        level: u32,
+    ) -> Result<Admit, String> {
+        let slots: Vec<u32> = sac.into_iter().filter(|&i| i != 0).collect();
+        for &id in &slots {
+            let want = slots.iter().filter(|&&s| s == id).count() as u32;
+            if !self.items.0.get(&id).is_some_and(|i| i.sacrifice) {
+                return Err(format!("{} cannot be sacrificed", self.items.name(id)));
+            }
+            if have.get(&id).copied().unwrap_or(0) < want {
+                return Err(format!("you do not have {} x{want}", self.items.name(id)));
+            }
         }
-        if let Some(m) = self
-            .survival
-            .iter()
-            .find(|m| by_name(&format!("Survival {}", m.title)))
-        {
-            return self.plan_survival(m, seed);
+        let title = match (self.special_for(&slots), name) {
+            (Some(t), _) => t,
+            (None, Some(n)) => n.to_owned(),
+            (None, None) => self.names().swap_remove(0),
+        };
+        let (items, need_level) = match self.find(&title) {
+            Some(Found::Scenario(s)) if s.id.is_some() => (s.sacri.clone(), 0),
+            Some(Found::Scenario(s)) => {
+                let page = self
+                    .sacrifice
+                    .iter()
+                    .find(|r| r.ql == s.ql && r.default_item != 0);
+                let page = page.map_or(0, |r| r.default_item);
+                let level = self.items.0.get(&page).map_or(0, |i| i.level);
+                (if page == 0 { vec![] } else { vec![page] }, level)
+            }
+            Some(Found::Challenge(c)) => (vec![], c.level),
+            Some(Found::Survival(_)) => (vec![], 0),
+            None => return Err(format!("unknown scenario {title:?}")),
+        };
+        let mut left = slots;
+        for it in &items {
+            let at = left.iter().position(|s| s == it);
+            let Some(at) = at else {
+                let names: Vec<String> = items.iter().map(|&i| self.items.name(i)).collect();
+                return Err(format!("{title} needs {}", names.join(" + ")));
+            };
+            left.remove(at);
         }
-        Err(format!(
-            "unknown scenario {name:?}; known: {}",
-            self.names().join(", ")
-        ))
+        if level < need_level {
+            return Err(format!("{title} needs level {need_level}"));
+        }
+        Ok(Admit {
+            scenario: title,
+            spend: items,
+        })
     }
 
     fn plan_standard(
@@ -427,13 +659,21 @@ impl Catalog {
         dice: Option<u32>,
         seed: u32,
     ) -> Result<Plan, String> {
+        let mut rng = seed | 1;
         let map = match dice {
             Some(d) => def
                 .maps
                 .iter()
                 .find(|m| m.dice == d)
                 .ok_or(format!("{}: no dice {d}", def.title))?,
-            None => def.maps.last().ok_or(format!("{}: no maps", def.title))?,
+            None if def.maps.is_empty() => return Err(format!("{}: no maps", def.title)),
+            // the roll: every retail scenario has one `<MAP>` per face 1..=6 of the die
+            None => {
+                // small seeds give alike first xorshift outputs: scramble first
+                let mut roll = seed.wrapping_mul(0x9E37_79B1) | 1;
+                next(&mut roll);
+                &def.maps[next(&mut roll) as usize % def.maps.len()]
+            }
         };
         let set = self
             .mapsets
@@ -449,7 +689,6 @@ impl Catalog {
             "{}: no route to sector {}",
             def.title, map.key_sector
         ))?;
-        let mut rng = seed | 1;
         let sectors = route
             .iter()
             .enumerate()
@@ -465,6 +704,7 @@ impl Catalog {
                     bp: 0,
                     groups: self.groups(&map.sets, def.ql, boss.as_deref(), &mut rng),
                     jaco: boss.and(map.jaco.clone()),
+                    caps: (set.sectors[s].melee_spawn, set.sectors[s].range_spawn),
                 }
             })
             .collect();
@@ -475,6 +715,8 @@ impl Catalog {
             ql: def.ql,
             players: 1,
             reward_item: 0,
+            dice: map.dice,
+            good_secs: 0,
             sectors,
         })
     }
@@ -505,6 +747,8 @@ impl Catalog {
                     })
                     .collect(),
                 jaco: None,
+                // `challengequest` has no `melee_spawn`/`range_spawn`: no cap
+                caps: (u32::MAX, u32::MAX),
             })
             .collect();
         Plan {
@@ -514,23 +758,33 @@ impl Catalog {
             ql: 0,
             players: c.players.max(1),
             reward_item: c.reward_item,
+            dice: 0,
+            good_secs: c.good_secs,
             sectors,
         }
     }
 
     /// Survival: the loop of the survival map set (each sector's first link leads on), played
-    /// [`SURVIVAL_SECTORS`] times with the NPC sets of standard quest level 1, 2, ... 5.
+    /// [`SURVIVAL_SECTORS`] times with the NPC sets of standard quest level 1, 2, ... 5. A map
+    /// set with no standard quests of its own (Dungeon) gets [`skeleton_sets`] and the XP/BP of
+    /// the first map set's quest of that level.
     fn plan_survival(&self, m: &MapSet, seed: u32) -> Result<Plan, String> {
         let mut rng = seed | 1;
         let mut at = 0;
         let mut sectors = Vec::new();
         for i in 0..SURVIVAL_SECTORS {
             let ql = (1 + i as u32 / 2).min(5);
-            let def = self
-                .scenarios
-                .iter()
-                .find(|s| s.mapset == m.title && s.id.is_none() && s.ql == ql)
-                .ok_or(format!("no standard quest level {ql} for {}", m.title))?;
+            let std = |own: bool| {
+                let mut quests = self.scenarios.iter();
+                quests.find(|s| s.id.is_none() && s.ql == ql && (!own || s.mapset == m.title))
+            };
+            let def = std(true).or_else(|| std(false));
+            let def = def.ok_or(format!("no standard quest level {ql} for {}", m.title))?;
+            let sets = if def.mapset == m.title {
+                def.maps[0].sets.clone()
+            } else {
+                skeleton_sets(ql)
+            };
             let next = m.sectors[at]
                 .links
                 .first()
@@ -551,8 +805,9 @@ impl Catalog {
                 .filter(|_| i + 1 < SURVIVAL_SECTORS),
                 xp: def.xp / SURVIVAL_SHARE,
                 bp: def.bp / SURVIVAL_SHARE,
-                groups: self.groups(&def.maps[0].sets, ql, None, &mut rng),
+                groups: self.groups(&sets, ql, None, &mut rng),
                 jaco: None,
+                caps: (m.sectors[at].melee_spawn, m.sectors[at].range_spawn),
             });
             at = next.ok_or(format!(
                 "{}: sector {} links nowhere",
@@ -566,6 +821,8 @@ impl Catalog {
             ql: 3,
             players: 1,
             reward_item: 0,
+            dice: 0,
+            good_secs: 0,
             sectors,
         })
     }
@@ -619,11 +876,6 @@ impl Catalog {
     }
 }
 
-/// The names for the menu's scenario stepper (first = default); empty if the files are missing.
-pub fn scenario_names(vfs: &crate::mrs::Vfs) -> Vec<String> {
-    Catalog::load(vfs).map(|c| c.names()).unwrap_or_default()
-}
-
 /// xorshift32.
 fn next(s: &mut u32) -> u32 {
     *s ^= *s << 13;
@@ -659,6 +911,21 @@ fn set_npc(set: &str) -> Option<String> {
         _ => base,
     };
     Some((if ql == 0 { weak } else { base } + n).to_string())
+}
+
+enum Found<'a> {
+    Scenario(&'a ScenarioDef),
+    Challenge(&'a Challenge),
+    Survival(&'a MapSet),
+}
+
+/// NPC sets of Survival Dungeon (*inferred*). No scenario, `questmap.xml` quest or `npc.xml` entry
+/// names a Dungeon NPC set, but the skeleton family (ids 31..39, `S` sets) is the one family no
+/// scenario uses, so it stands in: the regular/veteran/elite members 1..=4 (5 from level 2, 6, the
+/// Lich, from level 4), like the 4-5 members the goblin sets list per level.
+fn skeleton_sets(ql: u32) -> Vec<String> {
+    let members = 4 + u32::from(ql >= 2) + u32::from(ql >= 4);
+    (1..=members).map(|n| format!("S{ql}{n}")).collect()
 }
 
 /// Sector indices of the shortest route `from` -> `to` over the links (breadth first).
@@ -734,6 +1001,9 @@ pub struct Stage {
     /// Paid when this sector is cleared (challenge quest, survival).
     pub xp: u32,
     pub bp: u32,
+    /// Most NPCs of the kind (melee, ranged) alive at once: the sector's `melee_spawn` /
+    /// `range_spawn`.
+    pub caps: (u32, u32),
     pub groups: Vec<Group>,
     pub jaco: Option<Jaco>,
 }
@@ -750,6 +1020,10 @@ pub struct Plan {
     pub players: u32,
     /// Item granted on a cleared challenge quest (a shop item id, 0 = none).
     pub reward_item: u32,
+    /// The `<MAP dice>` rolled or chosen (0: the quest has no dice).
+    pub dice: u32,
+    /// Recommended clear time, seconds (challenge quest; 0: none).
+    pub good_secs: u32,
     pub sectors: Vec<Stage>,
 }
 
@@ -773,8 +1047,10 @@ struct Pending {
 pub struct Quest {
     plan: Plan,
     drops: Drops,
-    /// Quest item names (`QITEM_NAME_<id>` of `strings.xml`) and world item amounts.
-    names: HashMap<u32, String>,
+    /// Quest item names and the NPCs that shoot (counted against `Stage::caps`).
+    items: QItems,
+    ranged: HashSet<String>,
+    /// World item amounts.
     world: HashMap<String, (ItemKind, u32)>,
     stage: usize,
     phase: Phase,
@@ -791,27 +1067,31 @@ pub struct Quest {
     party: u32,
     /// Seconds the player has been dead.
     dead_t: f32,
+    /// Seconds since the quest began (against `Plan::good_secs`).
+    elapsed: f32,
 }
 
 impl Quest {
-    pub fn new(vfs: &crate::mrs::Vfs, plan: Plan, bots: usize, seed: u32) -> Result<Self, String> {
+    pub fn new(
+        vfs: &crate::mrs::Vfs,
+        cat: &Catalog,
+        plan: Plan,
+        bots: usize,
+        seed: u32,
+    ) -> Result<Self, String> {
         let read = |p: &str| {
             vfs.read(p)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
                 .map_err(|e| format!("{p}: {e}"))
         };
-        let strings = read("system/strings.xml")?;
-        let names = doc(&strings)?
-            .descendants()
-            .filter_map(|n| {
-                let id = n
-                    .attribute("id")?
-                    .strip_prefix("QITEM_NAME_")?
-                    .parse()
-                    .ok()?;
-                Some((id, n.text()?.trim().to_owned()))
-            })
-            .collect();
+        if plan.dice > 0 {
+            println!(
+                "quest: dice roll {} of {DICE_SIDES}: {} over {} sectors",
+                plan.dice,
+                plan.name,
+                plan.sectors.len()
+            );
+        }
         let items = read("system/worlditem.xml")?;
         let world = doc(&items)?
             .descendants()
@@ -838,7 +1118,8 @@ impl Quest {
         Ok(Self {
             plan,
             drops: parse_drops(&read("system/droptable.xml")?)?,
-            names,
+            items: cat.items.clone(),
+            ranged: cat.npcs.ranged.clone(),
             world,
             stage: 0,
             phase: Phase::Intro,
@@ -853,6 +1134,7 @@ impl Quest {
             banner: String::new(),
             party: 1 + bots as u32,
             dead_t: 0.0,
+            elapsed: 0.0,
         })
     }
 
@@ -875,12 +1157,8 @@ impl Quest {
         }
     }
 
-    /// The `strings.xml` name; the HUD font has no Hangul, so those show the id.
     fn item_name(&self, id: u32) -> String {
-        match self.names.get(&id) {
-            Some(n) if n.is_ascii() => n.clone(),
-            _ => format!("item {id}"),
-        }
+        self.items.name(id)
     }
 
     /// Queues the current sector's NPCs, the boss first, at the map's `spawn_npc_*` dummies.
@@ -983,7 +1261,15 @@ impl Plugin for QuestPlugin {
         let on = resource_exists::<Quest>;
         app.add_systems(PostStartup, start.run_if(on)).add_systems(
             Update,
-            (allies, kills, drive, collect, banner, change_sector)
+            (
+                allies,
+                kills,
+                drive,
+                collect,
+                banner,
+                change_sector,
+                wait_room,
+            )
                 .chain()
                 .run_if(on),
         );
@@ -1040,10 +1326,21 @@ fn drive(
         "SECTOR {stage_n}/{stages}  NPC {}",
         live + quest.queue.len()
     );
+    if quest.plan.dice > 0 {
+        clock.note += &format!("  DICE {}", quest.plan.dice);
+    }
+    if quest.plan.good_secs > 0 {
+        clock.note += &format!(
+            "  TIME {}/{}",
+            mmss(quest.elapsed),
+            mmss(quest.plan.good_secs as f32)
+        );
+    }
     let p = player.single().ok();
     if matches!(quest.phase, Phase::Won | Phase::Lost) {
         return;
     }
+    quest.elapsed += dt;
     quest.dead_t = if p.is_some_and(|p| p.1) {
         quest.dead_t + dt
     } else {
@@ -1072,7 +1369,17 @@ fn drive(
         }
         Phase::Fight => {
             quest.banner.clear();
-            if live < MAX_LIVE && quest.since_spawn >= SPAWN_GAP && !quest.queue.is_empty() {
+            // a kind (melee, ranged) has at most the sector's `melee_spawn`/`range_spawn` alive
+            let room = quest.queue.last().is_some_and(|p| {
+                let ranged = quest.ranged.contains(&p.spawn.id);
+                let alive = npcs
+                    .iter()
+                    .filter(|(n, dead)| !dead && quest.ranged.contains(&n.id) == ranged)
+                    .count() as u32;
+                let caps = quest.stage().caps;
+                alive < if ranged { caps.1 } else { caps.0 }
+            });
+            if room && quest.since_spawn >= SPAWN_GAP {
                 let next = quest.queue.pop().unwrap();
                 spawn.write(next.spawn);
                 quest.since_spawn = 0.0;
@@ -1197,8 +1504,9 @@ fn cleared(
         reward.write(Reward { xp, bounty: bp });
     }
     println!(
-        "quest: sector {} cleared ({} kills, reward {xp} XP {bp} BP)",
+        "quest: sector {} cleared at {} ({} kills, reward {xp} XP {bp} BP)",
         quest.stage + 1,
+        mmss(quest.elapsed),
         quest.kills
     );
     if quest.last() {
@@ -1244,6 +1552,19 @@ fn end(
             let id = quest.plan.reward_item;
             quest.add_loot(id);
         }
+        let good = quest.plan.good_secs as f32;
+        if good > 0.0 && quest.elapsed <= good {
+            let sum = |f: fn(&Stage) -> u32| {
+                quest.plan.sectors.iter().map(f).sum::<u32>() as f32 * GOOD_TIME_BONUS
+            };
+            let (xp, bounty) = (sum(|s| s.xp) as u32, sum(|s| s.bp) as u32);
+            reward.write(Reward { xp, bounty });
+            println!(
+                "quest: cleared in {} within the good time {}: bonus {xp} XP {bounty} BP",
+                mmss(quest.elapsed),
+                mmss(good)
+            );
+        }
     }
     loot.write(QuestLoot {
         items: quest.loot.clone(),
@@ -1268,6 +1589,10 @@ fn end(
     );
     clock.over = Some(if won { "QUEST CLEARED" } else { "QUEST FAILED" }.into());
     freeze(commands, vtime, true);
+}
+
+fn mmss(secs: f32) -> String {
+    format!("{}:{:02}", secs as u32 / 60, secs as u32 % 60)
 }
 
 /// A slain NPC rolls its drop table where it fell.
@@ -1348,7 +1673,10 @@ fn kills(
                 npc.id
             ),
         }
-        println!("quest: {} dropped {item}", npc.id);
+        println!(
+            "quest: {} dropped {item} at ({:.1}, {:.1}) t={:.0}",
+            npc.id, at.x, at.z, quest.elapsed
+        );
     }
 }
 
@@ -1428,6 +1756,45 @@ fn banner(
                 },
             ));
         });
+}
+
+/// During a sector's intro the player waits at the map's `wait_pos_NN` dummy (**observed**: one
+/// per quest map, on a spot overlooking the hall, far from the `spawn_solo`s; the use is
+/// *inferred* from the name) and drops to the first `spawn_solo` when the NPCs start to come.
+/// A `--at` / `--yaw` start is left alone.
+fn wait_room(
+    quest: Res<Quest>,
+    level: Res<Level>,
+    setup: Option<Res<PlayerSetup>>,
+    mut player: Query<(&mut Transform, &mut Intent, &mut Motor), With<Player>>,
+    mut seen: Local<Option<(usize, Phase)>>,
+) {
+    let now = (quest.stage, quest.phase);
+    if *seen == Some(now) || setup.is_some_and(|s| s.at.is_some() || s.yaw.is_some()) {
+        return;
+    }
+    let Ok((mut tf, mut intent, mut motor)) = player.single_mut() else {
+        return;
+    };
+    *seen = Some(now);
+    let spot = match now.1 {
+        Phase::Intro => level
+            .map
+            .dummies
+            .iter()
+            .find(|d| d.name.to_ascii_lowercase().starts_with("wait_pos"))
+            .map(|d| {
+                let pos = Vec3::from(to_bevy(d.pos)) * SCALE;
+                (pos, yaw_of(Vec3::from(to_bevy(d.dir))))
+            }),
+        Phase::Fight => level.spawn_points().first().map(|&(p, d)| (p, yaw_of(d))),
+        _ => None,
+    };
+    if let Some((pos, yaw)) = spot {
+        tf.translation = pos + Vec3::Y * 0.1;
+        intent.yaw = yaw;
+        motor.vel = Vec3::ZERO;
+    }
 }
 
 /// Swaps the map for the next sector: drop everything of the old one, load the new `Level` and
@@ -1514,6 +1881,7 @@ mod tests {
         </STANDARD_SCENARIO>
         <SPECIAL_SCENARIO id="11" title="Goblin King" QL="1" DC="1" mapset="Mansion" XP="5000" BP="500">
           <SACRI_ITEM itemid="200008" />
+          <SACRI_ITEM itemid="200018" />
           <MAP dice="1" key_sector="102" key_npc="16" boss="true"><NPCSET_ARRAY>G61</NPCSET_ARRAY>
             <JACO count="2" tick="5" min_npc="0" max_npc="13"><NPC npcid="2011" rate="0.2" /><NPC npcid="2012" rate="0.3" /></JACO></MAP>
         </SPECIAL_SCENARIO></XML>"#;
@@ -1522,9 +1890,23 @@ mod tests {
         <SECTOR map="G_Easy_6" xp="1500" bp="50"><SPAWN postag="boss" num="1" actor="robot" drop="" adjustplayernum="true"/></SECTOR>
         </SCENARIO></XML>"#;
     const NPC: &str = r#"<XML><NPC id="11" offensetype="1"/><NPC id="12" offensetype="2"/><NPC id="13" offensetype="1"/><NPC id="16" offensetype="1"/></XML>"#;
+    const SACRIFICE: &str = r#"<XML>
+        <ITEM map="" ql="1" default_item_id="0" special_item_id1="200008" special_item_id2="0" significant_npc="goblin chief" />
+        <ITEM map="" ql="2" default_item_id="200001" special_item_id1="0" special_item_id2="0" significant_npc="" /></XML>"#;
+    const QITEMS: &str = r#"<XML>
+        <ITEM id="200001" type="page" level="5" price="100" secrifice="1"/>
+        <ITEM id="200008" type="skull" level="0" price="40" secrifice="1"/>
+        <ITEM id="200011" type="fresh" level="0" price="10" secrifice="0"/>
+        <ITEM id="200018" type="necklace" level="0" price="100" secrifice="1"/>
+        <ITEM id="200019" type="doll" level="0" price="200" secrifice="1"/></XML>"#;
+    const STRINGS: &str = r#"<XML><STR id="QITEM_NAME_200001">Torn Page I</STR>
+        <STR id="QITEM_NAME_200008">Goblin Skull</STR><STR id="QITEM_NAME_200011">Ore Fragment</STR>
+        <STR id="QITEM_NAME_200018">Grimsk's Necklace</STR><STR id="QITEM_NAME_200019">스켈레톤 인형</STR></XML>"#;
 
     fn catalog() -> Catalog {
-        Catalog::parse(MAPS, MAPS, SCENARIO, CHALLENGE, NPC).unwrap()
+        let mut c = Catalog::parse(MAPS, MAPS, SCENARIO, CHALLENGE, NPC, SACRIFICE).unwrap();
+        c.items = QItems::parse(QITEMS, STRINGS).unwrap();
+        c
     }
 
     #[test]
@@ -1604,21 +1986,102 @@ mod tests {
         assert_eq!(set_npc("X11"), None);
     }
 
+    #[test]
+    fn quest_item_names_are_english() {
+        let c = catalog();
+        assert_eq!(c.items.name(200008), "Goblin Skull");
+        // Korean in the strings: the inferred table, else the id
+        assert_eq!(c.items.name(200019), "Skeleton Doll");
+        assert_eq!(c.items.name(999), "item 999");
+    }
+
+    #[test]
+    fn sacrifice_unlocks_levels_and_special_scenarios() {
+        let c = catalog();
+        let have = BTreeMap::from([(200001, 1), (200008, 1), (200018, 1)]);
+        // QL2 costs the page, and the page needs level 5
+        let page = [200001, 0];
+        let std = |sac, level| c.admit(Some("Quest Mansion QL2"), sac, &have, level);
+        assert_eq!(std(page, 5).unwrap().spend, [200001]);
+        assert_eq!(std(page, 4), Err("Quest Mansion QL2 needs level 5".into()));
+        assert_eq!(
+            std([0, 0], 9),
+            Err("Quest Mansion QL2 needs Torn Page I".into())
+        );
+        // the special pair, in either order, switches the scenario
+        let a = c.admit(Some("Quest Mansion QL2"), [200018, 200008], &have, 1);
+        assert_eq!(a.unwrap().scenario, "Goblin King");
+        // a lone skull is not the pair; the special scenario by name needs both
+        let lone = c.admit(Some("Goblin King"), [200008, 0], &have, 1);
+        assert_eq!(
+            lone,
+            Err("Goblin King needs Goblin Skull + Grimsk's Necklace".into())
+        );
+        assert_eq!(c.draws(200008), Some("goblin chief"));
+        // items must be owned and sacrificable; the challenge needs its level
+        assert!(c.admit(None, [200011, 0], &have, 1).is_err());
+        assert!(c.admit(None, [200019, 0], &have, 1).is_err());
+        assert!(c.admit(Some("Challenge 101"), [0, 0], &have, 1).is_ok());
+    }
+
+    #[test]
+    fn dice_roll_picks_a_map_and_is_seeded() {
+        let c = catalog();
+        let name = "Quest Mansion QL2";
+        let rolls: HashSet<u32> = (1..40)
+            .map(|s| c.plan(name, None, s).unwrap().dice)
+            .collect();
+        assert_eq!(rolls, HashSet::from([1, 2]));
+        let (a, b) = (
+            c.plan(name, None, 5).unwrap(),
+            c.plan(name, None, 5).unwrap(),
+        );
+        assert_eq!(a.dice, b.dice);
+        assert_eq!(c.plan(name, Some(1), 5).unwrap().dice, 1);
+        assert!(c.plan(name, Some(6), 5).is_err());
+    }
+
+    #[test]
+    fn challenge_keeps_its_recommended_time_and_dungeon_survival_uses_skeletons() {
+        let c = catalog();
+        assert_eq!(c.plan("Challenge 101", None, 1).unwrap().good_secs, 480);
+        assert_eq!(skeleton_sets(1), ["S11", "S12", "S13", "S14"]);
+        assert_eq!(set_npc("S13").as_deref(), Some("33"));
+    }
+
     /// With the retail extract (`.local/extract`): every scenario plans, every sector map exists.
     #[test]
     fn retail_scenarios_plan() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".local/extract");
         let read = |p: &str| std::fs::read_to_string(dir.join(p));
-        let (Ok(a), Ok(b), Ok(c), Ok(d), Ok(e)) = (
+        let (Ok(a), Ok(b), Ok(c), Ok(d), Ok(e), Ok(f), Ok(g), Ok(h)) = (
             read("system/questmap.xml"),
             read("system/survivalmap.xml"),
             read("system/scenario.xml"),
             read("system/scenario2.xml"),
             read("system/npc.xml"),
+            read("system/sacrificetable.xml"),
+            read("system/zquestitem.xml"),
+            read("system/strings.xml"),
         ) else {
             return;
         };
-        let cat = Catalog::parse(&a, &b, &c, &d, &e).unwrap();
+        let mut cat = Catalog::parse(&a, &b, &c, &d, &e, &f).unwrap();
+        cat.items = QItems::parse(&g, &h).unwrap();
+        // all 45 + 1 quest items have an English name
+        assert!(
+            cat.items
+                .0
+                .values()
+                .all(|i| i.name.is_ascii() && !i.name.starts_with("item "))
+        );
+        // the Goblin King's two items open it
+        let have = BTreeMap::from([(200008, 1), (200018, 1)]);
+        let king = cat.admit(None, [200008, 200018], &have, 1).unwrap();
+        assert_eq!(
+            (king.scenario.as_str(), king.spend.len()),
+            ("Goblin King", 2)
+        );
         let names = cat.names();
         assert!(names.len() >= 30, "{names:?}");
         for n in names {
@@ -1644,12 +2107,15 @@ mod tests {
             ql: 0,
             players: 1,
             reward_item: 0,
+            dice: 0,
+            good_secs: 0,
             sectors: vec![],
         };
         let quest = Quest {
             plan,
             drops: Drops::default(),
-            names: HashMap::from([(200011, "Ore Fragment".to_owned())]),
+            items: QItems::parse(QITEMS, STRINGS).unwrap(),
+            ranged: HashSet::new(),
             world: HashMap::new(),
             stage: 0,
             phase: Phase::Fight,
@@ -1664,6 +2130,7 @@ mod tests {
             banner: String::new(),
             party: 1,
             dead_t: 0.0,
+            elapsed: 0.0,
         };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)

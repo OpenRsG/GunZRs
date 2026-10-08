@@ -1286,7 +1286,7 @@ fn settle(
     war.delta = Some(delta);
     rewards.write(Reward {
         xp: gain.xp / 2,
-        bounty: 0,
+        ..default()
     });
 }
 

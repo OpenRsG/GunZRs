@@ -1479,10 +1479,11 @@ fn finish(
                 .as_deref()
                 .map_or(String::new(), |w| format!(" ({w})"))
         );
-        if p.xp + p.bounty > 0 {
+        if p.xp + p.bounty + p.medals > 0 {
             reward.write(Reward {
                 xp: p.xp,
                 bounty: p.bounty,
+                medals: p.medals,
             });
         }
         blitz.payout = Some(p);

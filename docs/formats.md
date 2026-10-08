@@ -898,9 +898,12 @@ the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu 
   minute up to 20, the MVP of a side gets +15 % (winners) / +45 % (losers) of XP, bounty and medals (**observed**;
   message 2120 "You have won additional $1% of XP/BP/Medal" is its text). **Inferred**: XP and bounty are
   `baseExp` / `baseBounty` (50 each) per full minute played, the same for both sides; a draw pays like a loss;
-  the MVP is the player with the most honor earned on the side. XP and bounty are paid once through `game::Reward`
-  (the profile also pays its usual match result on top), the medals are shown and logged only: the profile has no
-  medal currency (the retail medal shop, `interface/default/medalshop.xml`, sells for it). `minPlayCount`
+  the MVP is the player with the most honor earned on the side. XP, bounty and medals are paid once through
+  `game::Reward` (the profile also pays its usual match result on top); the profile stores the medals (`medals=`)
+  and shows them on its header. **Impossible**: a medal shop. The data has `interface/default/medalshop.xml` (UI
+  frames only), `SELL_GROUP` 3 in the `gshop.xml` header comment, "medal" strings, and no price in medals anywhere
+  (`gshop.xml`'s `PRICE` is bounty/cash, `eventshopitem.xml` is an event-coin shop, `zitem.xml` has no medal price),
+  so nothing can be bought with medals. `minPlayCount`
   (a newcomer bonus counted in games played), the waiting medals (matchmaking) and `PENALTY` / message 2112 (a
   quit is the application closing) have no offline counterpart.
 - **Minimap** (`ui::floor_plan`, `ui::minimap`, test `plan_fills_the_floor`): no retail minimap texture exists
@@ -1568,7 +1571,8 @@ can hold is described in "Clans" below.
 - Levels 1..99 (`MAX_LEVEL`); going from level L to L+1 costs `100 x L` XP. Rank code =
   `ADR_NAME` of rank `1 + (level-1) x 34 / 98`.
 - Kill: +10 XP, +10 bounty (scaled from the daily missions). Not in training. Match end: VICTORY +50/+50,
-  DRAW +25/+25, DEFEAT +10/+10. A `game::Reward { xp, bounty }` message pays anything else (quest clears).
+  DRAW +25/+25, DEFEAT +10/+10. A `game::Reward { xp, bounty, medals }` message pays anything else (quest clears,
+  Blitzkrieg medals).
 - New profile: 20 000 bounty (`gshop.xml` weapons cost 8 100-81 000), the default katana/revolver/rifle
   owned and equipped. Buying needs the level and bounty and costs the permanent `PRICE`; selling pays
   `sell_bt_price` and needs the item unequipped; melee and the two ranged slots cannot be empty.
@@ -1582,9 +1586,15 @@ can hold is described in "Clans" below.
 `~/.local/share/...`; `%APPDATA%\gunzrs\profile.txt` on Windows), `GUNZ_PROFILE=PATH` overrides it.
 Keys: `name` (default `$USER`), `woman`, `outfit` (`none` or a part-set index), `xp` (total, the level is
 derived), `bounty`, `owned` (zitem ids), `equipped` (9 ids: melee, primary, secondary, item, head,
-chest, hands, legs, feet; 0 = empty), `quest_items` (`zquestitem.xml` `id:count,..`), `clan` (see "Clans"). A corrupt file stops the game instead of being overwritten.
+chest, hands, legs, feet; 0 = empty), `quest_items` (`zquestitem.xml` `id:count,..`), `medals` (Blitzkrieg
+medals earned, shown on the profile header), `rented` (`zitem id:expiry,..`, expiry in Unix seconds; the id is
+also in `owned`), `clan` (see "Clans"). A corrupt file stops the game instead of being overwritten.
+Rentals past their expiry are removed at load (also from the equipment, melee and ranged fall back to the
+starter weapons) with a log line `profile: rental of item N expired and was removed`; the inventory shows the time
+left (`[rented, 2d 5h left]`). A rental cannot be sold (**inferred**).
 Headless `--shot` runs use a throwaway default profile unless `GUNZ_PROFILE` is set. The file is
 rewritten whenever the profile changes (a kill, a purchase, Start).
+Headless shot hooks: `GUNZ_INV_SLOT=N` (9 = quest items) and `GUNZ_INV_SELL=1` (presses SELL on the first row).
 
 ## Clans (`src/clan.rs`)
 
@@ -1814,11 +1824,19 @@ file and all rules are not in the data).
   `xp`/`bp` on each clear (survival: the standard quest's of that level / 4); a cleared challenge adds its
   `reward_item` to the loot. A challenge cleared within `good_time_sec` (HUD `TIME m:ss/m:ss`) pays a further
   25% of the XP/BP its sectors paid (**inferred**: the data gives only the recommended time).
-  `QuestLoot{items}` carries every quest/shop item picked up, once at the end; the profile keeps the quest items
-  (`zquestitem.xml` ids, `quest_items=id:count,..` in `profile.txt`; the inventory page has a "Quest items"
-  category with names, counts and descriptions, English where the data has them) and drops the rest (shop items
-  of the drop tables are rentals, the challenge `reward_item` 3000xxx is a gacha package id that is not in
-  `zitem.xml`).
+  `QuestLoot{items, rented}` carries every quest/shop item picked up, once at the end; the profile keeps the quest
+  items (`zquestitem.xml` ids, `quest_items=id:count,..` in `profile.txt`; the inventory page has a "Quest items"
+  category with names, counts, descriptions and a SELL button) and the rentals (`rented`, below); the challenge
+  `reward_item` 3000xxx is a gacha package id that is not in `zitem.xml`.
+- Rental drops (`droptable.xml` `rent_period`, 3 items x 72 / 168 in the data): **observed** unit is **hours**:
+  the values are 3 and 7 days, `eventshopitem.xml` / `mission.xml` / `gunzplus.xml` name the same kind of
+  number `rent_hour_period` / `renthourperiod` / `*_rent_hour_period` (720 = 30 days), and message 11002 counts
+  "day(s) hour(s)". A pickup with `rent_period` rents the item for that many hours from the wall clock
+  (`std::time::SystemTime`); a rental of an item the profile owns for good changes nothing, one of an item already
+  rented keeps the later expiry.
+- Selling quest items (inventory page, SELL): **inferred** the `zquestitem.xml` `price` is the bounty paid per
+  item (no shop price exists for it, so the shop's `PRICE = 10 x sell_bt_price` ratio has nothing to start from;
+  the port pays `price` as it pays `sell_bt_price`). One item per click; log `shop: sold NAME (ID) for N bounty`.
 
 ### Not supported
 
@@ -1826,9 +1844,9 @@ file and all rules are not in the data).
   (92%) spawn/link dummies (Dungeon_Cavern3 and Nest2 about 57%), so `nav.rs`'s floor graph, which covers every
   map, has to stay as the fallback; one source is simpler, so the quest NPCs keep using it.
 - The quest `spawn.xml`: empty stubs. Scenario `DC`, `sdc` (sacrificetable) and per-NPC `dc`: no meaning in
-  the data. `rent_period` of drops: rentals are not modelled. The gacha `reward_item` (3000xxx) of the
-  challenge quest and the quest-item shop (no shop in the data sells quest items). Online party/lobby behaviour.
-  Selling quest items (`price` is in the data, the inventory page has no sell button).
+  the data. The gacha `reward_item` (3000xxx) of the challenge quest and the quest-item shop (no shop in the
+  data sells quest items). Permanent shop-item drops (`droptable.xml` items of 2xxxxxx / 3xxxxxx without
+  `rent_period`, rate 0.001): dropped, not added to the inventory. Online party/lobby behaviour.
 
 ## Quest monsters (`src/npc.rs`, `src/npc/data.rs`, `src/npc/fsm.rs`)
 

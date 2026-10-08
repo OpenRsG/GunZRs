@@ -411,19 +411,20 @@ fn load_ranks(mut commands: Commands, level: Res<Level>) {
     commands.insert_resource(Ranks::load(&level.vfs).unwrap_or_else(|e| panic!("profile: {e}")));
 }
 
-/// A finished quest's drops stay in the profile. Only `zquestitem.xml` ids (six digits) are kept,
-/// and the rented shop items ([`Profile::rent`]); permanent shop drops are not modelled.
+/// A finished quest's drops stay in the profile: `zquestitem.xml` ids (six digits) as quest
+/// items, shop items (zitem ids; all 21 permanent `droptable.xml` drops exist there, **observed**)
+/// owned for good, rented shop items with their expiry ([`Profile::rent`]).
 fn keep_loot(mut loot: MessageReader<QuestLoot>, mut profile: ResMut<Profile>) {
     for l in loot.read() {
-        let kept: Vec<_> = l
-            .items
-            .iter()
-            .copied()
-            .filter(|i| i.0 < 1_000_000)
-            .collect();
+        let (kept, shop): (Vec<_>, Vec<_>) = l.items.iter().partition(|i| i.0 < 1_000_000);
         if !kept.is_empty() {
             profile.add_quest_items(&kept);
             println!("profile: kept quest items {kept:?}");
+        }
+        for &(id, _) in &shop {
+            profile.rented.remove(&id);
+            profile.owned.insert(id);
+            println!("profile: item {id} owned for good");
         }
         for &(id, hours) in &l.rented {
             let new = profile.rent(id, hours, now());
@@ -609,6 +610,7 @@ mod tests {
         }
         let mut p = app.world().resource::<Profile>().clone();
         assert_eq!(p.quest_items, BTreeMap::from([(200011, 3)]));
+        assert!(p.owned.contains(&3000042), "a permanent shop drop is owned");
         assert_eq!(
             Profile::parse(&p.to_text()).unwrap().quest_items,
             p.quest_items

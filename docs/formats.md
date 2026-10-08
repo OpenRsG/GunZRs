@@ -1116,10 +1116,11 @@ the executable is packed).
   target into one `Damage`), melee `damage` per slash; `delay` and `reloadtime` are applied by the
   actor controller. `Damage.item` names the weapon. HP/AP rule: `absorb(v, amount, pierce)`:
   `pierce` of the hit goes to HP, the rest to AP, what AP cannot hold falls through to HP.
-  `pierce` is **observed** in `system/zactoraction.xml` (NPC attacks): all 225 `RANGESHOT`
-  `pierce="50"` (rifle and machine-gun shots included), all 80 `MELEESHOT` and 62 `GRENADESHOT`
-  `pierce="0"`. Player blades therefore use 0 and rockets/frags 0 (**inferred**: same kind of
-  attack), every gun 0.5 (pistol/SMG/shotgun **inferred**: no NPC fires them); `piercing` in
+  `pierce` is **observed** only for NPC attacks in `system/zactoraction.xml`: all 225 `RANGESHOT`
+  `pierce="50"`, all 80 `MELEESHOT` and 62 `GRENADESHOT` `pierce="0"`. Applying those to player
+  weapons is **inferred** for every class (no player-weapon attribute exists): blades 0,
+  rockets/frags 0, every gun 0.5. Earlier inferred values were blades 0.7, rifle/MG 0.6, shotgun
+  0.3, rocket 0.5, other guns 0.5; `piercing` in
   `combat.rs`. `Vitals` of actors are 100 HP / 50 AP from `actor.rs`. Self damage is
   only taken from your own blasts; HP <= 0 inserts `Dead{respawn: 5 s}` (**inferred**), a
   suicide adds a death but no kill. `Protected` actors take nothing (no damage, blood, push).

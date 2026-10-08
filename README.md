@@ -16,8 +16,8 @@ It loads the maps, characters, weapons and effects straight from your Steam inst
 
 </div>
 
-No game data lives in this repository. You need your own copy of the game; the port only reads
-its `.mrs` archives and never runs `Gunz.exe`.
+No game files are included (the demo GIF is a capture for illustration). You need your own copy
+of the game; the port only reads its `.mrs` archives and never runs `Gunz.exe`.
 
 ## Quick start
 

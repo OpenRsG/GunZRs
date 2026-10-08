@@ -77,7 +77,7 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Characters | Man and woman models, 170 / 259 outfit sets, skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
 | Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls; rocket launchers and machine guns slow you and block wall moves, as their item data says |
 | Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
-| Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing from the data |
+| Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera |
 | Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy, blitzkrieg, training |

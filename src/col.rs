@@ -83,6 +83,23 @@ impl Tri {
         (self.a + self.b + self.c) / 3.0
     }
 
+    /// The box a sphere sweep must meet to touch the triangle: its own, grown by the slack of
+    /// [`Tri::contains`] (`EPS` of an edge length) and f32 rounding. A sliver (a corner within
+    /// ~6 degrees of flat) makes `contains` accept points far outside it, so it has no box.
+    fn reach(&self) -> (Vec3, Vec3) {
+        let (e1, e2) = (self.b - self.a, self.c - self.a);
+        let (d00, d11) = (e1.dot(e1), e2.dot(e2));
+        if e1.cross(e2).length_squared() < 0.01 * d00 * d11 {
+            return (Vec3::NEG_INFINITY, Vec3::INFINITY);
+        }
+        let edge = d00.sqrt().max(d11.sqrt()).max((self.c - self.b).length());
+        let slack = Vec3::splat(1e-3 + 3e-4 * edge);
+        (
+            self.a.min(self.b).min(self.c) - slack,
+            self.a.max(self.b).max(self.c) + slack,
+        )
+    }
+
     /// Whether `p`, already on the triangle's plane, lies inside (winding independent).
     fn contains(&self, p: Vec3) -> bool {
         let (v0, v1, v2) = (self.b - self.a, self.c - self.a, p - self.a);
@@ -218,6 +235,8 @@ struct BvhNode {
 pub struct MapCollision {
     tris: Vec<Tri>,
     nodes: Vec<BvhNode>,
+    /// Per triangle: the box a sphere sweep must meet to touch it ([`Tri::reach`]).
+    reach: Vec<(Vec3, Vec3)>,
 }
 
 fn bad(msg: impl Into<String>) -> io::Error {
@@ -377,7 +396,8 @@ impl MapCollision {
         if !tris.is_empty() {
             build_bvh(&mut tris, 0, &mut nodes);
         }
-        Self { tris, nodes }
+        let reach = tris.iter().map(Tri::reach).collect();
+        Self { tris, nodes, reach }
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -451,9 +471,25 @@ impl MapCollision {
                 stack[sp + 1] = node.first;
                 sp += 2;
             } else {
-                for t in &self.tris[node.first as usize..(node.first + node.count) as usize] {
+                let base = node.first as usize;
+                for (k, t) in self.tris[base..base + node.count as usize]
+                    .iter()
+                    .enumerate()
+                {
+                    let (tmin, tmax) = self.reach[base + k];
+                    if tmin.cmpgt(hi).any() || tmax.cmplt(lo).any() {
+                        continue;
+                    }
                     for &o in offsets {
-                        if let Some(h) = t.sweep(from + Vec3::Y * o, d, r)
+                        let at = from + Vec3::Y * o;
+                        let (slo, shi) = (
+                            at.min(at + d) - Vec3::splat(r),
+                            at.max(at + d) + Vec3::splat(r),
+                        );
+                        if tmin.cmpgt(shi).any() || tmax.cmplt(slo).any() {
+                            continue;
+                        }
+                        if let Some(h) = t.sweep(at, d, r)
                             // on a tie (a riser's top edge is also its tread's edge) report the flatter surface
                             && best.is_none_or(|b| {
                                 h.0 < b.0.0 - 1e-5 || (h.0 < b.0.0 + 1e-5 && t.n.y > b.1.y)

@@ -577,10 +577,18 @@ fn animate(
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
     mesh_handles: Query<&Mesh3d>,
+    seen: Query<(&InheritedVisibility, &ViewVisibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
+    let offscreen = |node: Entity| {
+        children.get(node).is_ok_and(|kids| {
+            kids.iter()
+                .filter_map(|c| seen.get(c).ok())
+                .all(|(i, v)| crate::view::culled(i, v))
+        })
+    };
     for (root, mut a) in &mut animators {
         let a = &mut *a;
         if a.targets.is_none() {
@@ -701,6 +709,7 @@ fn animate(
                             *tf = Transform::from_matrix(pw.inverse() * keyed[&e]);
                         }
                     }
+                    Kind::Vertex if offscreen(e) => {}
                     Kind::Vertex => {
                         let (Some(track), Some(elu)) = (&node.vertex, &a.elu) else {
                             continue;
@@ -728,12 +737,17 @@ fn animate(
                 }
                 if let Some(al) = alpha {
                     commands.entity(e).insert(NodeAlpha(al));
-                    if let Ok(mut v) = visibility.get_mut(e) {
-                        *v = if al > 0.0 {
-                            Visibility::Inherited
-                        } else {
-                            Visibility::Hidden
-                        };
+                    // Writing an equal value still marks the entity changed (visibility
+                    // propagation, extraction).
+                    let want = if al > 0.0 {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    };
+                    if visibility.get(e).is_ok_and(|v| *v != want)
+                        && let Ok(mut v) = visibility.get_mut(e)
+                    {
+                        *v = want;
                     }
                 }
             }

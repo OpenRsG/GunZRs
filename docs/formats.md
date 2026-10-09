@@ -1365,6 +1365,28 @@ No new file format; how the retail character animations are used (**observed** =
   Mansion, 3 bots, 60 s headless: play phase max 22.1 ms, 0 frames over 33 ms (the 50.7 ms
   frames are the first two, loading).
 
+#### Performance (render thread and frame pacing)
+
+- Measuring: `GUNZ_NOVSYNC=1` removes the 60 Hz loop wait of headless `--shot` runs (and uses
+  `PresentMode::AutoNoVsync` windowed), so `GUNZ_FRAMETIMES=1` reports real work. It also prints
+  the main schedules' p50/p99, the render sub-app's `Render` schedule split by `RenderSystems`
+  set (`src/perf/render.rs`), asset `Modified` events per frame, component churn, scene counts and
+  mesh entities per root. `GUNZ_GPUTIME=1` adds GPU pass timestamps. Simulation stays 1/60 s per frame.
+- Observed on an RTX 3090 (1280x720 target, 4x MSAA): GPU time is ~0.12 ms/frame, the game is
+  CPU-bound (main thread ~1 ms, render thread ~1 ms, pipelined), so MSAA/HDR/texture-format
+  changes would not move FPS here. Level geometry is already one mesh per (material, lightmap)
+  (Mansion 141 meshes, Town 72, Castle 29); most mesh entities are bots (14 each) and item pickups
+  (18 each, 135 of 411 on Mansion).
+- Changes: unchanged material writes skipped (`fade_nodes`; the animator re-sent each alpha every
+  frame, 130-190 `StandardMaterial` `Modified` events/frame -> 30-70); vertex-animated meshes and
+  fades of frustum-culled meshes are skipped (`view::culled`; hidden ones still update); the GPU
+  light-clustering passes are off (no lights; `ClusterConfig::None` crashes Bevy 0.19 with a
+  zero-sized texture, so `GlobalClusterSettings::gpu_clustering` is cleared); the camera uses
+  `NoIndirectDrawing`. Tried and dropped: `PbrPlugin { use_gpu_instance_buffer_builder: false }`
+  (map meshes vanish), `DynamicSkinnedMeshBounds` for actors (25 fewer visible meshes, no time gain),
+  disabling default plugins (no system above 0.01 ms real time).
+- Castle, 8 bots, `GUNZ_NOVSYNC=1`, p50 frame period: 2.1 -> 1.2 ms; Mansion 2.6 -> 1.5; Town 2.2 -> 1.2.
+
 ### Status effects (`game::Status`, `game::Afflict`, `actor.rs` `status` and `drive`)
 
 **Observed** (`system/zskill.xml`, 49 `SKILL`): `mod.speed` is below 100 on three skills, all with `hitcheck`

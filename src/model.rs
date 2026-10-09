@@ -59,9 +59,10 @@ pub struct Textures<'a> {
 impl<'a> Textures<'a> {
     /// `prefer`: VFS prefix whose files win when a texture name exists in several archives.
     pub fn new(vfs: &'a Vfs, prefer: &str) -> Self {
+        let by_name = view::file_index(vfs, prefer);
         Self {
             vfs,
-            by_name: view::file_index(vfs, prefer),
+            by_name,
             cache: HashMap::new(),
             repeat: ImageSampler::Descriptor(ImageSamplerDescriptor {
                 address_mode_u: ImageAddressMode::Repeat,

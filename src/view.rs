@@ -5,16 +5,23 @@ use crate::mrs::Vfs;
 use bevy::{
     app::ScheduleRunnerPlugin,
     asset::RenderAssetUsages,
-    camera::RenderTarget,
+    camera::{
+        RenderTarget,
+        visibility::{InheritedVisibility, ViewVisibility},
+    },
     core_pipeline::tonemapping::Tonemapping,
     image::{CompressedImageFormats, ImageSampler, ImageType},
     input::mouse::AccumulatedMouseMotion,
+    light::cluster::GlobalClusterSettings,
     prelude::*,
     render::{
         render_resource::TextureFormat,
-        view::screenshot::{Screenshot, save_to_disk},
+        view::{
+            NoIndirectDrawing,
+            screenshot::{Screenshot, save_to_disk},
+        },
     },
-    window::ExitCondition,
+    window::{ExitCondition, PresentMode},
     winit::WinitPlugin,
 };
 use std::{collections::HashMap, time::Duration};
@@ -55,9 +62,23 @@ pub fn app(title: &str, shot: Option<String>) -> App {
 /// [`app`] without the fly camera, for binaries that drive the camera themselves.
 pub fn app_plain(title: &str, shot: Option<String>) -> App {
     let mut app = App::new();
+    // `GUNZ_NOVSYNC=1`: windowed runs present immediately; headless `--shot` runs drop the
+    // 60 Hz loop wait, so frame times are the real work (simulation stays 1/60 s per frame).
+    let novsync = std::env::var_os("GUNZ_NOVSYNC").is_some();
+    let wait = if novsync {
+        Duration::ZERO
+    } else {
+        Duration::from_secs_f64(1.0 / 60.0)
+    };
+    let present_mode = if novsync {
+        PresentMode::AutoNoVsync
+    } else {
+        PresentMode::default()
+    };
     let plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: shot.is_none().then(|| Window {
             title: format!("Gunz2Rust - {title}"),
+            present_mode,
             ..default()
         }),
         exit_condition: if shot.is_some() {
@@ -71,7 +92,7 @@ pub fn app_plain(title: &str, shot: Option<String>) -> App {
         Some(path) => app
             .add_plugins((
                 plugins.disable::<WinitPlugin>(),
-                ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / 60.0)),
+                ScheduleRunnerPlugin::run_loop(wait),
             ))
             .insert_resource(Shot {
                 path,
@@ -82,7 +103,19 @@ pub fn app_plain(title: &str, shot: Option<String>) -> App {
         None => app.add_plugins(plugins),
     };
     app.insert_resource(ClearColor(Color::BLACK));
+    // No lights anywhere: the GPU light-clustering passes only cost render-thread time
+    // (Castle 1.26 -> 1.10 ms). `ClusterConfig::None` is not an option, Bevy 0.19 then
+    // creates a zero-sized texture.
+    app.add_systems(Startup, |mut s: ResMut<GlobalClusterSettings>| {
+        s.gpu_clustering = None
+    });
     app
+}
+
+/// A mesh that is shown but outside every view (frustum-culled). Animating its assets is
+/// wasted work; hidden ones still update, so a fade-in never starts from a stale state.
+pub fn culled(inherited: &InheritedVisibility, view: &ViewVisibility) -> bool {
+    inherited.get() && !view.get()
 }
 
 /// Present in headless `--shot` runs.
@@ -143,6 +176,9 @@ pub fn spawn_camera<'a>(
         }),
         Transform::from_translation(eye).looking_to(dir, Vec3::Y),
     ));
+    // Unlit scenes of a few hundred meshes: plain draws and CPU preprocessing beat the GPU
+    // indirect-draw setup (render thread 1.03 -> 0.95 ms on Castle with 8 bots).
+    camera.insert(NoIndirectDrawing);
     if shot {
         let target = Image::new_target_texture(1280, 720, TextureFormat::Rgba8UnormSrgb, None);
         camera.insert(RenderTarget::Image(images.add(target).into()));

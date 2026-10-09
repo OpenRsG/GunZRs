@@ -37,7 +37,8 @@ pub fn vfs() -> io::Result<Vfs> {
     Vfs::from_packs(packs.iter().map(Vec::as_slice))
 }
 
-/// Hands the end of a match to the page (`globalThis.gunzExit(code)`): it starts the same
+/// Tells the page when the match is on screen (`globalThis.gunzReady()`, it hides its loading
+/// screen) and hands the end of a match to it (`globalThis.gunzExit(code)`): it starts the same
 /// match again or goes back to its menu, as `relaunch` does on the desktop. Also asks for the
 /// pointer lock again on a click while playing: browsers grant it only right after a user
 /// gesture, and Esc releases it without telling the game.
@@ -45,7 +46,20 @@ pub struct WebPlugin;
 
 impl Plugin for WebPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, relock).add_systems(Last, exit);
+        app.add_systems(Update, (ready, relock))
+            .add_systems(Last, exit);
+    }
+}
+
+/// Frames rendered before the page is told; the first ones still compile pipelines.
+const READY_FRAMES: u32 = 3;
+
+fn ready(mut frames: Local<u32>) {
+    *frames += 1;
+    if *frames == READY_FRAMES
+        && let Ok(f) = global("gunzReady").dyn_into::<Function>()
+    {
+        let _ = f.call0(&JsValue::NULL);
     }
 }
 

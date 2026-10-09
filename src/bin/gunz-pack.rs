@@ -113,8 +113,8 @@ fn run(game: &str, out: &Path, wanted: &[String]) -> io::Result<()> {
         }
     }
     fs::create_dir_all(out.join("maps"))?;
-    // Every other file of the install goes in as a name only: listings (maps, music) and
-    // existence checks see the whole install.
+    // Every other file of the install goes in as a name only, so existence checks see the
+    // whole install.
     let names: BTreeSet<String> = vfs
         .paths()
         .filter(|p| !core.contains(*p))

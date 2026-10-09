@@ -185,8 +185,8 @@ fn trace(path: &str) {
 
 /// Header of a pack: `GZPK`, then a little-endian `u32` file count and per file a `u16` name
 /// length, the normalized name, a `u32` length and the bytes. Length [`NAME_ONLY`] has no bytes:
-/// the file exists in the install but is not packed ([`Vfs::exists`] and [`Vfs::paths`] still
-/// see it, so listings and checks behave as with the install).
+/// the file exists in the install but is not packed ([`Vfs::exists`] still sees it, so checks
+/// such as the character's outfit list behave as with the install).
 const PACK: &[u8; 4] = b"GZPK";
 const NAME_ONLY: u32 = u32::MAX;
 
@@ -295,11 +295,15 @@ impl Vfs {
         self.files.contains_key(&path) || self.index.contains_key(&path)
     }
 
+    /// Every readable file. Name-only pack entries are left out: callers pick files from this
+    /// list (music, sounds, textures by name) and must not pick one without bytes.
     pub fn paths(&self) -> impl Iterator<Item = &str> {
-        self.index
-            .keys()
-            .chain(self.files.keys())
-            .map(String::as_str)
+        let packed = self
+            .files
+            .iter()
+            .filter(|(_, b)| b.is_some())
+            .map(|(n, _)| n);
+        self.index.keys().chain(packed).map(String::as_str)
     }
 }
 
@@ -380,6 +384,10 @@ mod tests {
         assert_eq!(vfs.read("system/a.xml").unwrap(), b"");
         assert!(vfs.exists("model/big.elu") && vfs.read("model/big.elu").is_err());
         assert!(!vfs.exists("system/b.xml"));
+        // listings offer only files with bytes
+        let mut listed: Vec<&str> = vfs.paths().collect();
+        listed.sort_unstable();
+        assert_eq!(listed, ["maps/x/x.rs", "system/a.xml"]);
         assert!(Vfs::from_packs([&a[..a.len() - 1]]).is_err());
     }
 }

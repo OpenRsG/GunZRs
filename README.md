@@ -110,17 +110,21 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 ## In the browser (WebGPU)
 
 ```sh
-web/build.sh                  # wasm client + data packs from your install into web/dist
-python3 web/dist/serve.py     # http://localhost:8080 (WebGPU needs localhost or HTTPS)
+web/build.sh                       # wasm client + data packs from your install into web/dist
+python3 web/dist/serve.py 8090     # http://localhost:8090 (WebGPU needs localhost or HTTPS)
+sudo tailscale serve --bg --https=10000 http://127.0.0.1:8090   # HTTPS on your tailnet
 ```
 
 `web/` builds the same game for the browser. `gunz-pack` plays a short traced match on every
 map and keeps only the files those matches read. The result is one shared pack (characters,
 weapons, effects, sounds; about 27 MB gzipped instead of the 1.6 GB install) plus one pack per
 map (3-14 MB). The page fetches the shared pack and the wasm module (7 MB brotli) right away
-and a map's pack only once you pick that map. Packs are cached for good by their CRC.
+and a map's pack only once you pick that map. Packs are cached for good by their CRC. After
+START a loading screen shows each download (size and its own bar), an overall bar, the speed
+and time left, then the start-up step until the match is on screen.
 Offline only for now: no LAN, profile not saved, and the menu is a small HTML form (map, mode,
-bots, character). `web/dist` holds retail bytes, so serve it to yourself, never publicly.
+bots, character). `web/dist` holds retail bytes, so serve it only to your own devices (a
+tailnet-only `tailscale serve`, never `tailscale funnel`).
 
 ## More tools
 

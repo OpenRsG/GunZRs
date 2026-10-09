@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Serves web/dist on http://localhost:8080 (`python3 serve.py [PORT]`).
+"""Serves web/dist on http://127.0.0.1:8080 (`python3 serve.py [PORT]`).
 
-Sends the precompressed `.br` / `.gz` copy of a file when the browser accepts it, and caches
+Sends the precompressed `.br` / `.gz` copy of a file when the browser accepts it, with the
+unpacked size in `X-Raw-Length` (the page's progress bars count unpacked bytes), and caches
 the game packs for good: the page asks for them as `?v=CRC`, so a changed pack has a new URL.
-localhost counts as a secure context, which WebGPU needs; another host needs HTTPS.
+localhost counts as a secure context, which WebGPU needs; another host needs HTTPS, e.g.
+`tailscale serve --bg --https=10000 http://127.0.0.1:8080` in front of this.
 """
 import http.server, os, sys
 
@@ -33,6 +35,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if enc:
             self.send_header("Content-Encoding", enc)
         self.send_header("Vary", "Accept-Encoding")
+        self.send_header("X-Raw-Length", str(os.path.getsize(path)))
         immutable = "?v=" in self.path
         self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
         self.end_headers()

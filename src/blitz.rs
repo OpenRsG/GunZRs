@@ -576,20 +576,20 @@ impl Blitz {
 }
 
 fn side(t: Team) -> usize {
-    t as usize
+    (t == Team::Blue) as usize
 }
 
 fn other(t: Team) -> Team {
     match t {
         Team::Red => Team::Blue,
-        Team::Blue => Team::Red,
+        _ => Team::Red,
     }
 }
 
 fn word(t: Team) -> &'static str {
     match t {
         Team::Red => "RED",
-        Team::Blue => "BLUE",
+        _ => "BLUE",
     }
 }
 

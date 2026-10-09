@@ -23,6 +23,14 @@
 //! and gun every life) or `spy` (rounds: hidden spies with grenades against trackers). In the
 //! round modes the kill limit counts rounds won and the time limit is for the match (duel and
 //! tournament: for one round; spy: none, the round time is the map's).
+//! `gungame` is a free-for-all up a weapon ladder: every kill swaps the killer's weapon for the
+//! next one, a melee kill demotes the victim, a kill from the last step wins.
+//! `infected` plays rounds: after the countdown one random actor turns zombie (a blade only, faster,
+//! tougher, hits knock back); a survivor a zombie kills respawns as a zombie. Survivors win the round
+//! at the round timer, zombies when everyone is infected.
+//! `dynduel` runs several one-on-one duels at once (players / 2 arenas, phases of the same map):
+//! the winner stays, the loser queues and watches an arena (Space / click: the next one), the next
+//! in line challenges the winner; the time limit is for the match, a duel lasts `--round-time`.
 //! `blitzkrieg` plays the map `blitzkrieg` only: soldiers march along the lanes, destroy the
 //! enemy barricades and radar; `F` opens the honor upgrade panel (Up/Down, Enter buys); the time
 //! limit is optional, headless checks may set `GUNZ_BLITZ_BUY=SECS:N,..` and `GUNZ_BLITZ_HP=K`.
@@ -149,7 +157,7 @@ fn main() -> AppExit {
     let usage = || {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar]\n       \
+             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \

@@ -167,7 +167,7 @@ fn standing(
     round: &Round,
     actors: &Query<(&Score, Has<Player>, Option<&Team>)>,
 ) -> (u32, u32) {
-    if rules.mode == Mode::Spy {
+    if matches!(rules.mode, Mode::Spy | Mode::Infected) {
         return (round.mine[0], round.mine[1]);
     }
     if rules.mode.rounds() && rules.mode.teams() {
@@ -242,6 +242,7 @@ fn header(
             round.n.max(1)
         ),
         Mode::ClanWar => format!("{mine} : {theirs}   ROUND {}   {round_t}", round.n.max(1)),
+        Mode::Infected => format!("{}   YOU {mine} : {theirs} THEM   {round_t}", clock.note),
         Mode::Berserker => match rules.kill_limit {
             Some(k) => format!("BERSERKER {}   {total}   first to {k}", boss.unwrap_or("-")),
             None => format!("BERSERKER {}   {total}", boss.unwrap_or("-")),
@@ -250,7 +251,9 @@ fn header(
             Some(k) => format!("{total}   first to {k}"),
             None => total,
         },
-        Mode::Quest | Mode::Blitzkrieg => format!("{}   {total}", clock.note),
+        Mode::Quest | Mode::Blitzkrieg | Mode::GunGame | Mode::DynDuel => {
+            format!("{}   {total}", clock.note)
+        }
         Mode::Training => total,
     }
 }

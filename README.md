@@ -83,6 +83,7 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera |
 | Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy (with tracker pings and spy items), blitzkrieg (nine classes, upgrades, minimap, announcer, rewards), clan war, training |
+| Extra modes (not in retail) | The port's own takes on modes community servers made popular, built from retail items and maps: **Infected** (one random player turns zombie each round: blade only, faster, tougher, knockback hits; whoever a zombie kills joins them; survivors win at the round timer), **Gun Game** (free for all up a 12-step weapon ladder, a kill upgrades your weapon, a melee kill demotes the victim, a kill from the last step wins), **Dynamic Duels** (several 1-on-1 duels at once on one map, each in its own arena phase; winners stay, losers queue and watch, Space switches the watched arena) |
 | Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
 | Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards; sacrifice items unlock special scenarios, a random dice roll picks the route, quest items stay in your inventory, level limits and challenge time bonuses |
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
@@ -119,7 +120,7 @@ cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked 
 <summary>All <code>gunz-play</code> options</summary>
 
 `--char man|woman`, `--outfit N`, `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
-`--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|clanwar|training`,
+`--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|clanwar|infected|gungame|dynduel|training`,
 `--mode quest --scenario NAME [--dice N] [--sacrifice A,B]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
 `"Challenge 101"`, `"Survival Prison"`; without `--dice` the die is rolled), `--time-limit S`, `--kill-limit N` (0 = none),
 `--respawn S`, `--protect S`, `--round-time S`, `--ready S`. A match ends at the time or

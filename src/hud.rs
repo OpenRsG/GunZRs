@@ -940,7 +940,7 @@ fn update(
                 .join("\n"),
             Label::Death => dead.map_or(String::new(), |d| {
                 if d.respawn >= HOLD {
-                    "You died - waiting for the next round".to_owned()
+                    "You died - waiting to rejoin".to_owned()
                 } else {
                     format!("You died - respawn in {}", d.respawn.ceil())
                 }
@@ -968,7 +968,7 @@ fn update(
                 let tag = match team {
                     Some(Team::Red) => " [RED]",
                     Some(Team::Blue) => " [BLUE]",
-                    None => "",
+                    None | Some(Team::Duel(_)) => "",
                 };
                 format!("{n}{}{tag}", if *you { " (you)" } else { "" })
             }),

@@ -173,7 +173,7 @@ fn choose(
         STINGER
     } else if rules
         .as_ref()
-        .is_some_and(|r| matches!(r.mode, Mode::Duel | Mode::DuelTournament))
+        .is_some_and(|r| matches!(r.mode, Mode::Duel | Mode::DuelTournament | Mode::DynDuel))
     {
         DUEL
     } else if rules.is_some_and(|r| r.mode == Mode::Quest) {

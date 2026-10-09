@@ -29,6 +29,10 @@ use bevy::{
 };
 use std::collections::{HashMap, VecDeque};
 
+mod dynduel;
+mod gungame;
+mod infected;
+
 /// Seconds the round-win screen stays before the next round starts (*inferred*).
 const OVER_SECS: f32 = 4.0;
 /// Seconds "FIGHT!" stays up after the countdown.
@@ -81,7 +85,8 @@ impl Plugin for ModesPlugin {
                     gladiator,
                     dead_added,
                     rounds.run_if(|r: Res<Rules>| r.mode.rounds()),
-                    respawn_spots.run_if(|r: Res<Rules>| !r.mode.rounds()),
+                    respawn_spots
+                        .run_if(|r: Res<Rules>| !r.mode.rounds() && r.mode != Mode::DynDuel),
                     die_at.run_if(resource_exists::<DieAt>),
                     protect,
                     spectate.run_if(|r: Res<Rules>| r.mode.rounds()),
@@ -89,6 +94,10 @@ impl Plugin for ModesPlugin {
                     duel_damage.run_if(|r: Res<Rules>| r.mode == Mode::DuelTournament),
                     berserker.run_if(|r: Res<Rules>| r.mode == Mode::Berserker),
                     gunman.run_if(|r: Res<Rules>| r.mode == Mode::Gunman),
+                    gungame::gungame.run_if(|r: Res<Rules>| r.mode == Mode::GunGame),
+                    infected::spread.run_if(|r: Res<Rules>| r.mode == Mode::Infected),
+                    infected::upkeep.run_if(|r: Res<Rules>| r.mode == Mode::Infected),
+                    dynduel::dynduel.run_if(|r: Res<Rules>| r.mode == Mode::DynDuel),
                 )
                     .chain()
                     .run_if(resource_exists::<Rules>),
@@ -118,6 +127,7 @@ impl Plugin for ModesPlugin {
                 ]
                 .concat(),
                 Mode::Blitzkrieg => crate::blitz::arsenal(&data.items),
+                Mode::GunGame => gungame::ladder(&data.items),
                 _ => return,
             }
         };
@@ -481,6 +491,8 @@ fn can_play(rules: &Rules, round: &mut Round, spy: Option<&SpyCfg>, seats: &Seat
         ids.sort_unstable();
         round.queue = ids.into_iter().map(|i| i.1).collect();
         round.queue.len() >= 2
+    } else if rules.mode == Mode::Infected {
+        seats.iter().count() >= 2
     } else if let Some(cfg) = spy {
         seats.iter().count() as u32 >= cfg.min_players
     } else {
@@ -629,6 +641,9 @@ fn begin(
 /// with more actors alive wins (duel: more health + armour, tournament: more damage dealt,
 /// Spy: the spies, they survived).
 fn outcome(rules: &Rules, round: &Round, seats: &Seats) -> Option<(Option<Side>, bool)> {
+    if rules.mode == Mode::Infected {
+        return infected::decide(rules, round, seats);
+    }
     let duel = round.duelists().filter(|_| rules.mode.duel());
     let alive = |t: Team| {
         seats
@@ -709,6 +724,7 @@ fn conclude(
     let duel = round.duelists().filter(|_| rules.mode.duel());
     let tournament = rules.mode == Mode::DuelTournament;
     let spy = rules.mode == Mode::Spy;
+    let infected = rules.mode == Mode::Infected;
     // A timed-out duel's winner is credited like a kill.
     if let (Some((a, b)), Some(w), true) = (duel, winner, by_time)
         && let Ok(mut s) = seats.get_mut(if w == Side::Red { a } else { b })
@@ -739,6 +755,8 @@ fn conclude(
         (Some((_, b)), Side::Blue) => name(seats, b),
         (None, Side::Red) if spy => "TRACKERS".into(),
         (None, Side::Blue) if spy => "SPIES".into(),
+        (None, Side::Red) if infected => "ZOMBIES".into(),
+        (None, Side::Blue) if infected => "SURVIVORS".into(),
         (None, Side::Red) => "RED TEAM".into(),
         (None, Side::Blue) => "BLUE TEAM".into(),
     };
@@ -820,19 +838,21 @@ fn conclude(
         (None, w) => {
             if let Some(w) = w {
                 round.wins[w as usize] += 1;
-                if let Some(m) = mine.filter(|_| spy) {
+                if let Some(m) = mine.filter(|_| spy || infected) {
                     round.mine[usize::from(w != m)] += 1;
                 }
             }
             let (red, blue) = if spy {
                 ("TRACKERS", "SPIES")
+            } else if infected {
+                ("ZOMBIES", "SURVIVORS")
             } else {
                 ("RED", "BLUE")
             };
             round.detail = format!(
                 "{}    {red} {} : {} {blue}",
                 match w {
-                    Some(w) if spy => format!("{} win the round", who(w)),
+                    Some(w) if spy || infected => format!("{} win the round", who(w)),
                     Some(w) => format!("{} wins the round", who(w)),
                     None => "Nobody wins the round".into(),
                 },
@@ -917,7 +937,7 @@ fn rounds(
             }
         }
         Phase::Over if round.t >= spy.map_or(OVER_SECS, |c| c.finish_wait) => {
-            let top = if rules.mode == Mode::Spy {
+            let top = if matches!(rules.mode, Mode::Spy | Mode::Infected) {
                 round.mine[0].max(round.mine[1])
             } else if rules.mode.duel() {
                 seats.iter().map(|s| s.score.kills).max().unwrap_or(0)
@@ -1065,6 +1085,9 @@ fn overlay(
                     "You are a TRACKER: hunt the {} hidden spy(ies)",
                     round.spy.spies.len()
                 ),
+                Mode::Infected => {
+                    "One of you turns zombie at FIGHT! - survivors outlast the timer".into()
+                }
                 _ => "Eliminate the other team - no respawn until the round ends".into(),
             };
             let left = (rules.ready - round.t).ceil().max(1.0);

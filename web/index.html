@@ -3,7 +3,8 @@
 
 <head>
  <meta charset="utf-8">
- <meta name="viewport" content="width=device-width, initial-scale=1">
+ <meta name="viewport"
+  content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
  <title>GunZRs</title>
  <link rel="modulepreload" href="pkg/gunz-play.js">
  <style>
@@ -175,6 +176,143 @@
    color: #ddd;
    min-height: 1.3em
   }
+
+  /* touch controls: a floating stick on the left 40%, look by dragging anywhere else (the
+     fire button too), buttons around the right thumb */
+  #touch {
+   position: fixed;
+   inset: 0;
+   touch-action: none;
+   user-select: none;
+   -webkit-user-select: none;
+   -webkit-touch-callout: none
+  }
+
+  #touch.off {
+   pointer-events: none
+  }
+
+  #touch.off>* {
+   display: none
+  }
+
+  .ctl {
+   position: absolute;
+   width: 60px;
+   height: 60px;
+   margin: 0;
+   padding: 0;
+   border-radius: 50%;
+   background: rgba(255, 255, 255, .13);
+   border: 2px solid rgba(255, 255, 255, .35);
+   color: #fff;
+   font: 600 12px system-ui, sans-serif;
+   letter-spacing: .5px;
+   cursor: default
+  }
+
+  .ctl.on {
+   background: rgba(232, 196, 106, .5)
+  }
+
+  #fire {
+   width: 96px;
+   height: 96px;
+   font-size: 15px;
+   right: calc(24px + env(safe-area-inset-right));
+   bottom: 28px
+  }
+
+  #jump {
+   width: 70px;
+   height: 70px;
+   right: calc(134px + env(safe-area-inset-right));
+   bottom: 18px
+  }
+
+  #dash {
+   right: calc(132px + env(safe-area-inset-right));
+   bottom: 104px
+  }
+
+  #guard {
+   right: calc(62px + env(safe-area-inset-right));
+   bottom: 140px
+  }
+
+  #reload,
+  #swap {
+   width: 50px;
+   height: 50px;
+   font-size: 10px
+  }
+
+  #reload {
+   right: calc(10px + env(safe-area-inset-right));
+   bottom: 150px
+  }
+
+  #swap {
+   right: calc(216px + env(safe-area-inset-right));
+   bottom: 22px
+  }
+
+  #scores,
+  #pause {
+   width: 44px;
+   height: 44px;
+   top: 8px;
+   border-radius: 8px;
+   font-size: 16px
+  }
+
+  #pause {
+   right: calc(62px + env(safe-area-inset-right))
+  }
+
+  #scores {
+   right: calc(114px + env(safe-area-inset-right))
+  }
+
+  #stick {
+   position: absolute;
+   width: 130px;
+   height: 130px;
+   margin: -65px 0 0 -65px;
+   border-radius: 50%;
+   background: rgba(255, 255, 255, .08);
+   border: 2px solid rgba(255, 255, 255, .3);
+   pointer-events: none;
+   visibility: hidden
+  }
+
+  #stick i {
+   position: absolute;
+   left: 38px;
+   top: 38px;
+   width: 54px;
+   height: 54px;
+   border-radius: 50%;
+   background: rgba(255, 255, 255, .45)
+  }
+
+  /* above the touch layer and the loading screen, on every device */
+  #fs {
+   position: fixed;
+   z-index: 2;
+   top: 8px;
+   right: calc(8px + env(safe-area-inset-right));
+   width: 44px;
+   height: 44px;
+   margin: 0;
+   padding: 0;
+   font-size: 22px;
+   line-height: 1;
+   background: rgba(0, 0, 0, .35);
+   color: #fff;
+   border: 2px solid rgba(255, 255, 255, .35);
+   border-radius: 8px
+  }
  </style>
 </head>
 
@@ -211,11 +349,92 @@
    <div id="now"></div>
   </div>
  </div>
+ <div id="touch" class="off">
+  <div id="stick"><i></i></div>
+  <button class="ctl" id="fire" data-k="7" data-look>FIRE</button>
+  <button class="ctl" id="jump" data-k="6">JUMP</button>
+  <button class="ctl" id="dash" data-k="13" data-tap>DASH</button>
+  <button class="ctl" id="guard" data-k="8">GUARD</button>
+  <button class="ctl" id="reload" data-k="9">RELOAD</button>
+  <button class="ctl" id="swap" data-k="12" data-tap>SWAP</button>
+  <button class="ctl" id="scores" data-k="10">&#9776;</button>
+  <button class="ctl" id="pause" data-k="11">II</button>
+ </div>
+ <button id="fs" title="Fullscreen">&#x26F6;</button>
  <script type="module">
   const $ = id => document.getElementById(id);
   const note = (t, err) => {$("note").textContent = t; $("note").classList.toggle("err", !!err);};
   const mb = n => (n / 1048576).toFixed(1);
   const saved = JSON.parse(sessionStorage.getItem("gunz") || "null");
+
+  // Fullscreen (landscape on a phone); a touch screen also goes fullscreen on START.
+  async function fullscreen(on) {
+   if (on && !document.fullscreenElement) {
+    await document.documentElement.requestFullscreen?.({navigationUI: "hide"}).catch(() => { });
+    await screen.orientation?.lock?.("landscape").catch(() => { });
+   } else if (!on && document.fullscreenElement) await document.exitFullscreen();
+  }
+  $("fs").onclick = () => {fullscreen(!document.fullscreenElement); $("gunz").focus();};
+  if (!document.documentElement.requestFullscreen) $("fs").remove();
+
+  // Touch controls, only with a touch screen as the main pointer (or `?touch` to try them).
+  // They write `gunzTouch`; the game reads it once per frame (`src/web.rs` `touch` has the
+  // layout): [0..2] look drag, [2..12] held stick W A S D, jump, fire, guard, reload, scores,
+  // pause (3 = pressed, 2 = released before the game saw it), [12] next weapon, [13] dash.
+  const touch = matchMedia("(pointer: coarse)").matches || new URLSearchParams(location.search).has("touch");
+  if (touch) {
+   const T = globalThis.gunzTouch = new Float32Array(14);
+   const LOOK = 2.2;  // look speed: mouse counts per dragged CSS pixel (times the game's sensitivity)
+   const DEAD = 0.35; // stick dead zone, fraction of its radius
+   const R = 52;      // stick travel in CSS pixels
+   const layer = $("touch"), stick = $("stick"), knob = stick.firstElementChild;
+   const fingers = new Map();
+   const press = k => T[k] = 3;
+   const release = k => T[k] = T[k] === 3 ? 2 : 0;
+   const steer = (dx, dy) => {
+    const d = Math.hypot(dx, dy), s = d > R ? R / d : 1;
+    knob.style.transform = `translate(${dx * s}px, ${dy * s}px)`;
+    const x = dx / R, y = dy / R;
+    T[2] = y < -DEAD ? 1 : 0; T[4] = y > DEAD ? 1 : 0; // W S
+    T[3] = x < -DEAD ? 1 : 0; T[5] = x > DEAD ? 1 : 0; // A D
+   };
+   layer.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    const b = e.target.closest("[data-k]"), f = {x: e.clientX, y: e.clientY, b};
+    if (b) {
+     b.classList.add("on");
+     if ("tap" in b.dataset) T[+b.dataset.k] = 1; else press(+b.dataset.k);
+    } else if (e.clientX < innerWidth * 0.4 && ![...fingers.values()].some(f => f.stick)) {
+     f.stick = true;
+     Object.assign(stick.style, {left: `${e.clientX}px`, top: `${e.clientY}px`, visibility: "visible"});
+     steer(0, 0);
+    }
+    fingers.set(e.pointerId, f);
+   });
+   layer.addEventListener("pointermove", e => {
+    const f = fingers.get(e.pointerId);
+    if (!f) return;
+    if (f.stick) {steer(e.clientX - f.x, e.clientY - f.y); return;}
+    if (f.b && !("look" in f.b.dataset)) return;
+    T[0] += (e.clientX - f.x) * LOOK; T[1] += (e.clientY - f.y) * LOOK;
+    f.x = e.clientX; f.y = e.clientY;
+   });
+   const lift = e => {
+    const f = fingers.get(e.pointerId);
+    if (!f) return;
+    fingers.delete(e.pointerId);
+    if (f.stick) {T[2] = T[3] = T[4] = T[5] = 0; stick.style.visibility = "hidden";}
+    if (f.b) {f.b.classList.remove("on"); if (!("tap" in f.b.dataset)) release(+f.b.dataset.k);}
+   };
+   layer.addEventListener("pointerup", lift);
+   layer.addEventListener("pointercancel", lift);
+   layer.addEventListener("contextmenu", e => e.preventDefault());
+   // the game paused or ended: hand taps to its menus, let go of everything
+   globalThis.gunzPaused = paused => {
+    layer.classList.toggle("off", paused);
+    if (paused) {for (const id of [...fingers.keys()]) lift({pointerId: id}); T.fill(0);}
+   };
+  }
 
   if (!navigator.gpu || !(await navigator.gpu.requestAdapter().catch(() => null))) {
    note("This browser has no WebGPU (try a current Chrome, Edge or Firefox; on Linux enable it in the browser's flags). The page must be opened over HTTPS or localhost.", true);
@@ -298,6 +517,7 @@
    const pick = {map: $("map").value, mode: $("mode").value, bots: $("bots").value, char: $("char").value};
    sessionStorage.setItem("gunz", JSON.stringify(pick));
    $("start").disabled = true;
+   if (touch) fullscreen(true);
    $("menu").style.display = "none";
    $("loading").style.display = "grid";
    const entry = index.maps.find(m => m.name === pick.map);
@@ -308,7 +528,10 @@
     const [[mod, wasm], c, m] = await Promise.all([engine, core, pack(entry, mapItem)]);
     globalThis.gunzPacks = [c, m];
     globalThis.gunzArgs = [pick.map, "--mode", pick.mode, "--bots", String(pick.bots), "--char", pick.char];
-    globalThis.gunzReady = () => {startItem.done(); $("loading").remove(); $("gunz").focus();};
+    globalThis.gunzReady = () => {
+     startItem.done(); $("loading").remove(); $("gunz").focus();
+     $("touch").classList.remove("off");
+    };
     // 4 = play again, anything else = back to this menu (as the desktop build relaunches)
     globalThis.gunzExit = code => {
      sessionStorage.setItem("gunzAgain", code === 4 ? "1" : "");

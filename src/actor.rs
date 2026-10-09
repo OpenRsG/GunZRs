@@ -165,6 +165,8 @@ pub struct PlayerSetup {
     pub loadout: Vec<u32>,
     /// Outfit part index (`Character::parts`); `None` = base body.
     pub outfit: Option<usize>,
+    /// Shown name; empty = "Player".
+    pub name: String,
 }
 
 /// Items, characters, spawn points and every character animation.
@@ -173,7 +175,7 @@ pub struct ActorData {
     pub items: Items,
     men: Character,
     women: Character,
-    spawns: Vec<(Vec3, Vec3)>,
+    pub(crate) spawns: Vec<(Vec3, Vec3)>,
     /// Actors falling below this height are put back on a spawn point.
     fall_limit: f32,
     /// `[man, woman][motion type][name]`: all parsed at startup so that no clip is ever
@@ -266,7 +268,7 @@ impl ActorData {
             .fold(f32::MAX, f32::min);
     }
 
-    fn character(&self, woman: bool) -> &Character {
+    pub(crate) fn character(&self, woman: bool) -> &Character {
         if woman { &self.women } else { &self.men }
     }
 
@@ -350,7 +352,9 @@ pub struct Actor {
     /// Weapon model roots per loadout slot (two for dual weapons).
     weapons: Vec<Vec<Entity>>,
     /// Every weapon item the actor spawned with, parallel to `weapons`; [`Equip`] picks from it.
-    kit: Vec<u32>,
+    pub(crate) kit: Vec<u32>,
+    /// Outfit part set it spawned with (`ActorSpec::outfit`).
+    pub(crate) outfit: Option<usize>,
     /// Loadout slot -> index into `kit`/`weapons` (identity until an [`Equip`]).
     carry: Vec<usize>,
     /// Slot whose weapon models are visible.
@@ -525,6 +529,7 @@ impl ActorSpawner<'_, '_> {
                     weapons,
                     carry: (0..kit.len()).collect(),
                     kit,
+                    outfit: spec.outfit,
                     shown: 0,
                     vel: Vec3::ZERO,
                     grounded: false,
@@ -687,7 +692,7 @@ fn fresh_slot(items: &Items, id: u32) -> Slot {
     }
 }
 
-fn yaw_of(dir: Vec3) -> f32 {
+pub(crate) fn yaw_of(dir: Vec3) -> f32 {
     f32::atan2(-dir.x, -dir.z)
 }
 
@@ -715,7 +720,11 @@ fn aim(feet: Vec3, intent: &Intent, player: bool) -> (Vec3, Vec3) {
 }
 
 /// The spawn point farthest from every other actor.
-fn pick_spawn(spawns: &[(Vec3, Vec3)], me: Entity, others: &[(Entity, Vec3)]) -> (Vec3, Vec3) {
+pub(crate) fn pick_spawn(
+    spawns: &[(Vec3, Vec3)],
+    me: Entity,
+    others: &[(Entity, Vec3)],
+) -> (Vec3, Vec3) {
     let near = |p: Vec3| {
         others
             .iter()
@@ -738,7 +747,10 @@ fn spawn_player(mut spawner: ActorSpawner, setup: Res<PlayerSetup>) {
         .copied()
         .unwrap_or((Vec3::ZERO, Vec3::NEG_Z));
     spawner.spawn(ActorSpec {
-        name: "Player".into(),
+        name: match setup.name.as_str() {
+            "" => "Player".into(),
+            n => n.into(),
+        },
         pos: setup.at.unwrap_or(pos + Vec3::Y * 0.1),
         yaw: setup.yaw.unwrap_or_else(|| yaw_of(dir)),
         woman: setup.woman,
@@ -1214,6 +1226,7 @@ fn drive(
         Has<Player>,
         Option<&Status>,
         Option<&Mods>,
+        Has<Remote>,
     )>,
     mut dead: Query<&mut Dead>,
     pushes: Query<&Push>,
@@ -1255,6 +1268,7 @@ fn drive(
         is_player,
         status,
         mods,
+        remote,
     ) in &mut actors
     {
         let a = &mut *a;
@@ -1354,7 +1368,7 @@ fn drive(
         {
             g.reload = c.secs;
         }
-        let (origin, dir) = aim(tf.translation, &intent, is_player);
+        let (origin, dir) = aim(tf.translation, &intent, is_player || remote);
         let facing = Quat::from_rotation_y(intent.yaw);
         let (fwd, right) = (facing * Vec3::NEG_Z, facing * Vec3::X);
         let walk = if alive { intent.walk } else { Vec2::ZERO };

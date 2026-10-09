@@ -352,6 +352,14 @@ pub struct Config {
     pub dice: Option<u32>,
     /// Quest mode: quest items in the two sacrifice slots (`--sacrifice A,B`; 0 = empty).
     pub sacrifice: [u32; 2],
+    /// LAN play: host this match (`--host`) or join one (`--join ADDR`, `lan` finds the host).
+    pub net: Option<Net>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Net {
+    Host,
+    Join(String),
 }
 
 impl Config {
@@ -401,6 +409,16 @@ impl Config {
             }
         };
         let (time, kills) = (get(args, "--time-limit")?, get(args, "--kill-limit")?);
+        let net = match args.iter().position(|a| a == "--host") {
+            Some(at) => {
+                args.remove(at);
+                Some(Net::Host)
+            }
+            None => get::<String>(args, "--join")?.map(Net::Join),
+        };
+        if net == Some(Net::Host) && !crate::net::supported(mode) {
+            return Err(format!("--host: {}", crate::net::MODES));
+        }
         Ok(Self {
             map: get(args, "--map")?
                 .or_else(|| (mode == Mode::Blitzkrieg).then(|| "blitzkrieg".into())),
@@ -420,6 +438,7 @@ impl Config {
             scenario: get(args, "--scenario")?,
             dice: get(args, "--dice")?,
             sacrifice,
+            net,
         })
     }
 
@@ -467,6 +486,11 @@ impl Config {
                 "--sacrifice".into(),
                 format!("{},{}", self.sacrifice[0], self.sacrifice[1]),
             ]);
+        }
+        match &self.net {
+            Some(Net::Host) => a.push("--host".into()),
+            Some(Net::Join(addr)) => a.extend(["--join".into(), addr.clone()]),
+            None => {}
         }
         a
     }
@@ -708,6 +732,8 @@ enum Act {
     Sex(bool),
     Step(Field, i32),
     Start,
+    /// Start as the LAN host (`true`) or join the LAN host (`false`).
+    Lan(bool),
     Quit,
 }
 
@@ -1169,7 +1195,16 @@ fn build(
             })
             .with_children(|f| {
                 f.spawn(button(&art, 160.0, 48.0, "QUIT", 22.0, Act::Quit));
-                f.spawn(button(&art, 260.0, 56.0, "START", 28.0, Act::Start));
+                f.spawn(Node {
+                    column_gap: px(16),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn(button(&art, 180.0, 48.0, "JOIN LAN", 22.0, Act::Lan(false)));
+                    r.spawn(button(&art, 180.0, 48.0, "HOST LAN", 22.0, Act::Lan(true)));
+                    r.spawn(button(&art, 260.0, 56.0, "START", 28.0, Act::Start));
+                });
             });
         });
     commands.insert_resource(art);
@@ -1215,7 +1250,16 @@ fn act(
                 state.cfg.outfit = None;
             }
             Act::Step(f, d) => step(&mut state.cfg, &cat, &profile, f, d),
-            Act::Start => {
+            Act::Start | Act::Lan(_) => {
+                state.cfg.net = match *a {
+                    Act::Lan(true) => Some(Net::Host),
+                    Act::Lan(false) => Some(Net::Join("lan".into())),
+                    _ => None,
+                };
+                // only the respawning deathmatch modes are played over the LAN (`net::supported`)
+                if state.cfg.net == Some(Net::Host) && !crate::net::supported(state.cfg.mode) {
+                    continue;
+                }
                 if state.cfg.mode == Mode::ClanWar && profile.clan.is_none() {
                     clan::need_clan(&mut state, &mut clan_ui);
                     continue;

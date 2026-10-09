@@ -452,6 +452,7 @@ fn fade_nodes(
     mut commands: Commands,
     nodes: Query<(&NodeAlpha, &Children), Changed<NodeAlpha>>,
     mut meshes: Query<(&mut MeshMaterial3d<StandardMaterial>, Has<OwnMaterial>)>,
+    seen: Query<(&InheritedVisibility, &ViewVisibility)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (alpha, children) in &nodes {
@@ -459,16 +460,27 @@ fn fade_nodes(
             let Ok((mut handle, own)) = meshes.get_mut(child) else {
                 continue;
             };
+            if seen.get(child).is_ok_and(|(i, v)| view::culled(i, v)) {
+                continue;
+            }
+            let want = Color::srgba(1.0, 1.0, 1.0, alpha.0);
+            // The animator re-sends the same alpha every frame; writing an unchanged material
+            // would still re-prepare it on the render thread.
+            let Some(cur) = materials.get(&handle.0) else {
+                continue;
+            };
+            let blend = alpha.0 < 1.0 && cur.alpha_mode == AlphaMode::Opaque;
+            if cur.base_color == want && !blend {
+                continue;
+            }
             if !own {
-                let Some(copy) = materials.get(&handle.0).cloned() else {
-                    continue;
-                };
+                let copy = cur.clone();
                 handle.0 = materials.add(copy);
                 commands.entity(child).insert(OwnMaterial);
             }
             if let Some(mut m) = materials.get_mut(&handle.0) {
-                m.base_color = Color::srgba(1.0, 1.0, 1.0, alpha.0);
-                if alpha.0 < 1.0 && m.alpha_mode == AlphaMode::Opaque {
+                m.base_color = want;
+                if blend {
                     m.alpha_mode = AlphaMode::Blend;
                 }
             }

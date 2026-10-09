@@ -56,7 +56,7 @@ builds Linux, Windows and macOS, but nobody has played it on Windows or macOS ye
 | R | Reload |
 | 1-5, wheel | Switch weapon |
 | Tab | Scoreboard |
-| Esc | Pause menu (resume, sensitivity, main menu, quit) |
+| Esc | Pause menu (resume, sensitivity, option toggles, main menu, quit) |
 | T, F5-F9 | Taunt, emotes (bow, wave, cry, laugh, dance) |
 | F | Blitzkrieg upgrade panel (Up/Down, Enter buys) |
 | M | Blitzkrieg minimap on / off |
@@ -81,7 +81,8 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
-| Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera |
+| Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera; optional fixed (non-random) bullet spread |
+| Kill camera | When someone kills you, the camera swoops to your killer and orbits it (mouse turns, wheel zooms) under a floating "*name* killed YOU" blood tag, with a blood burst on your corpse |
 | Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy (with tracker pings and spy items), blitzkrieg (nine classes, upgrades, minimap, announcer, rewards), clan war, training |
 | Extra modes (not in retail) | The port's own takes on modes community servers made popular, built from retail items and maps: **Infected** (one random player turns zombie each round: blade only, faster, tougher, knockback hits; whoever a zombie kills joins them; survivors win at the round timer), **Gun Game** (free for all up a 12-step weapon ladder, a kill upgrades your weapon, a melee kill demotes the victim, a kill from the last step wins), **Dynamic Duels** (several 1-on-1 duels at once on one map, each in its own arena phase; winners stay, losers queue and watch, Space switches the watched arena) |
 | Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
@@ -89,8 +90,9 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
 | Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
-| Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, kill feed, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned |
-| Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades |
+| Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, kill feed, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
+| Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; a rising kill-streak sound and your own hit sound (`custom/hitsound.wav` next to the profile) |
+| Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars and screen blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
 
 ### Not done yet
 
@@ -132,7 +134,7 @@ headlessly. `gunz-play` adds `--script`, `--time`, `--hp`, `--ap`, `--at`, `--di
 reproducible runs (syntax in `src/bin/gunz-play.rs`). With `GUNZ_SEQ=SECS` and a `%` in the shot
 path it also saves the last SECS seconds at 20 fps, which is how the GIF above was made.
 `GUNZ_PROFILE=PATH` uses another profile file. `RUST_LOG=gunz::bot=debug` logs bot decisions;
-`GUNZ_FRAMETIMES=1` logs frame times.
+`GUNZ_FRAMETIMES=1` logs frame times (add `GUNZ_NOVSYNC=1` for uncapped frames).
 
 </details>
 

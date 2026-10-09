@@ -165,6 +165,8 @@ pub struct Nav {
     min: Vec2,
     links: Vec<Vec<Link>>,
     broken: HashSet<(u32, u32)>,
+    /// Nodes with a link in `broken`.
+    broken_from: Vec<bool>,
 }
 
 /// Longest straight walk [`walkable`] accepts (metres).
@@ -531,9 +533,11 @@ impl Nav {
         let mut nodes = Vec::new();
         let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
         let min2 = Vec2::new(min.x, min.z);
-        let n = ((max.x - min.x) / CELL).ceil() as i32;
+        let n = ((max.x - min.x) / CELL).ceil() as usize;
         let m = ((max.z - min.z) / CELL).ceil() as i32;
-        for ix in 0..n {
+        // One column of the grid per task; the node ids are handed out in grid order afterwards.
+        let columns = par(n, |ix| {
+            let mut out = Vec::new();
             for iz in 0..m {
                 let (x, z) = (
                     min.x + (ix as f32 + 0.5) * CELL,
@@ -552,10 +556,19 @@ impl Nav {
                             .raycast(h.point + Vec3::Y * 0.02, Vec3::Y, HEIGHT)
                             .is_none()
                     {
-                        cells.entry((ix, iz)).or_default().push(nodes.len() as u32);
-                        nodes.push(stand.pos);
+                        out.push((iz, stand.pos));
                     }
                 }
+            }
+            out
+        });
+        for (ix, column) in columns.into_iter().enumerate() {
+            for (iz, pos) in column {
+                cells
+                    .entry((ix as i32, iz))
+                    .or_default()
+                    .push(nodes.len() as u32);
+                nodes.push(pos);
             }
         }
         let mut nav = Nav {
@@ -564,7 +577,9 @@ impl Nav {
             cells,
             min: min2,
             broken: HashSet::new(),
+            broken_from: Vec::new(),
         };
+        nav.broken_from = vec![false; nav.nodes.len()];
         let links = par(nav.nodes.len(), |i| nav.links_of(col, i));
         nav.links = links;
         nav
@@ -572,7 +587,8 @@ impl Nav {
 
     /// Adds the wall kick climbs ([`Kind::Kick`]) from the main body of the map to its islands.
     /// Per island (a group of linked floors) the search stops at its first climb or after
-    /// `KICK_TRIES` tries.
+    /// `KICK_TRIES` tries. The nodes go to the threads in one contiguous chunk each (the tries
+    /// are shared, so which climb an island gets depends on the order they are tried in).
     fn add_kicks(&mut self, col: &MapCollision) {
         let island = self.islands();
         let comp = self.components(&island);
@@ -584,7 +600,9 @@ impl Nav {
         let state: Vec<(AtomicBool, AtomicU32)> = (0..groups)
             .map(|_| (AtomicBool::new(false), AtomicU32::new(0)))
             .collect();
-        let extra = par(self.nodes.len(), |j| {
+        let n = self.nodes.len();
+        let chunk = n.div_ceil(threads()).max(1);
+        let extra = par_blocks(n, chunk, |j| {
             let c = comp[j as usize];
             (c != u32::MAX)
                 .then(|| self.kick_into(col, &island, j, &state[c as usize]))
@@ -704,6 +722,9 @@ impl Nav {
         j: u32,
         (done, tries): &(AtomicBool, AtomicU32),
     ) -> Option<(u32, Link)> {
+        if done.load(AtomicOrdering::Relaxed) || tries.load(AtomicOrdering::Relaxed) >= KICK_TRIES {
+            return None;
+        }
         for perch in self.perches(col, j) {
             for i in self.perch_starts(&perch, island) {
                 if done.load(AtomicOrdering::Relaxed)
@@ -1108,6 +1129,7 @@ impl Nav {
 
     /// Declares the link `a` -> `b` unusable (a bot got stuck on it).
     pub fn mark_broken(&mut self, a: u32, b: u32) {
+        self.broken_from[a as usize] = true;
         self.broken.insert((a, b));
     }
 
@@ -1156,8 +1178,9 @@ impl Nav {
             if h(i) < q.best.1 {
                 q.best = (i, h(i));
             }
+            let check = self.broken_from[i as usize];
             for (k, l) in self.links[i as usize].iter().enumerate() {
-                if self.broken.contains(&(i, l.to)) || l.kind == Kind::Kick && !q.kicks {
+                if check && self.broken.contains(&(i, l.to)) || l.kind == Kind::Kick && !q.kicks {
                     continue;
                 }
                 let c = q.cost[i as usize] + l.cost;
@@ -1204,23 +1227,41 @@ impl Nav {
     }
 }
 
-/// `f` of every node id `0..n`, on all cores, in order.
+fn threads() -> usize {
+    std::thread::available_parallelism().map_or(4, |n| n.get())
+}
+
+/// `f` of every id `0..n`, on all cores, in order. Threads take blocks of ids as they finish
+/// (the cost per id varies a lot: a flat floor is two sims, a gap or wall is dozens).
 fn par<T: Send>(n: usize, f: impl Fn(u32) -> T + Sync) -> Vec<T> {
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let ids: Vec<u32> = (0..n as u32).collect();
-    std::thread::scope(|s| {
-        let workers: Vec<_> = ids
-            .chunks(n.div_ceil(threads).max(1))
-            .map(|c| {
-                let f = &f;
-                s.spawn(move || c.iter().map(|&i| f(i)).collect::<Vec<_>>())
+    par_blocks(n, (n / (threads() * 8)).clamp(1, 16), f)
+}
+
+/// [`par`] with the ids handed out `block` at a time.
+fn par_blocks<T: Send>(n: usize, block: usize, f: impl Fn(u32) -> T + Sync) -> Vec<T> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut blocks: Vec<(usize, Vec<T>)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads())
+            .map(|_| {
+                s.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let a = next.fetch_add(block, AtomicOrdering::Relaxed);
+                        if a >= n {
+                            return done;
+                        }
+                        done.push((a, (a..(a + block).min(n)).map(|i| f(i as u32)).collect()));
+                    }
+                })
             })
             .collect();
         workers
             .into_iter()
             .flat_map(|w| w.join().expect("nav worker"))
             .collect()
-    })
+    });
+    blocks.sort_unstable_by_key(|b| b.0);
+    blocks.into_iter().flat_map(|b| b.1).collect()
 }
 
 /// Min-heap entry: estimated total cost, node.

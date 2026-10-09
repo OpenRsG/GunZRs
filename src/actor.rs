@@ -448,7 +448,6 @@ impl ActorSpawner<'_, '_> {
             Transform::from_rotation(Quat::from_rotation_y(PI)),
         )
         .unwrap_or_else(|e| panic!("character {}: {e}", ch.name));
-
         let ids = match (&self.arsenal, spec.loadout.is_empty()) {
             (Some(a), _) => a.0.clone(),
             (None, true) => DEFAULT_LOADOUT.to_vec(),

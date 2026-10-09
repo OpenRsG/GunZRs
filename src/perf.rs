@@ -21,6 +21,8 @@ const WARM: usize = 90;
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 struct Stamp(usize);
 
+mod render;
+
 pub struct PerfPlugin;
 
 impl Plugin for PerfPlugin {
@@ -50,9 +52,11 @@ impl Plugin for PerfPlugin {
             prev_start: None,
             dts: Vec::new(),
             work: Vec::new(),
+            per: vec![Vec::new(); last],
             counts: [0; 4],
         })
         .add_systems(Last, summary);
+        render::build(app);
     }
 }
 
@@ -65,6 +69,8 @@ struct Perf {
     dts: Vec<f32>,
     /// Main-thread schedule time per frame in ms (the period minus the wait for the next frame).
     work: Vec<f32>,
+    /// Per main schedule, its time per frame in ms.
+    per: Vec<Vec<f32>>,
     /// Image, mesh, material, audio asset and entity counts at the previous frame's end.
     counts: [usize; 4],
 }
@@ -85,6 +91,9 @@ impl Perf {
             let dt = ms(prev, now);
             self.dts.push(dt);
             self.work.push(ms(self.at[0], self.at[self.names.len()]));
+            for (k, v) in self.per.iter_mut().enumerate() {
+                v.push(ms(self.at[k], self.at[k + 1]));
+            }
             let counts = [
                 count::<Image>(world),
                 count::<Mesh>(world),
@@ -148,4 +157,17 @@ fn summary(mut exit: MessageReader<AppExit>, perf: Res<Perf>) {
     stats("load", &perf.dts[..warm]);
     stats("play", &perf.dts[warm..]);
     stats("play main-thread work", &perf.work[warm..]);
+    // p50/p99 ms of every main schedule that takes at least 0.02 ms at the median.
+    let sched: Vec<String> = perf
+        .names
+        .iter()
+        .zip(&perf.per)
+        .filter_map(|(n, v)| {
+            let mut s = v.get(warm..)?.to_vec();
+            s.sort_by(f32::total_cmp);
+            let p50 = *s.get(s.len() / 2)?;
+            (p50 >= 0.02).then(|| format!("{n}={p50:.2}/{:.2}", percentile(&s, 0.99)))
+        })
+        .collect();
+    eprintln!("[perf] main schedules p50/p99 ms: {}", sched.join(" "));
 }

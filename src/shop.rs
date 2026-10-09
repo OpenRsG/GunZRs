@@ -374,6 +374,16 @@ impl Icons {
             .and_then(|(src, r)| Some((self.atlas.get(src)?.clone(), Some(*r))))
             .unwrap_or_else(|| (self.unknown.clone(), None))
     }
+
+    /// The icon of item `id` as a UI image (the "unknown" slot when `itemicon.xml` has none).
+    pub fn node(&self, data: &ShopData, id: u32) -> ImageNode {
+        let (image, rect) = self.get(data, id);
+        ImageNode {
+            rect,
+            image_mode: NodeImageMode::Stretch,
+            ..ImageNode::new(image)
+        }
+    }
 }
 
 #[derive(Component, Clone, Copy)]

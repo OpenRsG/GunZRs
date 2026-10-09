@@ -60,7 +60,7 @@ builds Linux, Windows and macOS, but nobody has played it on Windows or macOS ye
 | T, F5-F9 | Taunt, emotes (bow, wave, cry, laugh, dance) |
 | F | Blitzkrieg upgrade panel (Up/Down, Enter buys) |
 | M | Blitzkrieg minimap on / off |
-| 1-6, arrows, Enter | Blitzkrieg class screen at the start of the match (30 s; click works too) |
+| 1-9, arrows, Enter | Blitzkrieg class screen at the start of the match (30 s; click works too) |
 
 Dead in a round mode? Space or click cycles the player you spectate.
 
@@ -77,16 +77,16 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Maps | All 30 RS v7 maps plus quest maps, with lightmaps, skies and every prop (fires, light shafts, water, fans, waving flags and curtains) |
 | Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
 | Characters | Man and woman models, 170 / 259 outfit sets, skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
-| Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls; rocket launchers and machine guns slow you and block wall moves, as their item data says |
+| Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls; run speed, jump, gravity, fall speed and wall kicks measured from public match replays; rocket launchers and machine guns slow you and block wall moves, as their item data says |
 | Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera |
-| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy (with tracker pings and spy items), blitzkrieg (classes, upgrades, minimap, announcer, rewards), clan war, training |
+| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy (with tracker pings and spy items), blitzkrieg (nine classes, upgrades, minimap, announcer, rewards), clan war, training |
 | Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
 | Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards; sacrifice items unlock special scenarios, a random dice roll picks the route, quest items stay in your inventory, level limits and challenge time bonuses |
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
-| Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs), weapon choice by range, guarding, butterfly, grenade and smoke throws, pickups, retreating, skill level |
+| Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top), weapon choice by range, guarding, butterfly, grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
 | Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, kill feed, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned |
 | Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades |
@@ -97,12 +97,11 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 |---|---|
 | Online multiplayer | Not started; every match is local, with bots as the other players |
 | Online clans | Clan chat, invitations, the war lobby and matchmaking need a server; rival clans are generated bots that never play each other |
-| Blitzkrieg extras | The six classes are playable, but the data has no class names, icons or weapons, so card texts and class guns are the port's guesses; three more stat rows (Hunter, Slaughter, Trickster) have no class book and are left out; medals are stored and shown on the profile header, but the data holds no medal prices, so the medal shop cannot be rebuilt |
-| Quest extras | The challenge quest's gacha reward item (3000xxx) is not in the item data, so it cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon uses a guessed skeleton set (the data has none) |
-| Music choice | The data does not say which track belongs to which map; the port picks one per map (fixed, by name) |
+| Blitzkrieg extras | Nine classes are playable (three of them have no class book, so whether retail offered them is unknown); neither the data nor public sources give class art or loadouts, so the cards show weapon icons and the class guns are the port's guesses; the medal shop's stock and prices live on the server, so medals are stored and shown but cannot be spent |
+| Quest extras | The challenge quest's gacha reward item (3000xxx) is not in the item data, so it cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon's skeletons follow the data's id scheme and a public wiki, but its XP, bounty and drops are not in the data |
+| Music choice | Neither the data nor public sources say which track belongs to which map; the port picks one of the nine in-game tracks per map (fixed, by name) |
 | Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
-| Bots on Mansion | The top floors are reachable only by one wall run up a pillar corner that needs about 5 cm precision; bots cannot do it reliably, so they never go up there |
-| Exact feel | Run speed, jump height, gravity and several timings are not in the data; they are estimates (listed as **inferred** in `docs/formats.md`) |
+| Exact feel | Movement constants come from replays of older clients, so parity with the Steam client is unproven; tumble speed and the wall-climb height are still estimates (listed as **inferred** in `docs/formats.md`) |
 
 ## More tools
 

@@ -7,14 +7,14 @@
 //! reinforcements and ends the match. Rules *inferred* rather than read are marked; the long form
 //! is `docs/formats.md` "Blitzkrieg".
 //!
-//! At the start of the match (`CLASS_SELECT_TIME`) the player picks one of the six classes of
-//! `CLASS_BOOK`; bots pick for themselves. The screens (class select, minimap, reward) are
-//! `blitz/ui.rs`.
+//! At the start of the match (`CLASS_SELECT_TIME`) the player picks one of the nine classes of
+//! `CLASS_TABLE` (six have a `CLASS_BOOK` item, three do not); bots pick for themselves. The
+//! screens (class select, minimap, reward) are `blitz/ui.rs`.
 //!
 //! Controls: `F` opens the upgrade panel, Up/Down choose, Enter buys (the honor is spent per step
 //! of [`Cfg::up`]); bots buy by themselves. Headless checks: `GUNZ_BLITZ_BUY="SECS:N,.."` buys
 //! upgrade N (1-6) for the player at match second SECS, `GUNZ_BLITZ_HP=K` scales the objectives'
-//! health, `GUNZ_BLITZ_CLASS=N` (1-6) picks the player's class without the screen,
+//! health, `GUNZ_BLITZ_CLASS=N` (1-9) picks the player's class without the screen,
 //! `GUNZ_BLITZ_SELECT=1` shows the class screen in a `--shot` run (which otherwise skips it, with
 //! no class and the default weapons) and `GUNZ_BLITZ_SKIP=SECS` starts the match SECS seconds
 //! in (clock, honor income and soldier enhancement), to reach the reward's minimum time.
@@ -55,26 +55,41 @@ const BOT_ORDER: [usize; 6] = [2, 0, 1, 4, 3, 5];
 /// Most players of one side that may share a class (message 2116 "You cannot select more than 3
 /// of the same classes"; the Korean text reads "3 or more", so the limit is 3 or 2).
 const SAME_CLASS: u8 = 3;
-/// The six classes: name, `CLASS_TABLE` element and `CLASS_BOOK` attribute (all observed; the
-/// names are the book keys, no string names them).
-const CLASSES: [(&str, &str, &str); 6] = [
-    ("Gladiator", "GLADIATOR", "gladiator"),
-    ("Duelist", "DUELIST", "duelist"),
-    ("Incinerator", "INCINERATOR", "incinerator"),
-    ("Combat Officer", "COMBATOFFICER", "combatofficer"),
-    ("Assassin", "ASSASSIN", "assassin"),
-    ("Terrorist", "TERRORIST", "terrorist"),
+/// The nine classes: name, `CLASS_TABLE` element and `CLASS_BOOK` attribute (`None`: the table
+/// has the class but the book does not). Elements and attributes are **observed**; the names are
+/// the keys capitalised, no string in any locale names a class (the data has no class text).
+/// Hunter, Slaughter and Trickster come last: their book item does not exist (message 2115 says
+/// a class needs a book), so retail may never have let a player pick them; they are playable
+/// here because the table gives them stats.
+const CLASSES: [(&str, &str, Option<&str>); 9] = [
+    ("Gladiator", "GLADIATOR", Some("gladiator")),
+    ("Duelist", "DUELIST", Some("duelist")),
+    ("Incinerator", "INCINERATOR", Some("incinerator")),
+    ("Combat Officer", "COMBATOFFICER", Some("combatofficer")),
+    ("Assassin", "ASSASSIN", Some("assassin")),
+    ("Terrorist", "TERRORIST", Some("terrorist")),
+    ("Hunter", "HUNTER", None),
+    ("Slaughter", "SLAUGHTER", None),
+    ("Trickster", "TRICKSTER", None),
 ];
-/// Each class's weapons (*inferred* from the class names and the stats: the data has no loadout):
-/// a blade and a gun, the first of the two selected. The Incinerator's gun is the item the
-/// data names "Incinerator" (2110008, a machine gun).
-const KITS: [(WeaponKind, WeaponKind); 6] = [
+/// Each class's weapons: a blade and a gun, the first of the two selected. Public sources name no
+/// class loadout (none of the retail data, the Steam / wiki texts or the forum threads does; see
+/// `docs/formats.md`), and `WEAPON` scales every weapon type, so retail probably let players
+/// bring their own. These are therefore all *inferred*, from the stats only: the Gladiator's
+/// melee bonus (blade first), the Duelist's shotgun bonuses (shotgun, **observed** by the
+/// attribute names), the Incinerator's fire (the data's "Incinerator" machine gun, item
+/// 2110008), the Terrorist's building bonus (rocket), the Slaughter's fire and magazines
+/// (SMG) and the Trickster's support (pistol); the rest by their names.
+const KITS: [(WeaponKind, WeaponKind); CLASSES.len()] = [
     (WeaponKind::Katana, WeaponKind::Revolver),
     (WeaponKind::Dagger, WeaponKind::Shotgun),
     (WeaponKind::Katana, WeaponKind::MachineGun),
     (WeaponKind::Katana, WeaponKind::Rifle),
     (WeaponKind::Dagger, WeaponKind::Smg),
     (WeaponKind::Katana, WeaponKind::Rocket),
+    (WeaponKind::Dagger, WeaponKind::Rifle),
+    (WeaponKind::Katana, WeaponKind::Smg),
+    (WeaponKind::Dagger, WeaponKind::Pistol),
 ];
 const INCINERATOR: u32 = 2110008;
 /// Honor gains below / above these get the less / more effect and sound (*inferred*: the effects
@@ -528,7 +543,9 @@ struct Blitz {
     /// `GUNZ_BLITZ_CLASS`: the player's class when there is no screen.
     pick: Option<usize>,
     /// Blade and gun item of each class.
-    kit: [[u32; 2]; 6],
+    kit: [[u32; 2]; CLASSES.len()],
+    /// Item icon of each class's blade and gun (the class screen's cards).
+    art: Vec<[ImageNode; 2]>,
     /// Frames until the class weapons are in hand (the ammunition bonus follows).
     settle: u8,
     /// `GUNZ_BLITZ_SKIP`: the match starts this many seconds in.
@@ -687,6 +704,12 @@ fn setup(
     let skip = env("GUNZ_BLITZ_SKIP").unwrap_or(0.0);
     clock.elapsed = skip;
     let (plan, bounds) = ui::floor_plan(&level.map);
+    // The weapons' item icons (`itemicon.xml`) for the class cards; there is no class art.
+    let kit = kits(&data.items);
+    let shop = crate::shop::ShopData::load(&level.vfs, &data.items)
+        .unwrap_or_else(|e| panic!("blitz: shop data: {e}"));
+    let icons = crate::shop::Icons::load(&level.vfs, &shop, &mut images);
+    let art = kit.map(|k| k.map(|id| icons.node(&shop, id))).to_vec();
     info!(
         "blitz: {} routes, {} crates, respawn {} s, protection {} s, honor {} +{}/{} s, class screen {} s",
         routes.paths.len(),
@@ -721,7 +744,8 @@ fn setup(
         }),
         assign: true,
         pick,
-        kit: kits(&data.items),
+        kit,
+        art,
         settle: 0,
         skip,
         msgs: VecDeque::new(),
@@ -810,7 +834,9 @@ fn income(
         blitz.income_t -= every;
         for (mut h, t, dead) in &mut q {
             if !dead {
-                let g = blitz.cfg.income_for(players[side(*t)]);
+                // The Hunter's `aquirHonorRatio` (**inferred**: a share more of every honor gain).
+                let g = blitz.cfg.income_for(players[side(*t)])
+                    * (1.0 + blitz.cfg.class_val(h.class, "aquirHonorRatio"));
                 h.points += g;
                 h.total += g;
             }
@@ -909,8 +935,9 @@ fn scoring(
         }
         let mut gains = String::new();
         for (e, mut h, name, t, player) in &mut honors {
-            let g = own.iter().find(|o| o.0 == e).map_or(0.0, |o| o.1)
-                + if t == Some(&by) { all } else { 0.0 };
+            let g = (own.iter().find(|o| o.0 == e).map_or(0.0, |o| o.1)
+                + if t == Some(&by) { all } else { 0.0 })
+                * (1.0 + blitz.cfg.class_val(h.class, "aquirHonorRatio"));
             if g > 0.0 {
                 h.points += g;
                 h.total += g;
@@ -1128,8 +1155,13 @@ fn buffs(
                 .iter()
                 .any(|(ot, p)| ot == t && within(*p, tf.translation, officer.1))
         });
+        // The Trickster's `reduceDamageRatio` takes the barricade's place where it is higher
+        // (**inferred**: the attribute is the barricade's own).
         m.taken = if barricade {
-            1.0 - cfg.barricade.reduce
+            1.0 - cfg
+                .barricade
+                .reduce
+                .max(cfg.class_val(c, "reduceDamageRatio"))
         } else {
             1.0
         } * if guarded { 1.0 - officer.0 } else { 1.0 };
@@ -1158,7 +1190,7 @@ fn faster_respawn(time: Res<Time>, blitz: Res<Blitz>, mut q: Query<(&Honor, &mut
 /// Duelist's `addShotgunMagazine` adds magazines to the shotgun. Sets rather than adds, so a
 /// second call changes nothing.
 fn restock(cfg: &Cfg, data: &ActorData, h: &Honor, load: &mut Loadout) {
-    let k = 1.0 + sum(&cfg.up.magazine, h.level[4]);
+    let k = 1.0 + sum(&cfg.up.magazine, h.level[4]) + cfg.class_val(h.class, "addMagazineRatio");
     let mags = cfg.class_val(h.class, "addShotgunMagazine");
     for s in &mut load.slots {
         let Some(w) = data.items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
@@ -1248,20 +1280,28 @@ fn zones(
         return;
     }
     for (h, team, tf, mut v, mut load) in &mut q {
-        let bonus = sum(&blitz.cfg.up.magazine, h.level[4]);
-        let mags = blitz.cfg.class_val(h.class, "addShotgunMagazine");
+        let k = |a: &str| blitz.cfg.class_val(h.class, a);
+        let bonus = sum(&blitz.cfg.up.magazine, h.level[4]) + k("addMagazineRatio");
+        let mags = k("addShotgunMagazine");
+        // The Trickster's `recovery*Ratio` replace the zone's own where higher (**inferred**: the
+        // attributes are those of `BUILDING/RADAR` and `/BARRICADE`).
+        let ap_hp = radar.ap_hp.max(k("recoveryApHpRatio"));
+        let (radar_mag, barricade_mag) = (
+            radar.mag.max(k("recoveryMagazineRatio")),
+            barricade.mag.max(k("recoveryMagazineRatio")),
+        );
         for (n, wt, g) in &walls {
             if wt != team {
                 continue;
             }
             match n.kind.as_str() {
                 "radar" if heal && within(g.translation(), tf.translation, radar.dist) => {
-                    v.hp = (v.hp + radar.ap_hp * v.max_hp).min(v.max_hp);
-                    v.ap = (v.ap + radar.ap_hp * v.max_ap).min(v.max_ap);
-                    refill(&data, &mut load, radar.mag, bonus, mags);
+                    v.hp = (v.hp + ap_hp * v.max_hp).min(v.max_hp);
+                    v.ap = (v.ap + ap_hp * v.max_ap).min(v.max_ap);
+                    refill(&data, &mut load, radar_mag, bonus, mags);
                 }
                 "barricade" if stock && within(g.translation(), tf.translation, barricade.dist) => {
-                    refill(&data, &mut load, barricade.mag, bonus, mags);
+                    refill(&data, &mut load, barricade_mag, bonus, mags);
                 }
                 _ => {}
             }
@@ -1550,7 +1590,7 @@ fn payout(r: &RewardCfg, won: bool, mvp: bool, secs: f32, honor: f32) -> Payout 
 /// revolver or rifle where the kind matches, else the lowest id of the kind that has a name, a
 /// model and a real damage (zitem lists debug items with `damage="1"`): the same weapons every
 /// run, unlike a map's iteration order.
-fn kits(items: &Items) -> [[u32; 2]; 6] {
+fn kits(items: &Items) -> [[u32; 2]; CLASSES.len()] {
     let is = |i: &crate::item::Item, kind| {
         i.weapon
             .as_ref()
@@ -1593,7 +1633,7 @@ pub fn arsenal(items: &Items) -> Vec<u32> {
 
 /// The class screen (`CLASS_SELECT_TIME`, `blitz/ui.rs`) and then the classes: the player's
 /// pick (or none), a random one for each bot with at most [`SAME_CLASS`] per side, each
-/// equipped with its weapons. Enter / Space confirm, 1-6 and the arrow keys choose; the
+/// equipped with its weapons. Enter / Space confirm, 1-9 and the arrow keys choose; the
 /// highlighted class is taken when the time is up.
 #[allow(clippy::too_many_arguments)]
 fn classes(
@@ -1622,6 +1662,9 @@ fn classes(
             KeyCode::Digit4,
             KeyCode::Digit5,
             KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
         ];
         if let Some(i) = digits.iter().position(|k| keys.just_pressed(*k)) {
             s.sel = i;
@@ -1643,7 +1686,7 @@ fn classes(
     }
     let mut order: Vec<(Entity, bool)> = q.iter().map(|a| (a.0, a.5)).collect();
     order.sort_by_key(|o| !o.1);
-    let mut count = [[0u8; 6]; 2];
+    let mut count = [[0u8; CLASSES.len()]; 2];
     let mut log = String::new();
     for (e, player) in order {
         let Ok((_, mut h, mut v, team, name, _)) = q.get_mut(e) else {
@@ -2056,12 +2099,18 @@ mod tests {
         assert_eq!(c.class_val(Some(3), "distance"), 800.0);
         assert_eq!(c.class_val(Some(0), "enhanceMeleeDPS"), 60.0);
         assert_eq!(c.class_val(None, "addMaxApHp"), 0.0);
-        for (i, (_, _, book)) in CLASSES.iter().enumerate() {
+        // Six classes have a book, the other three (Hunter, Slaughter, Trickster) only a row.
+        assert_eq!(c.book.len(), 6);
+        for (i, (_, element, book)) in CLASSES.iter().enumerate() {
+            assert!(c.class.contains_key(*element), "{element}");
             assert_eq!(
-                c.book.iter().find(|b| b.0 == *book).unwrap().1,
-                900000 + i as u32
+                book.map(|b| c.book.iter().find(|x| x.0 == b).unwrap().1),
+                (i < 6).then_some(900000 + i as u32)
             );
         }
+        assert_eq!(c.class_val(Some(6), "aquirHonorRatio"), 0.2);
+        assert_eq!(c.class_val(Some(7), "addMagazineRatio"), 0.4);
+        assert_eq!(c.class_val(Some(8), "recoveryMagazineRatio"), 1.0);
         assert_eq!(c.leave, [3.0, 4.0, 8.0]);
         assert_eq!([5, 3, 2, 1].map(|n| c.income_for(n)), [2.0, 3.0, 4.0, 8.0]);
         assert_eq!((c.reward.min_time, c.reward.min_honor), (420.0, 2000.0));

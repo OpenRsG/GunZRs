@@ -634,7 +634,7 @@ ids 15, 16, 18-21 appear nowhere). Status after this round, `--mode` is the CLI/
 | 10 | Duel match | `duel` | done |
 | 11 | Duel tournament (`dueltournament` channel only) | `tournament` | done (knockout bracket, **inferred**) |
 | 12 | Challenge quest | `quest` | the Quest slice |
-| 13 | Blitzkrieg (`GAME_MODE_BLITZKRIEG`, `system/blitzkrieg.xml`, map `blitzkrieg`) | `blitzkrieg` | done (`blitz.rs`, `blitz/ui.rs`: six classes, class screen, medal / XP / bounty reward, minimap, announcer; class weapons **inferred**, medals have no currency, see below) |
+| 13 | Blitzkrieg (`GAME_MODE_BLITZKRIEG`, `system/blitzkrieg.xml`, map `blitzkrieg`) | `blitzkrieg` | done (`blitz.rs`, `blitz/ui.rs`: nine classes (three without a book), class screen, medal / XP / bounty reward, minimap, announcer; class weapons **inferred**, no class art exists (the cards show the weapons' icons), medals have no currency, see below) |
 | 14 | Spy (`GAME_MODE_SPY`, `spymode.xml`, `spymaplist.xml`) | `spy` | done: spy case, frost bullets, stun grenades and mines (stats **inferred**, see below) |
 | 17 | Gunman (`GAME_MODE_RANDOM_WEAPON`) | `gunman` | done (weapon pool **inferred**) |
 | 22 | clan scrim (`GAMETYPE_CLAN_SCRIM`, "Clan War") | `clanwar` | done offline, see "Clans": 4 against 4 (`MAXPLAYERS` 8), `ROUNDS` 3, no time limit = elimination rounds between the player's clan and a generated rival clan |
@@ -875,21 +875,47 @@ the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu 
   reserve cap, **inferred**), **medics** shorten the respawn by the table value at the step reached (the table is
   read as cumulative, **inferred**).
 - **Classes** (`CLASS_SELECT_TIME 30`; screen in `src/blitz/ui.rs`, test `rule_book_parses`): the match starts held
-  (`game::Hold`: frozen like a pause but without the pause menu, Esc does not resume) with six cards, the countdown of
-  message 2100 and the highlighted class taken when it runs out (30 s of real time); 1-6 / arrows choose, Enter / Space
+  (`game::Hold`: frozen like a pause but without the pause menu, Esc does not resume) with nine cards, the countdown of
+  message 2100 and the highlighted class taken when it runs out (30 s of real time); 1-9 / arrows choose, Enter / Space
   or a click confirms. Bots pick a random class with at most 3 per side (message 2116; its Korean text reads "3 or
   more", the English and Chinese "more than 3"). `--shot` runs skip the screen (no class, the default katana /
-  revolver / rifle) unless `GUNZ_BLITZ_SELECT=1`; `GUNZ_BLITZ_CLASS=N` picks N without it. Effects (**observed**
+  revolver / rifle) unless `GUNZ_BLITZ_SELECT=1`; `GUNZ_BLITZ_CLASS=N` (1-9) picks N without it. Effects (**observed**
   numbers, **inferred** reading): Gladiator +60 AP and HP, +60 DPS with a blade (as `ENHANCE_PLAYER dps`); Duelist
   +3 shotgun magazines and shotgun damage x2 (`enhanceShotgunDamage="1"`, read as a share like the file's other
   0..1 values and like the Terrorist's `1.0`); Incinerator 7 fire damage per second for 4 s on every hit and -20 DPS;
   Combat Officer: allies in 8 m (himself included) take 15 % less (`checkDelay` ignored, evaluated every frame);
   Assassin +15 % damage; Terrorist +100 % damage to buildings (`Mods.vs_buildings` against `Mods.building`, applied
-  in `combat::apply_damage`). **Weapons are inferred** (the data gives no loadout): Gladiator katana + revolver,
-  Duelist dagger + shotgun, Incinerator katana + the machine gun the data names "Incinerator" (2110008), Combat
-  Officer katana + rifle, Assassin dagger + SMG, Terrorist katana + rocket; every actor spawns with all of them
-  (`ModesPlugin::finish` -> `blitz::arsenal`, as Gunman) and an `Equip` picks the two. A Blitzkrieg actor therefore
-  ignores the profile's loadout.
+  in `combat::apply_damage`).
+  **The three classes without a book** (`HUNTER`, `SLAUGHTER`, `TRICKSTER`: **observed** `CLASS_TABLE` rows listed
+  first, no `CLASS_BOOK` key, no string, no item, no icon; the comment above the table says a new class needs a source
+  change) are playable as classes 7-9, named by their element (the card says "no class book"). Reading
+  (**inferred** from the attribute names): Hunter `aquirHonorRatio 0.2` = +20 % on every honor gain (income and kills,
+  `total` included); Slaughter `enchantFireDamage 3` for 4 s (the Incinerator's mechanism, 3 instead of 7, no DPS
+  penalty) and `addMagazineRatio 0.4` = +40 % bullets, added to the `UPGRADE magazineRatio` steps (like them in the
+  restock and in the zones' refills); Trickster `recoveryApHpRatio 0.33` / `recoveryMagazineRatio 1.0` /
+  `reduceDamageRatio 1.0` are the very attributes of `BUILDING/RADAR` (0.1 / 0.1) and `/BARRICADE` (damage 0.5, ammo
+  0.1), so inside those zones the Trickster gets the larger of the zone's value and its own (33 % AP/HP and a full
+  refill per radar tick; no damage at all and a full refill per barricade tick). Whether retail let anyone pick them is
+  **unknown**: the only book evidence is six items, the commented-out `SHOP_ITEM`s 2900000-2900005 of
+  `gpcgameroom.xml:220-225` (whose names `STR:ZITEM_NAME_2900000..5` no locale defines), and message 2115 ("a manual is
+  needed to select the class").
+  **Weapons are inferred** (no retail file, locale string, and none of the public sources below gives a class loadout;
+  `WEAPON DPS/DELAY` scale every weapon type, which suggests retail classes used whatever weapon the player brought):
+  Gladiator katana + revolver, Duelist dagger + shotgun (the shotgun follows from the attribute names, **observed**
+  by implication), Incinerator katana + the machine gun the data names "Incinerator" (2110008), Combat Officer katana +
+  rifle, Assassin dagger + SMG, Terrorist katana + rocket, Hunter dagger + rifle, Slaughter katana + SMG, Trickster
+  dagger + pistol; every actor spawns with all of them (`ModesPlugin::finish` -> `blitz::arsenal`, as Gunman) and an
+  `Equip` picks the two. A Blitzkrieg actor therefore ignores the profile's loadout. The class cards show the two
+  weapons' `itemicon.xml` icons (`shop::Icons::node`): `interface/` has no class art at all (searched
+  `blitz*`, `class*`, `job*`, `medal*`, every `bitmapalias.xml` name for class / duelist / assassin / terror / officer /
+  hunter: only `Gladiator.png` / `TeamGladiator.png`, the *game-mode* icons of `Play_04.png`, `blitzinfo_panel.tga`, an
+  unreferenced 376 x 170 stats panel ("Wins/Losses, Points, Total Points, Ranking") with an empty square for an
+  avatar, and `blitz_match_button_*`, `banner_blitz*`, `medalshop_*`, `map_blitzkrieg.bmp`).
+  **External** search (2026-10, nothing found): no wiki, Steam page or forum names a Blitzkrieg class or loadout. What
+  public sources do say is the mode itself (RaGEZONE "kGunZ BlitzKrieg Info",
+  https://forum.ragezone.com/threads/kgunz-blitzkrieg-info.866791/: new game type `MMATCH_GAMETYPE_BLITZKRIEG`, enum
+  0xD, "BLK", replay version 9, introduced in the Korean client in 2012); GunZ The Duel wiki pages
+  (https://gunz-the-duel.wiki/updates/remaster/, https://gunz.fandom.com/wiki/Game_Modes) list no Blitzkrieg mode.
 - **Honor income and `LEAVE_AUTO_INC_HONOR`**: with 3 / 2 / 1 players left on a side (alive or dead, players and
   bots) each of them earns 3 / 4 / 8 honor per second instead of 2; offline "left" means the side never had more
   (`--bots 2` gives 2 : 2 and the faster income).
@@ -900,10 +926,44 @@ the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu 
   `baseExp` / `baseBounty` (50 each) per full minute played, the same for both sides; a draw pays like a loss;
   the MVP is the player with the most honor earned on the side. XP, bounty and medals are paid once through
   `game::Reward` (the profile also pays its usual match result on top); the profile stores the medals (`medals=`)
-  and shows them on its header. **Impossible**: a medal shop. The data has `interface/default/medalshop.xml` (UI
-  frames only), `SELL_GROUP` 3 in the `gshop.xml` header comment, "medal" strings, and no price in medals anywhere
-  (`gshop.xml`'s `PRICE` is bounty/cash, `eventshopitem.xml` is an event-coin shop, `zitem.xml` has no medal price),
-  so nothing can be bought with medals. `minPlayCount`
+  and shows them on its header. **Not buildable (no stock or price in the data)**: the medal shop (retail name
+  "승점상점", medals are "승점" in the Korean strings). Coverage, all **observed** in `.local/extract` (8 382 files; a
+  case-insensitive "medal" / "메달" / "승점" scan of every `.xml`/`.txt` plus a byte scan for the legacy item ids):
+  - It exists and is server-driven: message 12004 "items can be bought with the medals earned in game (fastest in
+    the Blitzkrieg channel)", 9205 title, 12002 "product info closed because the medal shop refreshed"; `cserror.xml`
+    20033-20037 (not enough medals, list refreshed / refresh failed, discount rate applied / failed);
+    `medalshop.xml` (548 lines: `EQUIPMENTLISTBOX` all / mine, filter `ZCOMBOBOX`, buy / sell buttons, three-line
+    bounty / cash / medal info `TEXTAREA`) comments that the stock is **rotated every midnight (24:00)**, and its
+    `UI_SHOP_02/03/07/24/25/45` + `UI_LOBBY_BLITZ_09` ids all read "미사용 아이디" (unused id) in `strings.xml`.
+    `system/shop.xml` has the "Shop_to_MedalShop" button commented out. `gpcgameroom.xml` lists "medal-shop-only
+    cash items, shop refresh ticket, discount-fixing ticket" (ids 5000004 / 5000005) inside a comment (those ids
+    are now melee effects in `zitem.xml`). So the daily stock, the discount and the pool live on the server.
+  - No price in medals in any live table: `gshop.xml` has 3 010 `SHOP_ITEM`, attributes only `ID ITEM_ID
+    ITEM_TYPE(all 1) ITEM_FILTER(all 4) RESALE SELL_GROUP EXPIRATION_DATE PRICE VISIBLE BEFOREPRICE INFO`;
+    `SELL_GROUP` 1 = bounty, 2 = cash, 5 = event cash (**inferred** from `zitem.xml currency`: 5 -> `eventcash` 256 of
+    256), **no group 3**. `zitem.xml` (1 166 `ITEM`, 58 attributes) has `currency` values `bounty` 849 / `Cash` 146 /
+    `eventcash` 72 / absent 99, `spendtype` only `community`, no medal flag, `bt_price` non-zero on 6 items.
+    `gshoppackageiteminfo.xml` (11 `PACKAGE`: id sort groupid small banner bg activate), `grandompackagetable.xml`
+    (209 loot rows), `eventshop*.xml` (below) carry no medal reference.
+  - `eventshop.xml` `currency_item_id="6300000"` is zitem 6300000 "Damascus Ore" ("Can be sold or exchanged for
+    rewards"), the IMMORTAL event coin (daily / weekly mission rewards 5 / 15 ore, `eventshopitem.xml` 7 items at
+    5-100 ore). Not a medal.
+  - Only medal prices that exist: legacy `system/zshop.xml` (header "SELL_GROUP 3 = 메달샵") has 300 group-3 offers =
+    75 item ids (500009 .. 525013) x 1 / 7 / 15 / 30 days at 4 .. 400 medals (e.g. 500009: 4 / 25 / 50 / 100). None
+    of the 75 ids occurs in `zitem.xml` or in any other of the 8 382 extracted files, so no name, model or
+    stat exists for them; they cannot be shown or equipped.
+  - `gshop.xml` `SELL_GROUP` 7 (4 offers: 5000006 Darkforce 500, 2000020 Damascus Cakram AS 600, 2010028 Damascus
+    Shura ST 700, 2020016 Damascus Dragon Sword AS 600; permanent, visible) is undocumented anywhere (no comment, no
+    UI, no string). Its currency is **unknown**: the prices are far under the 30-day bounty rent of the same weapons
+    (4 100 / 5 400 / 6 800), so not bounty, but nothing ties it to medals rather than another token; it is not
+    treated as the medal shop.
+  - **External** (searched 2026-10): the official Steam news feed of app 3139440 (52 posts, `GetNewsForApp`: patch notes
+    13 Aug - 8 Oct 2026, shop updates are costume packages / Credits / Optimite), the community wiki
+    gunz-the-duel-wiki.wiki (87 `/en/` pages in its sitemap, none about Blitzkrieg or medals); the web-search snippets
+    for StrategyWiki / namu.wiki only mention the old enchant "Medal" accessory and that Blitzkrieg is rarely played
+    (gunz.fandom.com answered HTTP 403): no source names a medal-shop stock or price.
+  Hence medals are earned and stored but nothing spends them; the `Medals` header stays informational. A medal tab
+  needs a stock list from the server (or a documented pool with resolvable items), which is absent. `minPlayCount`
   (a newcomer bonus counted in games played), the waiting medals (matchmaking) and `PENALTY` / message 2112 (a
   quit is the application closing) have no offline counterpart.
 - **Minimap** (`ui::floor_plan`, `ui::minimap`, test `plan_fills_the_floor`): no retail minimap texture exists
@@ -936,9 +996,8 @@ the map `blitzkrieg` (`gunz-play` exits with an error for another MAP, the menu 
 
 **Not modelled**: the class books (900000-900003 are in `globbyuseableitem.xml` / `gshop.xml` as the bounty coins
 "Bounty Pack ... Chest" worth 10 / 100 / 1000 / 10 000, 900004 a 5 000 chest, so the class books named by `CLASS_BOOK`
-are not in this build: every class is free to pick), the three classes without a book (`HUNTER`, `SLAUGHTER`,
-`TRICKSTER` have `CLASS_TABLE` rows but no book and no description anywhere), class names and descriptions in the
-data (none: the names are the `CLASS_BOOK` keys, the card texts are written from the table), class icons (none), the
+are not in this build: every class is free to pick), class names and descriptions in the data (none: the names are
+the `CLASS_TABLE` / `CLASS_BOOK` keys, the card texts are written from the table), class icons (none, see above), the
 medal currency, `PENALTY`; a soldier's `suffer*` states react to damage only as far as `npc.rs` models groggy.
 
 **Checks** (headless, logs and shots in `.local/shots/Blitz/`; `GAME` is the Steam install directory):
@@ -967,6 +1026,11 @@ medal currency, `PENALTY`; a soldier's `suffer*` states react to damage only as 
     Terrorist; Bot 2 (BLUE) Combat Officer; Bot 3 (RED) Incinerator; Bot 4 (BLUE) Gladiator; Bot 5 (RED)
     Terrorist;`, the player holds the Duelist's shotgun with 6/42 (24 spare + 3 x 6), `DUELIST` on the honor line,
     the minimap with the Red base on the left.
+  - Nine classes (`.local/shots/BlitzClasses/`): the `GUNZ_BLITZ_SELECT=1` run above shows nine cards with the two
+    weapons' item icons, the stat text and "no class book" on Hunter / Slaughter / Trickster (`select.png`);
+    `GUNZ_BLITZ_CLASS=7|8|9 ... --bots 5 --skill 0.8 --time 40` each log `blitz: classes: Player (RED) Hunter|Slaughter|
+    Trickster; Bot 1 (BLUE) Slaughter; ... Bot 5 (RED) Trickster;` and exit 0 without a panic (`class7.png`: `HUNTER` on
+    the honor line, HONOR 589 at 0:41).
   - Announcer (`GUNZ_BLITZ_CLASS=4 GUNZ_BLITZ_HP=0.08 ... --bots 6 --skill 0.8 --die-at 50 --time-limit 120`):
     `announce [Blitzkrieg/EventBenefit] ALLIED REINFORCEMENTS: zealot`, `[Blitzkrieg/EventLoss] YOUR BARRICADE WAS
     DESTROYED`, `[Blitzkrieg/EventBenefit] ENEMY BARRICADE DESTROYED`, `[Blitzkrieg/EventLoss] The enemy's
@@ -1043,15 +1107,40 @@ reference, so no retail map/mode-to-track mapping is readable (`Gunz.exe` is pac
 options screen (`interface/default/option.xml`: `BGMMute`, `BGMVolumeSlider`; strings "Background
 Music", "Volume of Background Music") shows the retail game had a mute and a volume.
 
-**Inferred rule** (names only):
+**Indirect links checked, none usable** (**observed**): `filelist.xml` lists every file of the
+install in plain alphabetical path order (the 16 stems sit at lines 7873-7888 between
+`shader/` and `sound/effect/`), so the order is the sort order, not a table, and cannot be
+matched to `map.xml`'s order; map ids and `.rs.xml` files carry no numeric suffix or BGM tag;
+`system/gametypecfg.xml`, `channelrule.xml`, `questmap.xml`, `scenario*.xml` and
+`interface/**` name no track (the only hits for the stems are `filelist.xml` and the unrelated
+`r_hardcore` challenge-quest map directory).
+
+**External** (public, no retail map table exists there either):
+- Ragezone tutorial "Make your own Background Music" (2008, ijji client),
+  <https://forum.ragezone.com/threads/tut-make-your-own-background-music.510170/>: the game
+  loads 10 tracks by fixed name: `Fin` = end of game, `El-tracaz`, `HardBgm3 Vanessa Retake(D)`,
+  `HardBgm(D)`, `HardCore(D)`, `HardTech(D)`, `Industrial technolism`, `Ryswick style` = the seven
+  "in-game songs", `Intro Retake2(D-R)` = character select, `Theme Rock(D)` = lobby. Roles only;
+  no map is named. The CRC32s listed there equal the ones in `filelist.xml`.
+- "GunZ The Duel Complete Soundtrack" rip from the ijji client,
+  <https://www.youtube.com/watch?v=sd_004znEGU> (description): `Intro Retake2(D-R)` [Character
+  Select], `Theme Rock(D)` [Game Select], then the seven in-game tracks above, then `TRANCE
+  mission_tmix`, `Vague words`, `X-Fighter` (no role given). Archive.org copy
+  <https://archive.org/details/gunz-the-duel-music> titles tracks "Duel Theme 2/4/5/8", i.e. the
+  soundtrack uploader's numbering, not map or mode.
+- Further searches (soundtrack listings on Last.fm / MMOs.com / SoundCloud, GunZ wiki) found no
+  page tying a track to a map or mode. `gunzmatching`, `league`, `leagueloop` are in no public
+  list (Steam-era additions).
+
+**Rule in use** (a track-to-map table is **not** available, so the pick stays a hash):
 
 | situation | track |
 |---|---|
-| main menu | `gunzmatching` ("matching" = lobby) |
-| match, any mode but the two below | one of the 10 pool tracks (all but the 5 named here), by FNV-1a of the map directory, so a map always gets the same track |
-| Duel, Duel tournament | `leagueloop` (`league` is its un-looped twin and is unused) |
-| Quest (incl. challenge quest/survival) | `trance mission_tmix` ("mission") |
-| match over (`Clock.over`) | crossfade into `fin` (the one short, 130 kB track), played once |
+| main menu | `gunzmatching` (**inferred**, "matching" = lobby; the ijji lobby track `theme rock(d)` and character-select track `intro retake2(d-r)` are **external** and left unused: the menu app has no per-page music) |
+| match, any mode but the two below | one of the 9 in-game tracks (`el-tracaz`, `hardbgm(d)`, `hardbgm3 vanessa retake(d)`, `hardcore(d)`, `hardtech(d)`, `industrial technolism`, `ryswick style`, `vague words`, `x-fighter`; first seven **external**, last two **inferred** from the soundtrack rip), by FNV-1a of the map directory, so a map always gets the same track (**inferred**) |
+| Duel, Duel tournament | `leagueloop` (`league` is its un-looped twin and is unused; **inferred**) |
+| Quest (incl. challenge quest/survival) | `trance mission_tmix` ("mission"; **inferred**) |
+| match over (`Clock.over`) | crossfade into `fin` (**external**: end-of-game song; also the one short, 130 kB track), played once |
 
 Looped tracks loop (`PlaybackSettings::LOOP`); any change of wanted track crossfades linearly over
 2 s (**inferred**). `Settings.music` (0..=1, default 0.5, **inferred**) scales every music voice.
@@ -1080,10 +1169,12 @@ No new file format; how the retail character animations are used (**observed** =
 - A one-shot clip ends in its last frame (`motion_loop_type` `lastframe`/`onceidle`).
   Attack clips are short: `attack1` of the katana lasts about 0.28 s (**observed**).
 - ELU characters face +Z; actors face -Z at yaw 0, so the model child is turned by half a turn.
-- Constants (**inferred**; `npc2.xml` NPC `speed` is 400..840 cm/s): run 6.3 m/s, backwards
-  x0.7, jump 7 m/s, gravity 22 m/s^2, tumble 9 m/s (double-tap of a direction within 0.3 s),
-  wall kick 4.5 m/s away plus 6.5 m/s up (jump within 0.15 s of touching a wall in the air),
-  capsule radius 0.35 m / height 1.75 m.
+- Constants (**observed** in public replays, "Replays" below; `npc2.xml` NPC `speed` is 400..840
+  cm/s): run 10 m/s with a melee weapon and 9 m/s with a gun in every direction (no slower
+  backwards run), jump 9 m/s up, gravity 25 m/s^2, terminal speed 30 m/s, wall kick 3 m/s away
+  plus 14 m/s up (jump within 0.15 s of touching a wall in the air, **inferred** window);
+  tumble 9 m/s (double-tap of a direction within 0.3 s, **inferred**: no replay state identified),
+  capsule radius 0.35 m / height 1.75 m (**inferred**).
 - Steps (**observed** with a probe over Dungeon, Castle, Catacomb, Mansion, Prison: scan col
   geometry for risers, walk 1 m into each at 60/144/240 fps with the controller's 60 m/s^2
   acceleration): retail risers are mostly 0.29-0.31 m (Mansion, Catacomb), 0.40-0.45 m
@@ -1097,8 +1188,11 @@ No new file format; how the retail character animations are used (**observed** =
   ~120/125, frame-rate independent; 0.9 m+ ledges stay blocked.
 - Wall run (**inferred** from the clip names `runLW/RW/W` + `_down`, `runW_downF/B`): in the air
   with forward held, touching a wall and at least 0.5 m above the floor, once per jump. Side
-  wall: runs 1 s at 6.3 m/s along it with 12 % gravity, then `*_down` (45 % gravity, fall
-  speed <= 6 m/s); facing the wall: climbs at 5 m/s fading to 0 over 0.7 s (`runW`), then
+  wall: runs 2 s at `RUN` along it with 10 % gravity (**observed** in replays: dv/dt -250 cm/s^2,
+  a run lasts 0.4-2.1 s), then `*_down` with full gravity and no 6 m/s limit (**observed**: dv/dt
+  -2500 cm/s^2 down to -12 m/s in 556 samples; was 45 % / 6 m/s, inferred); facing the wall:
+  climbs by the `runW` foot profile (3.3 m over 0.6 s, **inferred** from the clip; replays show a
+  17 m/s launch with full gravity, +5.7 m in 0.68 s, **not applied**), then
   `runW_downF` (`runW_downB` when turned away). Jump during a wall run = wall kick.
 - Guard (**observed** clips `guard_start`, `guard_idle`, `guard_block1/2`, `guard_cancel`;
   melee motion types with them only): right mouse / script key `guard` on the ground. The actor
@@ -1129,9 +1223,10 @@ No new file format; how the retail character animations are used (**observed** =
   and `laugh` 2 s, `dance` 5.67 s); a jump, dash or step after 0.5 s (`TAUNT_CANCEL`,
   **inferred**) ends them. The log line `clip NAME (motion N) SECSs` names every action clip
   the player starts.
-- Run playback rate = ground speed / toe speed of the clip (`stride`): guns 3.8 m/s (rate 1.66
-  at 6.3 m/s; the old cap 1.5 slid 10 %), katana 5.64, sword 5.18, dagger 5.98, medikit 4.6,
-  backwards 4.8 (**observed**, `.local/py/stride.py`; the cap is now 1.7).
+- Run playback rate = ground speed / toe speed of the clip (`stride`): guns 3.8 m/s (rate 2.37
+  at the 9 m/s gun speed; the old cap 1.5 slid 10 %), katana 5.64, sword 5.18, dagger 5.98,
+  medikit 4.6, backwards 4.8 (**observed**, `.local/py/stride.py`; the cap is now 2.7 =
+  10 m/s / 3.8, since the real run speed is 10 m/s, see "Replays").
 - Clip coverage (`.local/py/coverage.py`: every quoted name in `src/` against the 71 distinct
   `<AddAnimation name>` of `man01.xml` + `woman01.xml`): **63 of 71** are referenced (was 55).
   Unreferenced: `login_intro`/`login_idle`/`login_walk` (`gm="0"`: the lobby/character-select
@@ -1193,6 +1288,66 @@ stunned and slowed, keep fighting and kill both (`RUST_LOG=gunz::bot=debug`: no 
   player at that match second, kinds `stun|slow|root|burn`) with the Spy command of that section gives
   `.local/shots/SpyMore/ping.png` (stunned and slowed).
 
+## Replays (`*.gzr`) and player movement (`.local/py/gzr*.py`; **external** data)
+
+The Steam install has no replay and no movement constant (checked: 88 `system/*.xml`, `npc*.xml`,
+`zactoraction.xml`, `zskill.xml`), so the movement constants come from public community replays:
+<https://github.com/TriForceX/GunZReleases/tree/main/replays> (428 `.gzr` from clan wars and duels; 60
+random ones under 1.5 MB plus one 40 KB file were downloaded to the git-ignored `.local/re/move/` and
+decoded: 1.26 M state samples, stages read from the headers: Town, Garden, Dungeon, Hall, ...). No
+executable and no source code were used: the layout below was recovered from the bytes. The clients that
+recorded them are older than the Steam release (replay versions 3 and 4), so parity with the Steam client
+is **inferred**, not proven.
+
+### File layout (**observed**: 59 of the 61 files parse to the last byte; the 2 skipped ones are version 2)
+
+
+- The whole file is one zlib stream (`78 9c`). Inflated: `u32 0x95B1308A`, `u32 version` (3 or 4), the
+  stage name (NUL padded, `Town`, `Garden`, `Dungeon`, `Hall`), match settings, the player table (name
+  strings), then the command stream. The stream start varies (0x3A6, 0x429, 0x6F8, 0xA4A), so the
+  decoder finds it as the first offset where the record chain below runs for more than 100 records.
+- Record: `f32 time` (seconds since the recording began; its slope against the sender's own time stamp is
+  1.000 +- 0.0003, so it is real seconds), `u64 sender` (a player id; the same ids precede the names in
+  the player table), `u32 n`, then `n` bytes = one command: `u16 n` (same value), `u16 id`, `u8 serial`,
+  parameter blob.
+  The chain of records ends exactly at the end of the inflated data in every decoded file.
+- Command ids seen (counts in a 118 KB duel): 10012 (1 735; per-player state, below), 10014, 10022 (4-byte
+  int 7..11 = the slot being drawn), 10033/10034 (gun shot), 10035 (special shot: grenade, rocket),
+  10036/10037 (melee slash), 10045, 1226 (chat), 402, 1101, ...
+- **Command 10012 (state, about 10 per second per player)**, parameter blob `u32 25` + 25 bytes:
+  `f32 time`, `i16 pos[3]` (cm, map units: x, y, z-up), `i16 vel[3]` (cm/s), `i16 dir[3]` (aim direction
+  x 32000: `|dir|` = 31 992), `u8 upper`, `u8 lower` (1 idle, 5/6 walk 450 cm/s, 22 forward, 23 backward,
+  24/25 strafe, 9 rising, 10 falling, 15/20 side wall run, 16/21 wall run exit, 27-30 wall kick F/B/L/R,
+  40 other air, 48 up-wall run, 52 fall after it), `u8 slot` (7 = melee, 8/9 = range, 10/11 = custom;
+  matches the commands sent: 10036/10037 only from 7, 10034 only from 8/9, grenades from 10/11).
+  **Observed** consistency: `pos[n+1] - pos[n] = vel * dt` to the centimetre while the state is
+  unchanged (e.g. `vel` -985 cm/s: -98 cm per 0.100 s), `vz` falls exactly by `g * dt` in free fall.
+- Not decoded: the player table fields, items, the other commands' parameters.
+
+### Measured (all 59 files, 10 Hz samples; script `.local/py/gzr_*.py`)
+
+| Constant | Old | New | Evidence (**observed**) |
+| --- | --- | --- | --- |
+| run, melee | 6.3 m/s | 10.0 m/s | lower state 22-25 with slot 7: median 999.3 cm/s, 44.8 k samples, forward/backward/strafe alike (state 23 backward = 999) |
+| run, gun | 6.3 | 9.0 m/s (x0.9) | slots 8-11, states 22-25: median 899.3 cm/s, 43.8 k samples at 900 and none at 810, rocket carriers (5 players, 60-120 special shots each) too, so `limitspeed` 90 is this same 0.9, not an extra factor |
+| backwards run | x0.76 | x1.0 | state 23: 999 (melee), 899 (gun) |
+| walk | - | 4.5 m/s | state 5/6: 450 cm/s mode, any weapon (not used by the port) |
+| jump takeoff | 7.0 | 9.0 m/s | first airborne sample after a grounded one, `v0 = sqrt(vz^2 + 2 g dz)`: 42 109 jumps, deciles 898-907, 35 138 within 895-905; melee and gun alike; apex 1.62 m |
+| gravity | 22.0 | 25.0 m/s^2 | dvz/dt of 463 760 airborne pairs: mode -2500 (173 809 in the 2490-2510 bin); per-file median -2500..-2497 in all 59 files |
+| terminal speed | 40 (code) | 30 m/s | `vz` = -3000 exactly in 1 286 samples, nothing below |
+| wall kick | 4.5 out + 6.5 up | 3.0 out + 14.0 up | states 27-30: takeoff solved from two samples 1400-1402 cm/s (2 793 kicks); horizontal speed after the kick 296-312 cm/s |
+| side wall run gravity | x0.12 | x0.10 | states 15/20: dvz/dt -245..-252 cm/s^2 in 50-75 % of the 20 482 pairs and 0 in the rest (long runs hold `vz` at -2 cm/s) |
+| after a wall run | x0.45, <= 6 m/s | x1.0, <= 30 m/s | state 52 (556 pairs): dvz/dt -2500, `vz` down to -12 m/s |
+
+Not applied: the up-wall run (state 48, 126 launches) starts at about 17 m/s (1700-1711 cm/s solved) with
+horizontal speed 2.99 m/s and normal gravity: +5.7 m in 0.68 s, against the port's 3.3 m `runW` foot
+profile. Tumble (double-tap dash) was not identified among the states, so it stays 9 m/s (**inferred**).
+Skipped: `r009`, `r022` (replay version 2: another layout, the stage name is there but the record chain
+of this section does not continue past the header). The jump apex was not checked against map geometry.
+Cross-check with the clips (`.local/py/rootmo.py`, **observed**): `runLW` 2.0 s and `runW` 0.6 s match the longest
+side wall run (2.1 s) and the up-wall apex (0.68 s); `jumpwall*` 1.33 s matches a kick's flight (1.12 s up and
+down); `jumpU` 0.33 s is only the take-off pose (a jump lasts 0.72 s), so clips do not pin v0 themselves.
+
 ## World items (`src/pickup.rs`)
 
 **Observed**: 23 of the 31 maps' `.rs.xml` carry `spawn_item_{solo|team}_{hp|ap|bullet}NN_MM` dummies, 243 in
@@ -1232,7 +1387,7 @@ the executable is packed).
   a vertical capsule per actor (feet at the transform, radius 0.35 m, height 1.8 m); range 200 m
   (no range attribute for guns; **inferred**). Spread (all **inferred**; `ctrl_ability` is 10
   pistol, 15 rifle, 20 SMG/revolver, 35-80 dual guns, 60 shotgun/MG): cone radius per metre =
-  `ctrl * 0.001 * (1 + 1.5 run + 1.0 air + 2.0 heat)`, `run` = horizontal speed / 6.3 m/s,
+  `ctrl * 0.001 * (1 + 1.5 run + 1.0 air + 2.0 heat)`, `run` = horizontal speed / `actor::RUN` (10 m/s),
   `air` = vertical speed above 3 m/s (both smoothed, sampled from the actor's `GlobalTransform`
   by `track_spread`), `heat` builds `ctrl * 0.01` per shot and cools 1/s (a rifle at 13 shots/s
   saturates in ~1 s; a pistol never heats up). Measured with the rifle (ctrl 15): standing
@@ -1411,28 +1566,72 @@ Verification (headless, `.local/shots/bots/`, all `gunz-play GAME MAP ... --time
   `side wall run from [-18.0, 6.0, -28.3] heading [-0.94, 0.00, 0.34]` and were in the west wing 4.5 s
   later (`pos [-43.1, 6.0, -22.9]`); a 3-bot run with the player in the wing (`--at -5500,-1290,610`)
   ended with a bot killing the player there at t=19 s.
-  The y=13 floors (6 spawns; most of the 18 remaining failed pairs) are **not** a nav link, though the
-  player can reach them. Numbers (**observed** controller constants of `actor.rs`, replayed in a
-  throwaway `Pawn` at 1/60 s): wall run up 3.3 m + 0.45 m coast, `n * WALL_OUT + Y * WALL_UP` kick = +0.96 m, a kick clip lasts
-  1.0-1.33 s (`man_jump_wallB` 30 frames, `jump_wallL/R`, `run_wall_down` 40, at 30 fps) during which no
-  second kick is possible, and the wall run is once per jump): the best height gain from a floor is
-  about 5.8 m, the lip is 7.0 m above the y=6 gallery, so no wall/pillar of the hall (double wall kicks
-  between pillars are impossible: 1.0 s per kick falls 4.5 m) and no prop (statue tops reach y=8.5, 10 m
-  from the shelves) gets there. A 16-direction beam search over the controller (150-500 states, 0.1 s
-  inputs, from 348 floor nodes y 5.5-8 in x,z +-32) found exactly one way: the north platform
-  (`-9.8, 6.0, -26.8`), outside the hall's north wall z=-24. Run at yaw 67.5 deg (toward +x,+z), jump
-  0.1 s in, wall-run up the corner of the pillar at x=-8.7 (up to y=10.9), kick at ~1.4 s after the
-  jump (y=10.85), land on the pillar capital `(-8.3, 11.7, -25.3)`, walk its moulding steps (12.2,
-  12.9) onto the y=13 floor at `(-9.4, 13.0, -27.3)`, which links to all six y=13 spawns. Real
-  controller check (`gunz-play GAME Mansion --at -980,-2680,600 --yaw -157.5 --script
-  "yaw=-157.5;w:0.1;yaw=-157.5;w+jump:0.017;w:0.083;...;yaw=-90.0;w+jump:0.017;w:0.083;..."`, 34 steps,
-  `.local/shots/BotsMansion/script1.txt`, shot `climb2.png`): feet `y 6.0 -> 7.1 (run starts, t=0.4 s) ->
-  10.86 -> kick -> 11.72 -> 13.00`, standing at `(-9.38, 13.00, -27.34)`. It is **not** usable by bots: the
-  contact is the pillar's corner (the wall normal is slanted `(-0.25, -0.97)`), a takeoff 0.06 m
-  earlier/later or 0.05 m aside loses the wall run before the kick, and a search for an aim point
-  robust to those misses found none (Mansion routing stays 124/142). A link kind that fragile
-  was not added; the experiment is kept in `.local/shots/BotsMansion/nav_kick_experiment.rs.txt`.
-  The nav graph's wall climb link still reaches 4.4 m.
+  The y=13 floors (6 spawns, most of the 18 failed pairs left) are reached by a **wall kick link**
+  (`nav::Kind::Kick`, `bot.rs` `KickRun`). History: with the first controller constants (RUN 6.3,
+  JUMP 7, WALL_UP 6.5) the best height gain from a floor was about 5.8 m against a lip 7.0 m above
+  the y=6 gallery, and the one way up found by a controller beam search (the north platform's
+  pillar corner, `.local/shots/BotsMansion/script1.txt`) lost the wall run to a 5 cm miss, so it
+  was not a link (the experiment is kept in `.local/shots/BotsMansion/nav_kick_experiment.rs.txt`).
+  With the constants read off the public replays (`actor.rs`: RUN 10, JUMP 9, GRAVITY 25,
+  WALL_OUT 3, WALL_UP 14; **observed**, see "Replays") the same wall run (a jump of 1.6 m + the
+  3.3 m of `runW`) plus a kick that throws the actor up at 14 m/s gains 7 m, and the whole climb
+  stops being a needle: **inferred** search, **observed** controller, no hand-placed numbers.
+  - *Search* (`Nav::add_kicks`, after the walk/jump/drop links): an **island** floor is one the
+    largest strongly connected group of floors does not reach (Tarjan, then a closure). For each
+    island floor `j` and each of 16 headings with a wall 0..6 m away (`Nav::perches`) the kick
+    that comes down on `j` is computed from `WALL_OUT` / `WALL_UP` / `GRAVITY` (it must come
+    down, 0.56..1 s after the kick, along a clear arc); a few main floors 1..6 m in front of that
+    wall (`perch_starts`) are the starts. From a *standstill* on a start, forward held, the
+    script is `Kick { run, wall, jump, kick }`: face `run` until tick `jump`, press jump, face
+    `wall`, press jump again at tick `kick` (ticks of 1/60 s). `Pawn` is `actor.rs`'s drive
+    (jump, wall run, wall kick, air control, gravity) as a value; the jump ticks that leave 0.5..2.2
+    m to the wall and every kick tick of the wall run are tried, and a script counts when the
+    kicked pawn lands on an island floor **from all eight starts 2.5 cm off** too. One link per
+    island (at most 60 tries); `Kind::Kick` costs `distance + 10`; monsters (`Nav::route`) never
+    use it, bots do only with a blade in hand (the search used the melee run speed; guns run at
+    0.9).
+  - *Execution* (`bot.rs`): within 1 m of the start the bot stops following the route, closes in
+    with a proportional controller (8 / s, capped at the run speed) and starts when it stands
+    within 5 mm of the start with the script's heading (`Intent.yaw` is exact, no aim jitter).
+    Then it holds forward and presses jump on the clock: tick = elapsed / (1/60 s), a frame that
+    jumps over a tick presses it too. Nothing else acts meanwhile (no fight, guard, throw, tumble,
+    stall check, replan); a bot that has not got onto the start in 6 s drops kicks for 30 s.
+  - *Frame time* (`Time::delta_secs` drives the actor, so a 60 Hz window is 1/60 s and the headless
+    runs are exactly 1/60 s): `nav::tests::kick_links` replays the link by the clock at 30, 60, 144 and
+    240 Hz and with +-1 ms of jitter at 60 Hz and the pawn lands on the island every time (jitter
+    >= 36 of 40), so a variable frame time needs no fixed step.
+  - Mansion routing (`routing_pairs`, new constants): 124/142 without kicks, **135/142** with the one
+    link found, `[-12.73, 6.00, 1.15] -> [-13.23, 13.00, 1.15]` (run `+90 deg` towards -x, jump at
+    tick 10, kick at tick 47; the 7 pairs left have an end with no node: the spawns `(0, 7.4, -23)`
+    and `(0, 14, -20.9)` float over no floor). All maps: 2649/2794 -> 2660/2794, no other map
+    changes (kick links: castle 1, lost shrine 3, town 2, weaponshop 4 that nothing used before;
+    graph build 0.1-9 s as before). `GUNZ_NOKICK=1` skips them in the test.
+  - Check (headless, `.local/MansionBots/run.sh SEED BOTS SECONDS`, the player stands on a y=13 spawn
+    with `--hp 9999`, logs in `.local/shots/MansionBots/`, `RUST_LOG=gunz::bot=debug`): the log reads
+    `bot Bot 3: wall kick from [-12.725, 6.001, 1.154] (start [-12.728, 6.002, 1.150])` (3 mm off)
+    and the bot is at `[-14.1, 13.05, 1.15]` 0.5 s after the kick tick. Nine runs (3..12 bots, skill
+    0.2..1.0, two other player spots, 60..80 s): **31 of 31 scripts landed above y 12.5 within 0.75 s
+    and every run had bots from y < 9 on the y=13 floors** (sampled every 2 s, 17 of the 46 bots that
+    started below y 9 were seen above y 12: the rest are slow routes from the pits or still on
+    their way); with 12 bots, six scripts in 80 s, one start shared without a failure. `GUNZ_SEED`
+    changes nothing about bots (their rng and spawns are by index).
+  - **`MapCollision::slide_move` zero movement** (the goblin that stood 2 m from the player on
+    Mansion's y=6 floor, see "Goblin stuck on Mansion"): `col::tests::open_floor_snag` (`GUNZ_GAME`,
+    `--ignored`) scans the floor within 3 m of `(-31.9, 6.0, -30.0)` at 5 cm with three capsules
+    (goblin 0.3 x 1.1 and 0.3 x 1.75, player 0.35 x 1.75) and 8 headings that rays show free:
+    **246 667 moves, none stood still** (3 moved 13-15 mm of the 5 cm towards a wall edge 1.4 cm
+    ahead: a real contact), so open floor does not snag. What does: a capsule that *starts inside
+    a wall* (up to 9 cm deep: a
+    spawn row `--bots-ahead` / `--npc` drops it there, or a push) met the corners and edges of the
+    wall's triangles at distance 0 whichever way it moved (`Tri::sweep` blocks an overlapped sphere
+    that moves nearer to a vertex or edge) and four such contacts ended `slide` with no movement
+    (423 of 246 667 in the first scan, which did not skip those starts). `col.rs` `slide` now steps
+    out along the wall's own normal (`DEPEN` 1 cm, at most 12) when the first hit is at distance 0
+    on a wall; the probe's inside-wall snags fall from 423 to 1, and
+    `col::tests::starts_inside_a_wall` (a capsule 2 cm into the synthetic wall, both directions,
+    five x) fails without the push-out (`pos` unchanged) and passes with it. **Inferred** reading:
+    the report's spot was such a start, which `npc.rs`'s retry then walked around; the retry is
+    kept (a start deeper than 12 cm still needs it).
   Battle arena: 8 spawns sit in 6 m deep pits; Blitzkrieg: the team bases at y=9 have no way up. The
   other failing maps (castle, high haven, island, towns) were not re-searched with the controller beam.
   Tried 0.25 m cells (door alignment): same Mansion result, 4x nodes, 1.7x slower routes; kept 0.5 m.
@@ -1768,7 +1967,7 @@ file and all rules are not in the data).
   Pampow's Ice Sword, 210001 Monster Bible). The 25 others use the retail English names. Icons: `itemicon.xml`
   has `S2000NN` entries (atlas `itemicon_Quest_s_00.png`) for a few.
 - `system/npc.xml` (**observed**): `<NPC id grade offensetype>`; ids 11..19 goblins, 21..26 kobolds/golem,
-  31..39 skeletons (no scenario or `droptable.xml` set uses them), 41..48 palmpoas, 15x / 16x / 17x copies with a
+  31..39 skeletons (no scenario uses them, `droptable.xml` has no `S` set), 41..48 palmpoas, 15x / 16x / 17x copies with a
   third of the HP (used below for QL 0).
 
 ### Rules (**inferred** unless noted)
@@ -1780,10 +1979,10 @@ file and all rules are not in the data).
   HUD (`DICE 4` in the sector line). `--dice` survives "Play again" (`Config.dice`); a rolled one is
   rolled again on every start. The last sector holds `key_npc` (specials) at `spawn_npc_boss_01`; clearing it
   ends the quest. A challenge quest chains its `SECTOR`s with `link01`. Survival plays 10 sectors of the loop
-  with the NPC sets of standard quest levels 1, 1, 2, 2, ... 5. **Survival Dungeon** (re-checked: no scenario,
-  `questmap.xml` quest, `droptable.xml` set or `npc.xml` entry names a Dungeon NPC set, but `survivalmap.xml`
-  does have a Dungeon loop of 5 sectors and the skeleton family 31..36 is the one family no scenario uses) is
-  offered with **inferred** sets `S<ql>1..` = skeletons 31..34 (35 from level 2, 36 the Lich from level 4), the
+  with the NPC sets of standard quest levels 1, 1, 2, 2, ... 5. **Survival Dungeon** (no scenario, `questmap.xml`
+  quest, `droptable.xml` set or `npc.xml` entry names a Dungeon NPC set, but `survivalmap.xml` has a Dungeon loop
+  of 5 sectors and the skeleton family 31..35 is the Dungeon's by the id digit, see "Closed gaps") is offered
+  with sets `S<ql>1..` = skeletons 31..34 (35 from level 2; **inferred** counts), the
   XP/BP of the first map set's standard quest of that level / 4; skeleton drop tables `S31`.. do not exist, so
   the challenge fallback below applies. `Catalog::names()` lists the 31 names: the 20 scenario titles,
   `Challenge <map_id>`, `Survival Mansion|Prison|Dungeon`; a bare scenario id / `map_id` also selects.
@@ -1827,7 +2026,7 @@ file and all rules are not in the data).
   `QuestLoot{items, rented}` carries every quest/shop item picked up, once at the end; the profile keeps the quest
   items (`zquestitem.xml` ids, `quest_items=id:count,..` in `profile.txt`; the inventory page has a "Quest items"
   category with names, counts, descriptions and a SELL button) and the rentals (`rented`, below); the challenge
-  `reward_item` 3000xxx is a gacha package id that is not in `zitem.xml`.
+  `reward_item` (3000xxx) is added as given: it maps to no item, see "Closed gaps".
 - Rental drops (`droptable.xml` `rent_period`, 3 items x 72 / 168 in the data): **observed** unit is **hours**:
   the values are 3 and 7 days, `eventshopitem.xml` / `mission.xml` / `gunzplus.xml` name the same kind of
   number `rent_hour_period` / `renthourperiod` / `*_rent_hour_period` (720 = 30 days), and message 11002 counts
@@ -1838,13 +2037,61 @@ file and all rules are not in the data).
   item (no shop price exists for it, so the shop's `PRICE = 10 x sell_bt_price` ratio has nothing to start from;
   the port pays `price` as it pays `sell_bt_price`). One item per click; log `shop: sold NAME (ID) for N bounty`.
 
+### Closed gaps (QuestGaps; labels as above)
+
+- **Challenge `reward_item` 3000101/201/301/401/102/202/302/402: no content mapping exists in the data**
+  (re-checked, so the port keeps granting the id as given). **Observed** coverage: the 8 ids occur only in
+  `system/scenario2.xml` (a grep of the whole `.local/extract` for `"3000[1-9]\d\d"` finds nothing else: not in
+  `zitem.xml`, `gshop.xml`, `shop.xml`, `zshop.xml`, `eventshopitem.xml`, `gcustomizeitem.xml`, `gprofileitem.xml`,
+  `droptable.xml`, `strings.xml`, any locale dir, `interface/`). The file's comment calls the attribute the
+  "reward draw (gacha) item id" (`보상 뽑기 아이템 id`); `id = 3000000 + map_id`. The package machinery that does
+  ship is separate and keyed differently: `globbyuseableitem.xml` `<RANDOM_PACKAGE ID="1000000..1000012 |
+  1300000..1300017" TABLE_INDEX>` points at `grandompackagetable.xml` `<PACKAGE_ITEM ID ITEM_ID AMOUNT
+  PROBABILITY EXPIRATION_PERIOD>` rows for table ids 10000..10012 (armour sets), 40000..40011 (boxes) and 90000;
+  none of the 8 ids is a RANDOM_PACKAGE `ID` or a table `ID`, no arithmetic links them (`TABLE_INDEX` is
+  `10000 + n` / `40000 + n` or 0, not `3000xxx`), and all 210 rows say `INDEPENDENT_TRIAL="TRUE"
+  PROBABILITY="100000"` (every item of a table is granted: there is no weighted pick to reproduce). The
+  commented-out `event_reward_item="1002003"` of scenarios 102/202/302 is not defined either. `gshoppackageiteminfo.xml`
+  only lists the 11 shop banners (`10000000..10000014`). **Observed** message 9362 (`messages.xml`): starting
+  below the recommended player count still pays XP and bounty "but you cannot get a reward item" (not
+  implemented: with `players` 3 or 4 a solo run would never earn it, and the item itself is undefined). The
+  contents were server-side (the DB behind a "gacha item id"); the web has no list either: the official wiki
+  and Steam pages only say that Challenge Quest exists (**external**: https://steamcommunity.com/app/3139440,
+  https://gunz-the-duel.wiki/quest/, the latter generic). So no item is invented; `reward_item` stays in the
+  loot and `profile::keep_loot` owns that undefined id.
+- **Survival Dungeon monsters** (replaces the old guess of skeletons 31..34, 35 from level 2, the Lich pawn 36
+  from level 4): Prison and Mansion survival already use their own standard-quest sets (`K`, `G`); only Dungeon
+  has none. **Observed**: `scenario.xml` has no `mapset="Dungeon"` entry; `survivalmap.xml` / `questmap.xml`
+  sectors carry no NPC attribute (only `title melee_spawn range_spawn` and links); the `quest/maps/dungeon_*`
+  `spawn.xml` files are empty and their `.rs.xml` dummies are the generic `spawn_npc_melee/range/boss_NN`;
+  `sacrificetable.xml` has no Dungeon row; no `JACO` entry names a 20NN-style skeleton id. Positive evidence:
+  the NPC id tens digit is the `MAPSET id` (goblins 1x = Mansion 1, kobolds 2x = Prison 2, skeletons 3x =
+  Dungeon 3; palmpoas 4x are the boss-only guests of both), `strings.xml` `NPC_NAME_31..39` / `NPC_DESC_31..39`
+  name them as the undead clan (soldier skeleton, mage, captain, giant skeleton, cursed corpse; 36 `Lich Pawn`
+  is "spawned from the Lich" to pin the adventurers down; 37 Superion, 38 Aneramon, 39 Lich are the bosses),
+  `interface/monsterillust/monster_illust31..36.jpg` is the picture set of that family (the Monster Bible's
+  pages, **inferred**), and `zskill.xml`
+  comments the skills 321..393 per monster (`스켈레톤 메이지`, `거대 스켈레톤`, `저주받은 시신`, `리치 폰의 특수
+  공격`, `슈페리온(보스)`, `아네라몬(보스)`, `리치(보스)`). **External**: the public Dungeon Quest page
+  (https://gunz.fandom.com/wiki/Dungeon_Quest, via the Wayback copy) lists Skeleton Soldier, Mage, Knight,
+  Champion and Wizard as the wave monsters (illust 31..35) and Superion / Aneramon / Lich as bosses; its HP and
+  drop numbers are noisy (Aneramon 6 011 100 HP) and are not used. So `skeleton_sets(ql)` = ids **31..35 only**
+  (Lich Pawn 36 dropped; boss ids never come from a set anyway); how many of the five a level lists
+  (3 / 4 / 5 from level 0 / 1 / 2) copies the goblin sets and is **inferred**. Still **unknown**, no Dungeon
+  data: the XP/BP (the first map set's standard quest of that level is used), any Dungeon special scenario
+  (Superion / Aneramon / Lich bosses with their offerings: `zquestitem.xml` has `200040..200042` Superion's
+  blade, Aneramon's blade and Lich's tail but no scenario asks for them) and skeleton drops (`droptable.xml` defines no `S31..S39`, so
+  the hp/ap/ammo fallback applies). Checked by `quest::tests::retail_scenarios_plan` (every Survival Dungeon
+  group is one of 31..35) and `--mode quest --scenario "Survival Dungeon"` (sector 1 spawned Skeleton Mage 32,
+  Giant Skeleton 34, Skeleton 31, Skeleton Captain 33).
+
 ### Not supported
 
 - `.nav` triangle meshes: decoded above and measured against the dummies, but a mesh holds only 843 of 914
   (92%) spawn/link dummies (Dungeon_Cavern3 and Nest2 about 57%), so `nav.rs`'s floor graph, which covers every
   map, has to stay as the fallback; one source is simpler, so the quest NPCs keep using it.
 - The quest `spawn.xml`: empty stubs. Scenario `DC`, `sdc` (sacrificetable) and per-NPC `dc`: no meaning in
-  the data. The gacha `reward_item` (3000xxx) of the challenge quest and the quest-item shop (no shop in the
+  the data. The contents of the gacha `reward_item` (3000xxx, see "Closed gaps" below) and the quest-item shop (no shop in the
   data sells quest items). Online party/lobby behaviour. Permanent shop-item drops (`droptable.xml`
   items of 2xxxxxx / 3xxxxxx without `rent_period`, rate 0.001; all 21 exist in `zitem.xml`) are owned
   for good when the quest ends (`profile::keep_loot`).

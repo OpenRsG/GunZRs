@@ -774,7 +774,7 @@ impl Catalog {
     /// Survival: the loop of the survival map set (each sector's first link leads on), played
     /// [`SURVIVAL_SECTORS`] times with the NPC sets of standard quest level 1, 2, ... 5. A map
     /// set with no standard quests of its own (Dungeon) gets [`skeleton_sets`] and the XP/BP of
-    /// the first map set's quest of that level.
+    /// the first map set's quest of that level (no Dungeon XP/BP exists in the data).
     fn plan_survival(&self, m: &MapSet, seed: u32) -> Result<Plan, String> {
         let mut rng = seed | 1;
         let mut at = 0;
@@ -926,13 +926,16 @@ enum Found<'a> {
     Survival(&'a MapSet),
 }
 
-/// NPC sets of Survival Dungeon (*inferred*). No scenario, `questmap.xml` quest or `npc.xml` entry
-/// names a Dungeon NPC set, but the skeleton family (ids 31..39, `S` sets) is the one family no
-/// scenario uses, so it stands in: the regular/veteran/elite members 1..=4 (5 from level 2, 6, the
-/// Lich, from level 4), like the 4-5 members the goblin sets list per level.
+/// NPC sets of Survival Dungeon: the skeleton family `S`, ids 31..=35. Evidence: the family tens digit
+/// is the `MAPSET id` (`G` 1x = Mansion 1, `K` 2x = Prison 2 in `scenario.xml`; `survivalmap.xml`'s
+/// Dungeon is mapset 3, **observed**), no scenario uses ids 31..39 and `strings.xml` calls 31..35 the
+/// undead clan's soldiers/mages/captain/giant/corpse (`NPC_NAME_31..35`, **observed**); 36 `Lich Pawn`
+/// is "spawned from the Lich" (`NPC_DESC_36`), a boss minion that no wave lists, and 37..39 are bosses.
+/// **External**: the public Dungeon Quest page lists Skeleton, Mage, Knight, Champion, Wizard as the
+/// wave monsters (https://gunz.fandom.com/wiki/Dungeon_Quest). Members per level (3, 4, then all 5 from
+/// level 2) copy the goblin sets `G0x`/`G1x`/`G2x` (**inferred**: the sets themselves are server-side).
 fn skeleton_sets(ql: u32) -> Vec<String> {
-    let members = 4 + u32::from(ql >= 2) + u32::from(ql >= 4);
-    (1..=members).map(|n| format!("S{ql}{n}")).collect()
+    (1..=(3 + ql).min(5)).map(|n| format!("S{ql}{n}")).collect()
 }
 
 /// Sector indices of the shortest route `from` -> `to` over the links (breadth first).
@@ -1025,7 +1028,8 @@ pub struct Plan {
     pub ql: u32,
     /// Party size the challenge quest is balanced for.
     pub players: u32,
-    /// Item granted on a cleared challenge quest (a shop item id, 0 = none).
+    /// Item granted on a cleared challenge quest (a `scenario2.xml` `reward_item`, 0 = none). The 3000xxx
+    /// ids are defined nowhere in the client data (see docs/formats.md, Quest), so it is kept as given.
     pub reward_item: u32,
     /// The `<MAP dice>` rolled or chosen (0: the quest has no dice).
     pub dice: u32,
@@ -1641,7 +1645,7 @@ fn kills(
             npc.drop.as_str()
         };
         let r = unit(&mut quest.rng);
-        // challenge-quest tables (`C1`, `C2`) are not in `droptable.xml`: hp, ap or ammo (*inferred*)
+        // tables not in `droptable.xml` (challenge `C1`, `C2`; skeleton `S31`..`S39`): hp, ap or ammo (*inferred*)
         let item = match quest.drops.0.contains_key(table) {
             true => quest
                 .drops
@@ -2077,6 +2081,7 @@ mod tests {
         let c = catalog();
         assert_eq!(c.plan("Challenge 101", None, 1).unwrap().good_secs, 480);
         assert_eq!(skeleton_sets(1), ["S11", "S12", "S13", "S14"]);
+        assert_eq!(skeleton_sets(5), ["S51", "S52", "S53", "S54", "S55"]);
         assert_eq!(set_npc("S13").as_deref(), Some("33"));
     }
 
@@ -2124,6 +2129,19 @@ mod tests {
                 );
                 assert!(q.is_dir() || ch.is_dir(), "{n}: no map {}", s.map);
                 assert!(!s.groups.is_empty(), "{n}: {} has no NPCs", s.map);
+            }
+            if n == "Survival Dungeon" {
+                let ids = p
+                    .sectors
+                    .iter()
+                    .flat_map(|s| &s.groups)
+                    .map(|g| g.id.as_str());
+                for id in ids {
+                    assert!(
+                        ["31", "32", "33", "34", "35"].contains(&id),
+                        "Lich Pawn or boss: {id}"
+                    );
+                }
             }
         }
     }

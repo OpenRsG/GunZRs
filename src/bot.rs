@@ -5,13 +5,13 @@
 //! blows), and falls back to the spawn point farthest from the enemy when hurt.
 
 use crate::{
-    actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT},
+    actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RUN},
     col::MapCollision,
     combat::{EYE, HIT_RADIUS, is_melee, rnd, yaw_of},
     game::{Acting, Bot, Dead, Guarding, Intent, Loadout, Status, Team, Vitals, friendly},
     item::{Items, Weapon, WeaponKind},
     level::Level,
-    nav::{Kind, Nav, Search, Step, walkable},
+    nav::{Kick, Kind, Nav, PDT, Search, Step, walkable},
     pickup::{ItemKind, WorldItem},
     projectile::{
         BOUNCE, FRAG_RADIUS, FRICTION, FUSE, Flashed, GRAVITY, SmokeCloud, THROW_DELAY, THROW_LIFT,
@@ -24,6 +24,16 @@ use std::f32::consts::{PI, TAU};
 
 /// Bots see an enemy up to this far (metres) when nothing blocks the ray.
 const SIGHT: f32 = 80.0;
+/// A wall kick link ([`Kind::Kick`]): within `KICK_NEAR` metres of its start the bot leaves the
+/// route steering and closes in with a proportional controller (`KICK_GAIN` per second, at most
+/// the run speed). The script starts once it stands within `KICK_ALIGN` metres (the nav search
+/// proved the script from 2.5 cm off) facing the script's heading; a bot that has not got there
+/// within `KICK_GIVE_UP` seconds drops its kicks for `KICK_BAN` seconds (a bot standing in the way).
+const KICK_NEAR: f32 = 1.0;
+const KICK_ALIGN: f32 = 0.005;
+const KICK_GAIN: f32 = 8.0;
+const KICK_GIVE_UP: f32 = 6.0;
+const KICK_BAN: f32 = 30.0;
 
 /// Number of bots to spawn at startup (inserted by `gunz-play --bots N`).
 #[derive(Resource)]
@@ -50,6 +60,16 @@ impl Plugin for BotPlugin {
         app.add_systems(PostStartup, spawn_bots)
             .add_systems(PreUpdate, bot_ai);
     }
+}
+
+/// A [`Kick`] being run: seconds since its first tick, the next tick to press and the index of
+/// its step in the path (which is not replaced meanwhile).
+#[derive(Clone, Copy)]
+struct KickRun {
+    k: Kick,
+    t: f32,
+    next: u32,
+    step: usize,
 }
 
 /// Bot state: steering timers and the route it follows.
@@ -114,6 +134,12 @@ struct BotAi {
     /// A mine is being laid (seconds since it began), and seconds until the next one may be.
     lay: Option<f32>,
     lay_cd: f32,
+    /// Wall kick script in progress, seconds spent closing in on a kick start, and seconds a
+    /// melee weapon is still wanted (the script was proved with the melee run speed).
+    kick: Option<KickRun>,
+    kick_t: f32,
+    kick_hold: f32,
+    no_kick: f32,
 }
 
 impl BotAi {
@@ -163,6 +189,10 @@ impl BotAi {
             lay: None,
             // Spawn grace, as for grenades.
             lay_cd: 4.0,
+            kick: None,
+            kick_t: 0.0,
+            kick_hold: 0.0,
+            no_kick: 0.0,
         }
     }
 }
@@ -469,6 +499,7 @@ fn bot_ai(
                 ai.goal = None,
                 ai.search = None,
             );
+            ai.kick = None;
             continue;
         }
         let pos = g.translation();
@@ -481,6 +512,9 @@ fn bot_ai(
             ai.path_t = 0.0;
         }
         ai.held = held;
+        if held || blind {
+            ai.kick = None;
+        }
         let eye = pos + Vec3::Y * EYE;
         let mine = (team.copied(), true);
         let foe = actors
@@ -528,9 +562,19 @@ fn bot_ai(
         }
 
         // Weapon by range (at most one switch a second).
+        // A wall kick needs a blade in hand (its run speed is the one the nav search used).
+        ai.kick_hold -= dt;
+        ai.no_kick -= dt;
+        let blade = loadout.slots.iter().position(|s| {
+            data.items
+                .get(s.item)
+                .and_then(|i| i.weapon.as_ref())
+                .is_some_and(|w| is_melee(w.kind))
+        });
         ai.switch_t -= dt;
         let want = match mine_slot.filter(|_| ai.lay.is_some()) {
             Some(slot) => slot,
+            None if ai.kick_hold > 0.0 && blade.is_some() => blade.unwrap_or_default(),
             None if target.is_some() && ai.switch_t <= 0.0 && ai.throw.is_none() => {
                 pick_weapon(&data.items, loadout, dist)
             }
@@ -755,6 +799,9 @@ fn bot_ai(
 
         // Route: replanned every second or so; a search for a goal that moved on is dropped.
         ai.path_t -= dt;
+        if ai.kick.is_some() {
+            ai.path_t = ai.path_t.max(0.5);
+        }
         if ai.search.is_some() && goal.is_none_or(|g| g.distance(ai.search_goal) > 4.0) {
             ai.search = None;
         }
@@ -762,14 +809,18 @@ fn bot_ai(
             routed = true;
             ai.path_t = 0.8 + 0.4 * rnd(&mut ai.rng);
             ai.direct = walkable(&col, pos, goal);
-            ai.search = nav.search(pos, goal).filter(|_| !ai.direct);
+            ai.search = nav
+                .search(pos, goal, blade.is_some() && ai.no_kick <= 0.0)
+                .filter(|_| !ai.direct);
             ai.search_goal = goal;
             if ai.search.is_none() {
                 ai.path.clear();
                 ai.next = 0;
             }
         }
-        if let Some(mut q) = ai.search.take() {
+        if ai.kick.is_none()
+            && let Some(mut q) = ai.search.take()
+        {
             match nav.advance(&mut q, &mut budget) {
                 Some(path) => (ai.path, ai.next) = (path, 0),
                 None => ai.search = Some(q),
@@ -787,6 +838,8 @@ fn bot_ai(
         }
         let mut hop = false;
         let mut way: Option<(Vec3, bool, u32)> = None;
+        // The wall kick link whose start the bot is closing in on: step index, script, start.
+        let mut kicking: Option<(usize, Kick, Vec3)> = None;
         while ai.next < ai.path.len() {
             let mut t = ai.next;
             while t - ai.next < 4
@@ -795,15 +848,31 @@ fn bot_ai(
             {
                 t += 1;
             }
-            let takeoff = ai.path.get(t + 1).is_some_and(|s| s.kind == Kind::Jump);
+            let takeoff = ai
+                .path
+                .get(t + 1)
+                .is_some_and(|s| matches!(s.kind, Kind::Jump | Kind::Kick));
             // A jump starts where the simulated run-up did, not at the node.
             let np = if takeoff {
                 ai.path[t + 1].takeoff
             } else {
                 node(&nav, ai.path[t])
             };
+            let kick = ai.path.get(t + 1).and_then(|s| s.kick);
             let r = if takeoff { 0.4 } else { 0.6 };
-            if flat(np - pos).length() < r && (np.y - pos.y).abs() < 1.2 {
+            let near = flat(np - pos).length();
+            if kick.is_some() && near < 3.0 {
+                ai.kick_hold = 0.5;
+            }
+            if let Some(k) = kick
+                && near < KICK_NEAR
+                && (np.y - pos.y).abs() < 0.5
+            {
+                kicking = Some((t + 1, k, np));
+                way = Some((np, false, ai.path[t].node));
+                break;
+            }
+            if kick.is_none() && near < r && (np.y - pos.y).abs() < 1.2 {
                 ai.next = t + 1;
                 hop |= takeoff;
                 if takeoff && ai.path[t + 1].turn != Vec3::ZERO {
@@ -828,7 +897,13 @@ fn bot_ai(
         let mut mv = Vec3::ZERO;
         let mut strafe = 0.0;
         let mut guard = true;
-        let fight = seen.is_some() && ai.direct && dist <= pref + 1.0 && !flee && item.is_none();
+        let scripted = kicking.is_some() || ai.kick.is_some();
+        let fight = seen.is_some()
+            && ai.direct
+            && dist <= pref + 1.0
+            && !flee
+            && item.is_none()
+            && !scripted;
         if let Some(t) = target.filter(|_| fight) {
             // In range and in the open: hold the distance and strafe.
             let to = flat(t - pos);
@@ -882,6 +957,11 @@ fn bot_ai(
             }
         }
 
+        if let Some((_, _, at)) = kicking {
+            let err = flat(at - pos);
+            mv = err.normalize_or_zero() * (err.length() * KICK_GAIN / RUN).min(1.0);
+            guard = false;
+        }
         // Turn, then express the wanted motion in the facing frame.
         // A side wall run (nav `Step::turn`) holds its heading in the air so that the controller
         // meets the wall at a glancing angle.
@@ -894,6 +974,7 @@ fn bot_ai(
             (Some(t), _) if ai.throw.is_some() => yaw_of(flat(t - pos)),
             _ => face,
         };
+        let face = kicking.map_or(face, |(_, k, _)| k.run);
         ai.yaw = turn(ai.yaw, face, (3.0 + 6.0 * skill) * dt);
         let (s, c) = ai.yaw.sin_cos();
         let mut walk = Vec2::new(
@@ -903,10 +984,54 @@ fn bot_ai(
         walk.x += strafe;
         walk = walk.clamp_length_max(1.0);
 
+        // Wall kick script: starts standing on its start and facing its heading, then presses
+        // its inputs tick by tick (the nav simulation counts ticks of `PDT`, so does this).
+        if ai.kick.is_none()
+            && let Some((step, k, at)) = kicking
+            && melee
+            && flat(at - pos).length() < KICK_ALIGN
+            && (at.y - pos.y).abs() < 0.1
+            && ((ai.yaw - k.run + PI).rem_euclid(TAU) - PI).abs() < 1e-3
+        {
+            debug!("bot {name}: wall kick from {pos:.3} (start {at:.3})");
+            (ai.throw, ai.lay, ai.hold, ai.tap, ai.bf, ai.air) =
+                (None, None, 0.0, None, None, None);
+            ai.kick = Some(KickRun {
+                k,
+                t: 0.0,
+                next: 0,
+                step,
+            });
+        }
+        if let Some(mut run) = ai.kick {
+            let tick = (run.t / PDT + 1e-3) as u32;
+            hop = (run.next..=tick).any(|n| run.k.input(n).1);
+            ai.yaw = run.k.input(tick).0;
+            walk = Vec2::Y;
+            ai.kick_hold = 0.5;
+            if tick >= run.k.kick {
+                (ai.next, ai.kick) = (run.step, None);
+            } else {
+                (run.t, run.next) = (run.t + dt, tick + 1);
+                ai.kick = Some(run);
+            }
+        }
+        ai.kick_t = if kicking.is_some() && ai.kick.is_none() {
+            ai.kick_t + dt
+        } else {
+            0.0
+        };
+        if ai.kick_t > KICK_GIVE_UP && kicking.is_some() {
+            (ai.no_kick, ai.path_t, ai.kick_t) = (KICK_BAN, 0.0, 0.0);
+        }
+
         // Stuck: no progress for 0.8 s while trying to move (no node reached and no nearer to
         // the one being walked to; without a route, no displacement) -> hop and switch sides;
         // the second time in a row, distrust the route's link and plan again.
         let wants_move = walk != Vec2::ZERO && ai.react <= 0.0;
+        if scripted {
+            (ai.check_t, ai.check_pos, ai.stuck) = (0.0, pos, 0);
+        }
         ai.check_t += dt;
         if ai.check_t >= 0.8 {
             let moved = Vec2::new(pos.x - ai.check_pos.x, pos.z - ai.check_pos.z).length();
@@ -949,7 +1074,11 @@ fn bot_ai(
         ai.tumble_t -= dt;
         // K-style: a blade closes the last few metres with a forward dash and slashes out of it.
         let dash = melee && !flee && seen.is_some() && ai.direct && (3.0..8.0).contains(&dist);
-        if (fight || dash || flee && seen.is_some()) && ai.tap.is_none() && ai.tumble_t <= 0.0 {
+        if (fight || dash || flee && seen.is_some())
+            && !scripted
+            && ai.tap.is_none()
+            && ai.tumble_t <= 0.0
+        {
             ai.tumble_t = (1.5 + 2.5 * rnd(&mut ai.rng)) / (0.4 + skill);
             let dir = if dash {
                 Vec2::Y
@@ -990,7 +1119,7 @@ fn bot_ai(
         }
 
         ai.hold -= dt;
-        if ai.throw.is_some() || ai.hold > 0.0 || ai.lay.is_some() {
+        if !scripted && (ai.throw.is_some() || ai.hold > 0.0 || ai.lay.is_some()) {
             (walk, hop, ai.tap) = (Vec2::ZERO, false, None);
         }
         // Never walk off a ledge (strafing and backing up included) unless the route says so.
@@ -1015,7 +1144,7 @@ fn bot_ai(
             let c = t + Vec3::Y * 1.1;
             (c.y - eye.y).atan2(Vec2::new(c.x - eye.x, c.z - eye.z).length())
         });
-        if !melee && ai.throw.is_none() {
+        if !melee && ai.throw.is_none() && !scripted {
             // Aim error: weaker bots are worse shots.
             let e = 1.5 - skill;
             intent.yaw += (rnd(&mut ai.rng) - 0.5) * 0.18 * e;
@@ -1106,6 +1235,9 @@ fn bot_ai(
             .slots
             .get(loadout.current)
             .is_some_and(|s| !melee && s.magazine == 0);
+        if scripted {
+            (intent.attack, intent.guard, intent.reload) = (false, false, false);
+        }
 
         ai.log_t -= dt;
         if ai.log_t <= 0.0 {

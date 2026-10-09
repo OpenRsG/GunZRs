@@ -13,10 +13,12 @@
 //! capsule). All clips are parsed at startup ([`ActorData`]), never mid-match. Other modules
 //! ask for clips with [`ActionRequest`] and read [`Acting`]/[`Motor`] back.
 //!
-//! Movement constants not stored in any retail data file (`npc2.xml` has per-NPC `speed` of
-//! 400..840 cm/s) are inferred/tuned: run 6.3 m/s, jump 7 m/s with 22 m/s^2 gravity, tumble
-//! 9 m/s, wall kick 4.5 m/s out and 6.5 m/s up. Measured from the animations: run strides,
-//! the wall-run climb profile, the lengths of the wall-run clips (see the constants).
+//! Movement constants (**observed** unless noted) come from public community replays
+//! (`.gzr`, `docs/formats.md`: 10 Hz position + velocity of every player): run 10 m/s with a
+//! melee weapon and 9 m/s with a gun, the same in every direction, jump 9 m/s with 25 m/s^2
+//! gravity, wall kick 3 m/s out and 14 m/s up, terminal speed 30 m/s. No retail data file
+//! holds them (`npc2.xml` has per-NPC `speed` of 400..840 cm/s). Tumble speed and the wall-run
+//! climb profile are still inferred from the animations (see the constants).
 
 use crate::{
     ani::{Ani, FPS},
@@ -46,22 +48,34 @@ pub const DEFAULT_LOADOUT: [u32; 3] = [2010000, 2050000, 2100001];
 pub const RADIUS: f32 = 0.35;
 pub const HEIGHT: f32 = 1.75;
 const EYE: f32 = 1.55;
-pub const RUN: f32 = 6.3;
-/// Backwards speed relative to `RUN` (`runB` toe speed 4.8 m/s against `run` 6.3: **observed**
-/// clip stride ratio, `docs/formats.md`).
-const BACK: f32 = 0.76;
-pub const JUMP: f32 = 7.0;
-pub const GRAVITY: f32 = 22.0;
+/// Run speed with a melee weapon in hand, any direction (**observed**: 999-1000 cm/s in 59
+/// public replays; forward, backward and strafing alike, so no slower backwards speed).
+pub const RUN: f32 = 10.0;
+/// Run speed factor with a gun in hand (**observed**: 899-900 cm/s in the gun slots, rocket
+/// carriers included, so a `limitspeed` of 90 is this factor, not an extra one).
+const GUN_RUN: f32 = 0.9;
+/// Takeoff speed of a jump from the ground: apex 1.62 m (**observed**: 900 cm/s from 42 000
+/// jumps; melee and guns alike).
+pub const JUMP: f32 = 9.0;
+/// **Observed**: dv/dt of every airborne sample is -2500 cm/s^2 (463 000 samples, 59 replays).
+pub const GRAVITY: f32 = 25.0;
+/// Terminal fall speed (**observed**: vertical speed is clamped at exactly -3000 cm/s).
+pub const FALL: f32 = 30.0;
 const TUMBLE: f32 = 9.0;
-pub const WALL_OUT: f32 = 4.5;
-pub const WALL_UP: f32 = 6.5;
+/// Wall kick: horizontal speed away from the wall and takeoff speed up (**observed**: the
+/// horizontal speed after a kick starts at 300 cm/s, the takeoff solved from two samples is
+/// 1400 cm/s; 2800 kicks).
+pub const WALL_OUT: f32 = 3.0;
+pub const WALL_UP: f32 = 14.0;
 /// Seconds a wall run lasts (along a side wall / up a wall) before the actor starts falling:
 /// the lengths of `runLW`/`runRW` (60 frames) and `runW` (18 frames).
 pub const WALL_RUN_SIDE: f32 = 2.0;
 pub const WALL_RUN_UP: f32 = 0.6;
-/// Fraction of gravity felt while running along a wall / sliding down it after a run.
-pub const RUN_GRAVITY: f32 = 0.12;
-pub const SLIDE_GRAVITY: f32 = 0.45;
+/// Fraction of gravity felt while running along a wall (**observed**: dv/dt -250 cm/s^2 in the
+/// side wall-run states) / after a wall run ended (**observed**: full gravity, no speed limit
+/// below `FALL`).
+pub const RUN_GRAVITY: f32 = 0.1;
+pub const SLIDE_GRAVITY: f32 = 1.0;
 /// Vertical push (m/s) from which a `Push` launches the actor (uppercut, rocket and grenade
 /// blasts push with `y >= 6` near the centre). **Inferred.**
 const BLAST_PUSH: f32 = 5.0;
@@ -87,19 +101,19 @@ pub const EMOTES: [(&str, KeyCode); 5] = [
 const CLICK_BUFFER: f32 = 0.12;
 /// Seconds in the air beyond which touching ground makes the landing thud. **Inferred.**
 const LAND_AIR: f32 = 0.35;
-/// Fastest run-clip playback: the full run speed over the slowest stride (`stride`, gun
-/// clips 3.8 m/s: 6.3 / 3.8 = 1.66, **observed** strides), so the feet stay planted at top
-/// speed. (A cap of 1.5 slid 10 % of the time.)
-const MAX_RUN_RATE: f32 = 1.7;
+/// Fastest run-clip playback: the full run speed over the slowest stride (`stride`, gun and
+/// spycase clips 3.8 m/s: 10 / 3.8 = 2.63, **observed** strides and speed), so the feet stay
+/// planted at top speed. (A cap of 1.5 slid 10 % of the time.)
+const MAX_RUN_RATE: f32 = 2.7;
 /// Seconds without wall contact after which a wall run ends.
-const WALL_LOSE: f32 = 0.15;
+pub const WALL_LOSE: f32 = 0.15;
 /// A wall run needs at least this much air under the feet (a step against a leaning stair
 /// riser also lifts the capsule for a few frames).
 pub const WALL_MIN_HEIGHT: f32 = 0.5;
 /// Seconds within which a second tap of a direction is a tumble.
 const DOUBLE_TAP: f32 = 0.3;
 /// Seconds after touching a wall in the air during which a jump is a wall kick.
-const WALL_GRACE: f32 = 0.15;
+pub const WALL_GRACE: f32 = 0.15;
 const CAM_DIST: f32 = 3.0;
 /// Radius of the sphere the camera sweeps, so it stays clear of walls.
 const CAM_RADIUS: f32 = 0.25;
@@ -581,7 +595,8 @@ struct Gear {
     reload: f32,
     magazine: u32,
     reserve: u32,
-    /// `limitspeed` / 100 (1.0 without it): run speed factor while this weapon is in hand.
+    /// `limitspeed` / 100 (without it: 1.0 for melee, `GUN_RUN` for guns): run speed factor
+    /// while this weapon is in hand.
     speed: f32,
     /// No `limitwall`: wall runs and wall kicks allowed.
     wall: bool,
@@ -622,7 +637,11 @@ fn gear(items: &Items, id: u32) -> Gear {
             .max_bullet
             .unwrap_or(w.magazine * 4)
             .saturating_sub(w.magazine),
-        speed: w.limit_speed.map_or(1.0, |p| p as f32 / 100.0),
+        speed: w
+            .limit_speed
+            .map_or(if is_melee(w.kind) { 1.0 } else { GUN_RUN }, |p| {
+                p as f32 / 100.0
+            }),
         wall: !w.limit_wall,
     }
 }
@@ -1692,11 +1711,7 @@ fn drive(
             } => c,
             _ => 0.0,
         };
-        let speed = RUN
-            * g.speed
-            * if walk.y < 0.0 { BACK } else { 1.0 }
-            * control
-            * status.map_or(1.0, Status::speed);
+        let speed = RUN * g.speed * control * status.map_or(1.0, Status::speed);
         let wish = (right * walk.x + fwd * walk.y) * speed;
         let mut hv = Vec3::new(a.vel.x, 0.0, a.vel.z);
         match a.state {
@@ -1755,11 +1770,11 @@ fn drive(
         let (gravity, fall) = match a.state {
             State::WallRun { side, left, .. } if left > 0.0 && side == 0.0 => {
                 a.vel.y = climb(WALL_RUN_UP - left);
-                (0.0, 40.0)
+                (0.0, FALL)
             }
-            State::WallRun { side, left, .. } if left > 0.0 && side != 0.0 => (RUN_GRAVITY, 40.0),
-            State::WallRun { .. } => (SLIDE_GRAVITY, 6.0),
-            _ => (1.0, 40.0),
+            State::WallRun { side, left, .. } if left > 0.0 && side != 0.0 => (RUN_GRAVITY, FALL),
+            State::WallRun { .. } => (SLIDE_GRAVITY, FALL),
+            _ => (1.0, FALL),
         };
         a.vel.y = (a.vel.y - GRAVITY * gravity * dt).max(-fall);
         let mut delta = Vec3::new(hv.x, a.vel.y, hv.z) * dt;

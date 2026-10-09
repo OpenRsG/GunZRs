@@ -23,6 +23,9 @@ const LEAF_TRIS: usize = 4;
 
 /// Gap kept between a moving capsule and surfaces.
 const SKIN: f32 = 0.002;
+/// Step (metres) and most steps of the push out of a wall the capsule starts inside of.
+const DEPEN: f32 = 0.01;
+const DEPEN_MAX: u32 = 12;
 /// Highest ledge a grounded mover steps onto (also the downhill snap distance).
 pub const STEP: f32 = 0.55;
 /// Shortest horizontal distance a step-up probes ahead.
@@ -478,10 +481,12 @@ impl MapCollision {
     }
 
     /// Collide-and-slide `d` (up to four contacts). Returns the end position and the
-    /// contact normals met, in order.
+    /// contact normals met, in order. A capsule that starts inside a wall (a push or a seam left
+    /// it up to `DEPEN * DEPEN_MAX` deep) meets the corners and edges of the wall's triangles at
+    /// distance 0 whichever way it moves, so it first steps out along the wall's own normal.
     fn slide(&self, mut pos: Vec3, mut d: Vec3, r: f32, h: f32) -> (Vec3, [Vec3; 4], usize) {
         let mut planes = [Vec3::ZERO; 4];
-        let mut n = 0;
+        let (mut n, mut nudged) = (0, 0);
         while n < 4 {
             let len = d.length();
             if len < 1e-6 {
@@ -491,6 +496,11 @@ impl MapCollision {
                 pos += d;
                 break;
             };
+            if hit.distance < 1e-6 && hit.surface.y.abs() < WALKABLE && nudged < DEPEN_MAX {
+                let out = Vec3::new(hit.surface.x, 0.0, hit.surface.z).normalize_or_zero();
+                (pos, nudged) = (pos + out * DEPEN, nudged + 1);
+                continue;
+            }
             let dir = d / len;
             pos += dir * (hit.distance - SKIN).max(0.0);
             planes[n] = hit.normal;
@@ -710,5 +720,87 @@ mod tests {
             1.8,
         );
         assert!((m.pos.y - 0.2).abs() < 0.01 && m.grounded, "{m:?}");
+    }
+
+    /// A capsule 2 cm inside the wall (a push left it there) still moves along it; the
+    /// triangle edge across the wall (it runs through the capsule's height here) used to hold it.
+    #[test]
+    fn starts_inside_a_wall() {
+        let w = world();
+        for x in [-3.8, -3.4, -3.0, -2.6, -2.2] {
+            for dx in [0.05, -0.05] {
+                let m = w.slide_move(Vec3::new(x, 0., -1.67), Vec3::new(dx, -0.01, 0.), 0.35, 1.8);
+                assert!((m.pos.x - x).abs() > 0.04, "x {x} dx {dx}: {m:?}");
+            }
+        }
+    }
+    /// Goblin snag probe (docs/formats.md "Bots", Mansion open floor near (-31.9, 6.0, -30.0)):
+    /// scans the floor around it for standing points where a 5 cm horizontal move in a direction
+    /// that `raycast` shows free (nothing at knee, waist or chest height within 0.6 m, floor
+    /// ahead) makes no headway. Needs the retail install: `GUNZ_GAME=<dir>`, `--ignored`.
+    #[test]
+    #[ignore]
+    fn open_floor_snag() {
+        use crate::{map, mrs::Vfs};
+        let Ok(game) = std::env::var("GUNZ_GAME") else {
+            return;
+        };
+        let vfs = Vfs::mount(&game).unwrap();
+        let rs = map::find_rs(&vfs, "mansion").unwrap();
+        let col = MapCollision::load(&vfs, &rs).unwrap();
+        let c = Vec3::new(-31.9, 6.0, -30.0);
+        let (mut tested, mut snags, mut inside_snags) = (0, 0, 0);
+        for (r, h) in [(0.3, 1.1), (0.3, 1.75), (0.35, 1.75)] {
+            for ix in -60..=60 {
+                for iz in -60..=60 {
+                    let (x, z) = (c.x + ix as f32 * 0.05, c.z + iz as f32 * 0.05);
+                    let Some(f) = col.raycast(Vec3::new(x, c.y + 1.0, z), Vec3::NEG_Y, 2.0) else {
+                        continue;
+                    };
+                    let st = col.slide_move(f.point + Vec3::Y * 0.03, Vec3::NEG_Y * 0.1, r, h);
+                    // A mover never stands inside a wall: skip grid points closer than `r`.
+                    let inside = (0..16).any(|k| {
+                        let a = k as f32 * std::f32::consts::FRAC_PI_8;
+                        [0.3, 0.6, 0.9].into_iter().any(|y| {
+                            col.raycast(st.pos + Vec3::Y * y, Vec3::new(a.cos(), 0.0, a.sin()), r)
+                                .is_some()
+                        })
+                    });
+                    if !st.grounded {
+                        continue;
+                    }
+                    for k in 0..8 {
+                        let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                        let d = Vec3::new(a.cos(), 0.0, a.sin());
+                        let free = [0.3, 0.9, 1.5]
+                            .into_iter()
+                            .all(|y| col.raycast(st.pos + Vec3::Y * y, d, r + 0.6).is_none())
+                            && col
+                                .raycast(st.pos + d * 0.6 + Vec3::Y * 0.5, Vec3::NEG_Y, 1.0)
+                                .is_some_and(|h| (h.point.y - st.pos.y).abs() < 0.1);
+                        if !free {
+                            continue;
+                        }
+                        tested += 1;
+                        let m = col.slide_move(st.pos, d * 0.05, r, h);
+                        let moved = Vec2::new(m.pos.x - st.pos.x, m.pos.z - st.pos.z).length();
+                        if moved < 0.015 {
+                            inside_snags += inside as u32;
+                            snags += !inside as u32;
+                            if snags <= 30 {
+                                let hit = col.sweep_capsule(st.pos, d * 0.05, r, h);
+                                println!(
+                                    "snag r {r} h {h} at {:.3} dir {k}: moved {moved:.4} sweep {hit:?}",
+                                    st.pos
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "open floor moves tested {tested}, snags {snags} (started inside a wall {inside_snags})"
+        );
     }
 }

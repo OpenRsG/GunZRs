@@ -1922,13 +1922,29 @@ can hold is described in "Clans" below.
   `sell_bt_price` and needs the item unequipped; melee and the two ranged slots cannot be empty.
   Equipping does not check the level (the starter rifle needs level 5).
 - Equipped armour adds its `hp`/`ap` to the player's maximum health/armour at spawn. Armour has no
-  model in the game (outfits are the character's `AddParts` sets, picked on the Player page).
+  model in the game: clothes are chosen per body slot on the Player page (`character::Look`).
+
+### Clothes (`character.rs`)
+
+- Each body slot (head = hair/hat, face, chest, hands, legs, feet) is dressed from one `AddParts`
+  set or keeps the base model's piece. **Observed** over both sexes: every skinned slot node of a part
+  set is named `eq_<slot>_NNN` with NNN = the set file's number (`man-set-NNN.elu`), and no set has two
+  meshes for one slot; the base model has one piece per slot. No part set has a face.
+- The wardrobe offered per slot is the `equip` items of `zitem.xml` for the sex (`res_sex` m/f/a) whose
+  `mesh_name` is such a node; they name 225 of the man's 226 and 315 of the woman's 317 slot meshes, so
+  pieces carry item names.
+- Dyes (**not retail**): a slot can be tinted from a fixed palette (`character::TINTS`); the tint
+  multiplies the material colour, so it never lightens a piece.
+- Bots get random clothes (most slots dressed, about one piece in four dyed) from the match seed:
+  the clock, 1 in headless runs (`GUNZ_SEED` overrides).
 
 ### Profile file
 
 `key=value` lines (`#` comments), saved under `$XDG_DATA_HOME/gunzrs/profile.txt` (else
 `~/.local/share/...`; `%APPDATA%\gunzrs\profile.txt` on Windows), `GUNZ_PROFILE=PATH` overrides it.
-Keys: `name` (default `$USER`), `woman`, `outfit` (`none` or a part-set index), `xp` (total, the level is
+Keys: `name` (default `$USER`), `woman`, `look` (six 1-based part sets for head, face, chest, hands, legs,
+feet, 0 = base piece, then `;` and six `TINTS` indexes, e.g. `3,0,12,0,5,0;0,0,4,0,0,0`; an older
+`outfit=N` is read as set N on every slot), `xp` (total, the level is
 derived), `bounty`, `owned` (zitem ids), `equipped` (9 ids: melee, primary, secondary, item, head,
 chest, hands, legs, feet; 0 = empty), `quest_items` (`zquestitem.xml` `id:count,..`), `medals` (Blitzkrieg
 medals earned, shown on the profile header), `rented` (`zitem id:expiry,..`, expiry in Unix seconds; the id is
@@ -1937,7 +1953,8 @@ Rentals past their expiry are removed at load (also from the equipment, melee an
 starter weapons) with a log line `profile: rental of item N expired and was removed`; the inventory shows the time
 left (`[rented, 2d 5h left]`). A rental cannot be sold (**inferred**).
 Headless `--shot` runs use a throwaway default profile unless `GUNZ_PROFILE` is set. The file is
-rewritten whenever the profile changes (a kill, a purchase, Start).
+rewritten whenever the profile changes (a kill, a purchase, SAVE, Start). The browser build keeps
+the same text in the page's `localStorage` (`gunzrs.profile`).
 Headless shot hooks: `GUNZ_INV_SLOT=N` (9 = quest items) and `GUNZ_INV_SELL=1` (presses SELL on the first row).
 
 ### Pause-menu toggles (`profile::OPTS`, `session.rs`)

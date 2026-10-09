@@ -239,14 +239,16 @@ fn spawn_bots(
                 (pos, yaw_of(dir))
             }
         };
+        let woman = i % 2 == 1;
+        let look = spawner.random_look(woman, i as u64);
         let bot = spawner.spawn(ActorSpec {
             name: format!("Bot {}", i + 1),
             pos,
             yaw,
-            woman: i % 2 == 1,
+            woman,
             loadout: [&DEFAULT_LOADOUT[..], &[BOT_GRENADE, BOT_SMOKE]].concat(),
             bot: true,
-            outfit: None,
+            look,
         });
         spawner.commands.entity(bot).insert(BotAi::new(i, yaw, pos));
     }

@@ -8,7 +8,7 @@ use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, prelude::*};
 use gunz::{
     ani,
     anim::{AnimPlugin, Animator, Loop},
-    character::{self, Character, Outfit},
+    character::{self, Character, Look},
     elu::{self, Elu},
     item::{Items, WeaponKind},
     model::{self, Textures},
@@ -236,7 +236,7 @@ fn spawn(
         &mut textures,
         &scene.vfs,
         ch,
-        &Outfit::base(),
+        &Look::default(),
         Transform::IDENTITY,
     )
     .unwrap_or_else(|e| panic!("character: {e}"));

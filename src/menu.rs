@@ -5,7 +5,7 @@
 //! archives, so text uses Bevy's built-in font. Notes: `docs/formats.md` (menu).
 
 use crate::{
-    character::{self, Character, Outfit},
+    character::{self, Character, Look, Slot, TINTS, Wardrobe},
     clan::{self, ClanArt},
     hud::try_image,
     item::Items,
@@ -20,6 +20,7 @@ use bevy::{
     prelude::*,
     text::{Justify, LineBreak},
     ui::UiTargetCamera,
+    window::PrimaryWindow,
 };
 use std::{
     str::FromStr,
@@ -333,8 +334,8 @@ pub struct Config {
     /// Map directory name (`mansion`, `battle arena`).
     pub map: Option<String>,
     pub woman: bool,
-    /// Index into the character's `AddParts` sets; `None` keeps the default outfit.
-    pub outfit: Option<usize>,
+    /// Clothes and dyes ([`Look`]): the profile's unless `--look` overrides them.
+    pub look: Look,
     /// zitem ids for the weapon slots (melee, primary, secondary, item; 0 = empty): the
     /// profile's equipped weapons unless `--loadout` overrides them.
     pub loadout: Vec<u32>,
@@ -423,10 +424,9 @@ impl Config {
             map: get(args, "--map")?
                 .or_else(|| (mode == Mode::Blitzkrieg).then(|| "blitzkrieg".into())),
             woman,
-            // 1-based on the command line (like `gunz-char --set`), 0 = default outfit.
-            outfit: match get::<usize>(args, "--outfit")? {
-                None => profile.outfit,
-                Some(n) => n.checked_sub(1),
+            look: match get::<String>(args, "--look")? {
+                None => profile.look,
+                Some(s) => s.parse().map_err(|e| format!("--look: {e}"))?,
             },
             loadout,
             bots: get(args, "--bots")?.unwrap_or(3),
@@ -459,8 +459,8 @@ impl Config {
             &self.time_limit.unwrap_or(0).to_string(),
             "--kill-limit",
             &self.kill_limit.unwrap_or(0).to_string(),
-            "--outfit",
-            &self.outfit.map_or(0, |p| p + 1).to_string(),
+            "--look",
+            &self.look.to_string(),
         ]
         .map(String::from)
         .into();
@@ -638,7 +638,7 @@ fn label(s: &str, w: f32) -> impl Bundle {
     )
 }
 
-/// What the main menu offers: maps and the characters.
+/// What the main menu offers: maps, the characters and their clothes.
 #[derive(Resource)]
 pub(crate) struct Catalog {
     pub(crate) vfs: Vfs,
@@ -650,25 +650,27 @@ pub(crate) struct Catalog {
     scenarios: Vec<String>,
     men: Character,
     women: Character,
+    /// `[man, woman]`.
+    wardrobes: [Wardrobe; 2],
 }
 
 impl Catalog {
     fn load(vfs: Vfs) -> std::io::Result<Self> {
         let items = Items::load(&vfs)?;
-        let mut maps: Vec<String> = vfs
-            .paths()
-            .filter_map(|p| {
-                let (dir, file) = p.strip_prefix("maps/")?.split_once('/')?;
-                (file.ends_with(".rs") && !file.contains('/')).then(|| dir.to_owned())
-            })
-            .collect();
-        maps.sort_unstable();
-        maps.dedup();
+        let maps = vfs.maps();
         let quest = crate::quest::Catalog::load(&vfs).ok();
         let scenarios = quest.as_ref().map(|q| q.names()).unwrap_or_default();
+        let (men, women) = (
+            character::load(&vfs, "heroman1")?,
+            character::load(&vfs, "herowoman1")?,
+        );
         Ok(Self {
-            men: character::load(&vfs, "heroman1")?,
-            women: character::load(&vfs, "herowoman1")?,
+            wardrobes: [
+                Wardrobe::new(&men, &items, false),
+                Wardrobe::new(&women, &items, true),
+            ],
+            men,
+            women,
             vfs,
             items,
             maps,
@@ -679,6 +681,10 @@ impl Catalog {
 
     fn character(&self, woman: bool) -> &Character {
         if woman { &self.women } else { &self.men }
+    }
+
+    fn wardrobe(&self, woman: bool) -> &Wardrobe {
+        &self.wardrobes[woman as usize]
     }
 }
 
@@ -717,7 +723,11 @@ enum Field {
     Bots,
     Skill,
     Sens,
-    Outfit,
+    /// The piece / the dye of a body slot ([`Slot::ALL`] index).
+    Piece(usize),
+    Tint(usize),
+    /// Whether the character on screen is the saved one.
+    Saved,
     Scenario,
     Sac1,
     Sac2,
@@ -734,6 +744,14 @@ enum Act {
     Start,
     /// Start as the LAN host (`true`) or join the LAN host (`false`).
     Lan(bool),
+    /// Clothes: everything random (`false`) or new random dyes only (`true`).
+    Random(bool),
+    /// Back to the base body without dyes.
+    Reset,
+    /// Keep the character in the profile.
+    Save,
+    /// Point the preview camera at a [`FOCUS`] entry.
+    Focus(usize),
     Quit,
 }
 
@@ -749,9 +767,30 @@ pub(crate) struct PageRoot(pub(crate) Page);
 #[derive(Component)]
 struct ModeShow(bool);
 
-/// The character model's parent (turned slowly), shown on the player page only.
+/// The character model's parent (turned by dragging, slowly on its own), shown on the player
+/// page only.
 #[derive(Component)]
 struct Preview;
+
+/// The colour square next to a slot's dye name.
+#[derive(Component)]
+struct Swatch(usize);
+
+/// Preview camera framings: name, eye height (m), distance (m).
+const FOCUS: [(&str, f32, f32); 5] = [
+    ("FULL", 1.05, 3.6),
+    ("HEAD", 1.62, 1.0),
+    ("BODY", 1.25, 1.8),
+    ("LEGS", 0.6, 1.9),
+    ("FEET", 0.22, 1.3),
+];
+
+/// Where the preview camera is heading: [`FOCUS`] index and wheel zoom factor.
+#[derive(Resource)]
+struct Orbit {
+    focus: usize,
+    zoom: f32,
+}
 
 const MAX_BOTS: i32 = 15;
 
@@ -775,11 +814,21 @@ fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32
         Field::Bots => cfg.bots = (cfg.bots as i32 + d).clamp(0, MAX_BOTS) as usize,
         Field::Skill => cfg.skill = ((cfg.skill * 10.0).round() + d as f32).clamp(0.0, 10.0) / 10.0,
         Field::Sens => cfg.sens = ((cfg.sens * 4.0).round() + d as f32).clamp(1.0, 16.0) / 4.0,
-        Field::Outfit => {
-            let n = cat.character(cfg.woman).parts.len() as i32 + 1;
-            let at = (cfg.outfit.map_or(0, |p| p + 1) as i32 + d).rem_euclid(n) as usize;
-            cfg.outfit = at.checked_sub(1);
+        Field::Piece(s) => {
+            // the base piece, then every piece of the wardrobe
+            let list = &cat.wardrobe(cfg.woman).slots[s];
+            let n = list.len() as i32 + 1;
+            let at = cfg.look.parts[s]
+                .and_then(|p| list.iter().position(|q| q.part == p))
+                .map_or(0, |i| i as i32 + 1);
+            let next = (at + d).rem_euclid(n) as usize;
+            cfg.look.parts[s] = next.checked_sub(1).map(|i| list[i].part);
         }
+        Field::Tint(s) => {
+            let t = (cfg.look.tints[s] as i32 + d).rem_euclid(TINTS.len() as i32);
+            cfg.look.tints[s] = t as u8;
+        }
+        Field::Saved => {}
         Field::Sac1 | Field::Sac2 => {
             let Some(q) = &cat.quest else { return };
             let slot = (field == Field::Sac2) as usize;
@@ -836,10 +885,28 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
             }
         ),
         Field::Sens => format!("x{:.2}", cfg.sens),
-        Field::Outfit => match cfg.outfit {
-            None => "Default".into(),
-            Some(p) => format!("{} / {}", p + 1, cat.character(cfg.woman).parts.len()),
-        },
+        Field::Piece(s) => {
+            let list = &cat.wardrobe(cfg.woman).slots[s];
+            match cfg.look.parts[s].and_then(|p| list.iter().position(|q| q.part == p)) {
+                _ if list.is_empty() => "Default (no other)".into(),
+                // long item names are cut so the count stays clear of the step buttons
+                Some(i) => {
+                    let name = &list[i].name;
+                    let short: String = name.chars().take(18).collect();
+                    let cut = if short.len() < name.len() { "." } else { "" };
+                    format!("{short}{cut} {}/{}", i + 1, list.len())
+                }
+                None => format!("Default  0/{}", list.len()),
+            }
+        }
+        Field::Tint(s) => TINTS[cfg.look.tints[s] as usize % TINTS.len()].0.into(),
+        Field::Saved => {
+            if (profile.woman, profile.look) == (cfg.woman, cfg.look) {
+                "Saved: matches use this character.".into()
+            } else {
+                "Not saved yet: SAVE keeps it (START saves too).".into()
+            }
+        }
         Field::Sac1 | Field::Sac2 => {
             let id = cfg.sacrifice[(field == Field::Sac2) as usize];
             match (&cat.quest, id) {
@@ -893,7 +960,7 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
     );
     let mut profile = Profile::open(shot.is_some());
     // The menu edits the profile's character and equipment; Start launches with them.
-    (profile.woman, profile.outfit) = (cfg.woman, cfg.outfit);
+    (profile.woman, profile.look) = (cfg.woman, cfg.look);
     cfg.loadout.resize(4, 0);
     let default_map = cat
         .maps
@@ -912,6 +979,10 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         .insert_resource(profile)
         .insert_resource(State { cfg, page })
         .insert_resource(Pick(pick.clone()))
+        .insert_resource(Orbit {
+            focus: 0,
+            zoom: 1.0,
+        })
         .add_plugins(shop::ShopPlugin)
         .add_plugins(clan::ClanMenuPlugin)
         .add_systems(Startup, build)
@@ -922,11 +993,15 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
                 refresh,
                 hover.run_if(resource_exists::<Art>),
                 preview,
-                turn,
+                orbit,
+                fit,
             )
                 .chain(),
-        )
-        .run();
+        );
+    // in the browser the page takes over when the menu ends (`web::play`, `gunzExit`)
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugins(crate::web::WebPlugin);
+    app.run();
     pick.lock().unwrap().take()
 }
 
@@ -1063,7 +1138,7 @@ fn build(
                         position_type: PositionType::Absolute,
                         left: px(24),
                         top: px(120),
-                        width: px(1232),
+                        right: px(24),
                         column_gap: px(16),
                         align_items: AlignItems::FlexStart,
                         ..default()
@@ -1149,30 +1224,106 @@ fn build(
                     });
             });
             root.spawn(page(Page::Player)).with_children(|p| {
-                p.spawn(panel(420.0, AlignItems::FlexStart))
+                p.spawn(panel(700.0, AlignItems::FlexStart))
                     .with_children(|m| {
                         m.spawn(heading("CHARACTER"));
                         m.spawn(row()).with_children(|r| {
-                            r.spawn(label("Sex", 130.0));
+                            r.spawn(label("Sex", 100.0));
                             r.spawn(button(&art, 110.0, 30.0, "Man", 16.0, Act::Sex(false)));
                             r.spawn(button(&art, 110.0, 30.0, "Woman", 16.0, Act::Sex(true)));
                         });
-                        stepper(m, "Outfit", Field::Outfit, 110.0, true);
+                        // per slot: `<< < piece > >>` then `< ■ dye >`
+                        let text = |f: Field, w: f32| {
+                            (
+                                Value(f),
+                                Text::new(value(cfg, &cat, &profile, f)),
+                                TextFont::from_font_size(15.0),
+                                TextColor(Color::WHITE),
+                                TextLayout {
+                                    justify: Justify::Center,
+                                    linebreak: LineBreak::NoWrap,
+                                },
+                                Node {
+                                    width: px(w),
+                                    height: px(20),
+                                    overflow: Overflow::clip(),
+                                    ..default()
+                                },
+                            )
+                        };
+                        for (s, slot) in Slot::ALL.into_iter().enumerate() {
+                            m.spawn(row()).with_children(|r| {
+                                r.spawn(label(slot.label(), 100.0));
+                                let f = Field::Piece(s);
+                                r.spawn(button(&art, 34.0, 28.0, "<<", 14.0, Act::Step(f, -10)));
+                                r.spawn(button(&art, 30.0, 28.0, "<", 14.0, Act::Step(f, -1)));
+                                r.spawn(text(f, 236.0));
+                                r.spawn(button(&art, 30.0, 28.0, ">", 14.0, Act::Step(f, 1)));
+                                r.spawn(button(&art, 34.0, 28.0, ">>", 14.0, Act::Step(f, 10)));
+                                r.spawn(Node {
+                                    width: px(8),
+                                    ..default()
+                                });
+                                let f = Field::Tint(s);
+                                r.spawn(button(&art, 28.0, 28.0, "<", 14.0, Act::Step(f, -1)));
+                                r.spawn((
+                                    Swatch(s),
+                                    Node {
+                                        width: px(16),
+                                        height: px(16),
+                                        border: UiRect::all(px(1)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::WHITE),
+                                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+                                ));
+                                r.spawn(text(f, 70.0));
+                                r.spawn(button(&art, 28.0, 28.0, ">", 14.0, Act::Step(f, 1)));
+                            });
+                        }
+                        m.spawn(row()).with_children(|r| {
+                            r.spawn(label("", 100.0));
+                            r.spawn(button(&art, 130.0, 32.0, "RANDOM", 16.0, Act::Random(false)));
+                            r.spawn(button(&art, 130.0, 32.0, "RANDOM DYES", 15.0, Act::Random(true)));
+                            r.spawn(button(&art, 110.0, 32.0, "RESET", 16.0, Act::Reset));
+                            r.spawn(button(&art, 130.0, 32.0, "SAVE", 18.0, Act::Save));
+                        });
+                        m.spawn((
+                            Value(Field::Saved),
+                            Text::new(value(cfg, &cat, &profile, Field::Saved)),
+                            TextFont::from_font_size(15.0),
+                            TextColor(Color::srgb(1.0, 0.85, 0.4)),
+                            Node {
+                                margin: UiRect::left(px(106)),
+                                ..default()
+                            },
+                        ));
                         stepper(m, "Mouse sens.", Field::Sens, 110.0, false);
                     });
                 p.spawn(Node {
                     flex_grow: 1.0,
                     ..default()
                 });
-                p.spawn(panel(380.0, AlignItems::FlexStart))
+                p.spawn(panel(300.0, AlignItems::FlexStart))
                     .with_children(|m| {
-                        m.spawn(heading("EQUIPMENT"));
+                        m.spawn(heading("VIEW"));
+                        m.spawn(Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: px(6),
+                            row_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|g| {
+                            for (i, f) in FOCUS.iter().enumerate() {
+                                g.spawn(button(&art, 84.0, 30.0, f.0, 15.0, Act::Focus(i)));
+                            }
+                        });
                         m.spawn((
-                            Text::new("Weapons and armour are chosen in the INVENTORY tab; buy more in the SHOP tab."),
-                            TextFont::from_font_size(16.0),
+                            Text::new("Drag the character to turn it, mouse wheel to zoom. Dyes are not in the original game; weapons and armour stats are set in INVENTORY."),
+                            TextFont::from_font_size(14.0),
                             TextColor(Color::srgb(0.85, 0.85, 0.85)),
                             Node {
-                                width: px(350),
+                                width: px(270),
                                 ..default()
                             },
                         ));
@@ -1194,15 +1345,20 @@ fn build(
                 ..default()
             })
             .with_children(|f| {
-                f.spawn(button(&art, 160.0, 48.0, "QUIT", 22.0, Act::Quit));
+                // the browser build's page has its own menu: this one goes back to it
+                let quit = if cfg!(target_arch = "wasm32") { "BACK" } else { "QUIT" };
+                f.spawn(button(&art, 160.0, 48.0, quit, 22.0, Act::Quit));
                 f.spawn(Node {
                     column_gap: px(16),
                     align_items: AlignItems::Center,
                     ..default()
                 })
                 .with_children(|r| {
-                    r.spawn(button(&art, 180.0, 48.0, "JOIN LAN", 22.0, Act::Lan(false)));
-                    r.spawn(button(&art, 180.0, 48.0, "HOST LAN", 22.0, Act::Lan(true)));
+                    // no LAN in the browser
+                    if !cfg!(target_arch = "wasm32") {
+                        r.spawn(button(&art, 180.0, 48.0, "JOIN LAN", 22.0, Act::Lan(false)));
+                        r.spawn(button(&art, 180.0, 48.0, "HOST LAN", 22.0, Act::Lan(true)));
+                    }
                     r.spawn(button(&art, 260.0, 56.0, "START", 28.0, Act::Start));
                 });
             });
@@ -1211,6 +1367,7 @@ fn build(
     commands.insert_resource(clan_art);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn act(
     clicks: Query<(&Interaction, &Act), Changed<Interaction>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1218,6 +1375,7 @@ fn act(
     mut state: ResMut<State>,
     mut profile: ResMut<Profile>,
     mut clan_ui: ResMut<clan::Ui>,
+    mut orbit: ResMut<Orbit>,
     pick: Res<Pick>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -1247,9 +1405,33 @@ fn act(
                     profile.equipped[4..].fill(0);
                 }
                 state.cfg.woman = w;
-                state.cfg.outfit = None;
+                // the pieces are made for one sex
+                state.cfg.look = Look::default();
             }
             Act::Step(f, d) => step(&mut state.cfg, &cat, &profile, f, d),
+            Act::Random(dyes_only) => {
+                let seed = crate::profile::wall().as_nanos() as u64;
+                let fresh = cat.wardrobe(state.cfg.woman).random(seed);
+                let look = &mut state.cfg.look;
+                if !dyes_only {
+                    *look = fresh;
+                } else {
+                    // a dye on every piece but the face (its dye is the skin tone)
+                    for (s, t) in look.tints.iter_mut().enumerate() {
+                        let r = (seed >> (s * 5)) as usize;
+                        *t = if s == 1 { 0 } else { (r % TINTS.len()) as u8 };
+                    }
+                }
+            }
+            Act::Reset => state.cfg.look = Look::default(),
+            Act::Save => {
+                (profile.woman, profile.look) = (state.cfg.woman, state.cfg.look);
+                profile.save();
+            }
+            Act::Focus(f) => {
+                orbit.focus = f;
+                orbit.zoom = 1.0;
+            }
             Act::Start | Act::Lan(_) => {
                 state.cfg.net = match *a {
                     Act::Lan(true) => Some(Net::Host),
@@ -1296,14 +1478,19 @@ fn act(
                 } else {
                     state.cfg.scenario = None;
                 }
-                (profile.woman, profile.outfit) = (state.cfg.woman, state.cfg.outfit);
+                (profile.woman, profile.look) = (state.cfg.woman, state.cfg.look);
                 state.cfg.loadout = profile.equipped[..4]
                     .iter()
                     .copied()
                     .take_while(|&i| i != 0)
                     .collect();
                 profile.save();
-                *pick.0.lock().unwrap() = Some(state.cfg.clone());
+                if let Ok(mut p) = pick.0.lock() {
+                    *p = Some(state.cfg.clone());
+                }
+                // the browser page starts the match (the binary relaunches itself elsewhere)
+                #[cfg(target_arch = "wasm32")]
+                crate::web::play(&state.cfg);
                 exit.write(AppExit::Success);
             }
             Act::Quit => {
@@ -1314,18 +1501,28 @@ fn act(
 }
 
 /// Keeps value texts, selected buttons and the visible page in line with [`State`].
+#[allow(clippy::too_many_arguments)]
 fn refresh(
     mut commands: Commands,
     state: Res<State>,
     profile: Res<Profile>,
     cat: Res<Catalog>,
+    orbit: Res<Orbit>,
     mut values: Query<(&Value, &mut Text)>,
+    mut swatches: Query<(&Swatch, &mut BackgroundColor)>,
     buttons: Query<(Entity, &Act, Has<Chosen>)>,
     mut pages: Query<(&PageRoot, &mut Node), Without<ModeShow>>,
     mut modes: Query<(&ModeShow, &mut Node)>,
 ) {
-    if !state.is_changed() && !profile.is_changed() {
+    if !state.is_changed() && !profile.is_changed() && !orbit.is_changed() {
         return;
+    }
+    for (s, mut bg) in &mut swatches {
+        let t = TINTS[state.cfg.look.tints[s.0] as usize % TINTS.len()].1;
+        let c = BackgroundColor(Color::srgb(t[0], t[1], t[2]));
+        if *bg != c {
+            *bg = c;
+        }
     }
     let cfg = &state.cfg;
     for (v, mut t) in &mut values {
@@ -1340,6 +1537,7 @@ fn refresh(
             Act::Map(m) => cfg.map.as_ref() == Some(&cat.maps[m]),
             Act::Mode(m) => m == cfg.mode,
             Act::Sex(w) => w == cfg.woman,
+            Act::Focus(f) => f == orbit.focus,
             _ => false,
         };
         match (on, chosen) {
@@ -1364,13 +1562,13 @@ fn refresh(
     }
 }
 
-/// Respawns the character model when sex or outfit change.
+/// Respawns the character model when sex or clothes change.
 fn preview(
     mut commands: Commands,
     state: Res<State>,
     cat: Res<Catalog>,
     root: Single<(Entity, &mut Visibility), With<Preview>>,
-    mut shown: Local<Option<(bool, Option<usize>)>>,
+    mut shown: Local<Option<(bool, Look)>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut images: ResMut<Assets<Image>>,
@@ -1386,41 +1584,100 @@ fn preview(
         *vis = want;
     }
     let cfg = &state.cfg;
-    if *shown == Some((cfg.woman, cfg.outfit)) {
+    if *shown == Some((cfg.woman, cfg.look)) {
         return;
     }
-    *shown = Some((cfg.woman, cfg.outfit));
+    *shown = Some((cfg.woman, cfg.look));
     commands.entity(parent).despawn_children();
     let ch = cat.character(cfg.woman);
-    let outfit = match cfg.outfit {
-        None => Outfit::base(),
-        Some(p) => Outfit::from_part(&cat.vfs, ch, p)
-            .unwrap_or_else(|e| panic!("{}: outfit set {}: {e}", ch.name, p + 1)),
-    };
     let mut textures = Textures::new(&cat.vfs, "model/");
-    let model = character::spawn(
-        &mut commands,
-        &mut meshes,
-        &mut bindposes,
-        &mut images,
-        &mut materials,
-        &mut textures,
-        &cat.vfs,
-        ch,
-        &outfit,
-        Transform::IDENTITY,
-    )
-    .unwrap_or_else(|e| panic!("{}: {e}", ch.name));
+    let mut spawn = |look: &Look| {
+        character::spawn(
+            &mut commands,
+            &mut meshes,
+            &mut bindposes,
+            &mut images,
+            &mut materials,
+            &mut textures,
+            &cat.vfs,
+            ch,
+            look,
+            Transform::IDENTITY,
+        )
+    };
+    // a piece that cannot be read (a failed browser download) shows the base body
+    let model = spawn(&cfg.look.fit(ch))
+        .or_else(|e| {
+            warn!("{}: {e}", ch.name);
+            spawn(&Look::default())
+        })
+        .unwrap_or_else(|e| panic!("{}: {e}", ch.name));
     commands.entity(parent).add_child(model.root);
 }
 
-/// Slow turntable (windowed only; headless shots stay reproducible).
-fn turn(time: Res<Time>, shot: Option<Res<Shot>>, mut q: Query<&mut Transform, With<Preview>>) {
-    if shot.is_none() {
-        for mut t in &mut q {
-            t.rotate_y(time.delta_secs() * 0.5);
-        }
+/// Shrinks the menu to fit windows smaller than its 1280 x 720 layout (phones, small browser
+/// windows).
+fn fit(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>) {
+    let Ok(w) = windows.single() else { return };
+    let s = (w.width() / 1280.0).min(w.height() / 720.0).min(1.0);
+    if s > 0.0 && scale.0 != s {
+        scale.0 = s;
     }
+}
+
+/// The player page's camera and turntable: dragging (mouse or one finger, away from the
+/// buttons) turns the character, the wheel zooms, [`FOCUS`] picks the framing; until the
+/// first drag it turns slowly on its own (windowed only, so headless shots stay
+/// reproducible). Other pages get the full framing back.
+#[allow(clippy::too_many_arguments)]
+fn orbit(
+    time: Res<Time>,
+    shot: Option<Res<Shot>>,
+    state: Res<State>,
+    mut orbit: ResMut<Orbit>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
+    scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
+    touches: Res<Touches>,
+    ui: Query<&Interaction>,
+    mut model: Single<&mut Transform, With<Preview>>,
+    mut camera: Single<&mut Transform, (With<Camera3d>, Without<Preview>)>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut turned: Local<Option<f32>>,
+) {
+    let player = state.page == Page::Player;
+    let on_ui = ui.iter().any(|i| *i != Interaction::None);
+    let drag = if mouse.pressed(MouseButton::Left) {
+        motion.delta.x
+    } else {
+        touches.iter().next().map_or(0.0, |t| t.delta().x)
+    };
+    if player && !on_ui && drag != 0.0 {
+        *turned = Some(turned.unwrap_or(0.0) + drag * 0.01);
+    }
+    if player && scroll.delta.y != 0.0 {
+        orbit.zoom = (orbit.zoom * (1.0 - scroll.delta.y.signum() * 0.12)).clamp(0.3, 1.6);
+    }
+    let yaw = match *turned {
+        Some(y) => y,
+        None if shot.is_none() => time.elapsed_secs() * 0.5,
+        None => 0.0,
+    };
+    model.rotation = Quat::from_rotation_y(yaw);
+    let (_, h, d) = FOCUS[if player { orbit.focus } else { 0 }];
+    let d = d * if player { orbit.zoom } else { 1.0 };
+    // the character stands right of the screen centre (about 15 % of the width), clear of the
+    // CHARACTER panel: tan(22.5 deg) * aspect * d is half the view's width at distance d
+    let aspect = window
+        .single()
+        .map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    let goal = Vec3::new(if player { -0.13 * aspect * d } else { 0.0 }, h, d);
+    let t = if shot.is_some() {
+        1.0
+    } else {
+        1.0 - (-time.delta_secs() * 8.0).exp()
+    };
+    camera.translation = camera.translation.lerp(goal, t);
 }
 
 #[cfg(test)]
@@ -1433,8 +1690,8 @@ mod tests {
         let mut args: Vec<String> = [
             "--char",
             "woman",
-            "--outfit",
-            "12",
+            "--look",
+            "12,0,3,0,0,7;1,0,0,19,0,0",
             "--loadout",
             "1,2,3",
             "--bots",
@@ -1459,8 +1716,8 @@ mod tests {
         let c = Config::parse(&mut args, false).unwrap();
         assert!(args.is_empty());
         assert_eq!(
-            (c.outfit, c.time_limit, c.kill_limit),
-            (Some(11), Some(90), None)
+            (c.look.parts[0], c.look.tints[3], c.time_limit, c.kill_limit),
+            (Some(11), 19, Some(90), None)
         );
         assert_eq!((c.dice, c.sacrifice), (Some(3), [200008, 200018]));
         let mut again = c.flags();

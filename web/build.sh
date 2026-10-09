@@ -40,7 +40,8 @@ if [[ ! -f "$dist/data/index.json" || $# -gt 0 ]]; then
   game=()
   if [[ -d "${1:-}" ]]; then game=("$1"); shift; fi
   cargo build --release --locked --bin gunz-play --bin gunz-pack
-  rm -rf "$dist/data"
+  # files/ (each clothing file on its own) is kept: the install's files do not change
+  rm -rf "$dist/data/maps" "$dist/data/core.pack.gz" "$dist/data/index.json"
   target/release/gunz-pack "${game[@]}" "$dist/data" "$@"
 fi
 ls -la "$dist/pkg"

@@ -41,6 +41,56 @@ pub fn vfs() -> io::Result<Vfs> {
     Vfs::from_packs(packs.iter().map(Vec::as_slice))
 }
 
+/// A file served next to the packs (`mrs::Packed::Fetch`), downloaded now: the page's
+/// `globalThis.gunzFetch(path)` returns its bytes (a synchronous request; the clothes are a few
+/// hundred kB each) or `null`.
+pub fn fetch(path: &str) -> io::Result<Vec<u8>> {
+    global("gunzFetch")
+        .dyn_into::<Function>()
+        .ok()
+        .and_then(|f| f.call1(&JsValue::NULL, &path.into()).ok())
+        .and_then(|b| b.dyn_into::<Uint8Array>().ok())
+        .map(|b| b.to_vec())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{path}: download failed")))
+}
+
+const PROFILE_KEY: &str = "gunzrs.profile";
+
+fn storage() -> Option<JsValue> {
+    Some(global("localStorage")).filter(JsValue::is_object)
+}
+
+fn call(on: &JsValue, method: &str, args: &[JsValue]) -> Option<JsValue> {
+    let f = Reflect::get(on, &method.into())
+        .ok()?
+        .dyn_into::<Function>()
+        .ok()?;
+    f.apply(on, &args.iter().collect::<Array>()).ok()
+}
+
+/// The profile text the browser keeps (`localStorage`).
+pub fn load_profile() -> Option<String> {
+    call(&storage()?, "getItem", &[PROFILE_KEY.into()])?.as_string()
+}
+
+pub fn store_profile(text: &str) {
+    if let Some(s) = storage() {
+        call(&s, "setItem", &[PROFILE_KEY.into(), text.into()]);
+    }
+}
+
+/// The menu's START: the page loads the map and starts the match
+/// (`globalThis.gunzPlay(map, flags)`).
+pub fn play(cfg: &crate::menu::Config) {
+    let flags: Array = cfg.flags().iter().map(|s| JsValue::from_str(s)).collect();
+    let map = cfg.map.clone().unwrap_or_default();
+    call(
+        &js_sys::global().into(),
+        "gunzPlay",
+        &[map.into(), flags.into()],
+    );
+}
+
 /// Tells the page when the match is on screen (`globalThis.gunzReady()`, it hides its loading
 /// screen) and hands the end of a match to it (`globalThis.gunzExit(code)`): it starts the same
 /// match again or goes back to its menu, as `relaunch` does on the desktop. Also asks for the
@@ -165,10 +215,15 @@ fn ready(mut frames: Local<u32>) {
 fn relock(
     mouse: Res<ButtonInput<MouseButton>>,
     frozen: Option<Res<Frozen>>,
+    clock: Option<Res<crate::session::Clock>>,
     mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    // no pointer lock on a touch screen: the fire button is a left click there
-    if frozen.is_none() && mouse.just_pressed(MouseButton::Left) && !global("gunzTouch").is_object()
+    // only in a match (the menu keeps its cursor), and never on a touch screen: the fire
+    // button is a left click there
+    if clock.is_some()
+        && frozen.is_none()
+        && mouse.just_pressed(MouseButton::Left)
+        && !global("gunzTouch").is_object()
     {
         for mut c in &mut windows {
             // assigning marks it changed, so the lock is requested again inside the gesture

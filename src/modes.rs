@@ -316,13 +316,15 @@ fn dummies(
             });
         let Some((pos, to)) = spot else { continue };
         let dir = Vec3::new(to.x, 0.0, to.z).normalize_or(Vec3::NEG_Z);
+        let woman = i % 2 == 1;
+        let look = spawner.random_look(woman, 100 + i as u64);
         let e = spawner.spawn(ActorSpec {
             name: format!("Dummy {}", i + 1),
             pos: pos + Vec3::Y * 0.1,
             yaw: f32::atan2(-dir.x, -dir.z),
-            woman: i % 2 == 1,
+            woman,
             loadout: vec![],
-            outfit: None,
+            look,
             bot: true,
         });
         spawner

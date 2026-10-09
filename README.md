@@ -76,7 +76,7 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 |---|---|
 | Maps | All 30 RS v7 maps plus quest maps, with lightmaps, skies and every prop (fires, light shafts, water, fans, waving flags and curtains) |
 | Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
-| Characters | Man and woman models, 170 / 259 outfit sets, skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
+| Characters | Man and woman models; every clothing piece of the item data (102 chests, 50 legs, 33 hair/hats... for the man) chosen per slot with optional dyes on the PLAYER page, live preview (drag to turn, zoom, framing per body part); bots wear random clothes; skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
 | Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls; run speed, jump, gravity, fall speed and wall kicks measured from public match replays; rocket launchers and machine guns slow you and block wall moves, as their item data says |
 | Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
@@ -116,14 +116,19 @@ sudo tailscale serve --bg --https=10000 http://127.0.0.1:8090   # HTTPS on your 
 ```
 
 `web/` builds the same game for the browser. `gunz-pack` plays a short traced match on every
-map and keeps only the files those matches read. The result is one shared pack (characters,
-weapons, effects, sounds; about 27 MB gzipped instead of the 1.6 GB install) plus one pack per
-map (3-14 MB). The page fetches the shared pack and the wasm module (7 MB brotli) right away
-and a map's pack only once you pick that map. Packs are cached for good by their CRC. After
-START a loading screen shows each download (size and its own bar), an overall bar, the speed
-and time left, then the start-up step until the match is on screen.
-Offline only for now: no LAN, profile not saved, and the menu is a small HTML form (map, mode,
-bots, character). `web/dist` holds retail bytes, so serve it only to your own devices (a
+map (and opens the game's menu) and keeps only the files those runs read. The result is one
+shared pack (characters, weapons, effects, sounds; about 27 MB gzipped instead of the 1.6 GB
+install) plus one pack per map (3-14 MB). The page fetches the shared pack and the wasm module
+(7 MB brotli) right away and a map's pack only once you pick that map. Packs are cached for
+good by their CRC. Clothes are too many to pack (hundreds of MB): every other file under
+`model/` is served on its own from `data/files/` and downloaded when the game reads it (a bot's
+outfit at the start of a match, a piece you browse to). After START a loading screen shows each
+download (size and its own bar), an overall bar, the speed and time left, then the start-up step
+until the match is on screen. CHARACTER & CLOTHES opens the game's own PLAYER page; its SAVE
+keeps the character in the browser's local storage and its START plays the map and mode picked
+there. On a touch screen the match has on-screen controls (a floating stick, drag to look, fire,
+jump, dash, guard, reload, weapon swap, scores, pause) and goes fullscreen.
+No LAN in the browser. `web/dist` holds retail bytes, so serve it only to your own devices (a
 tailnet-only `tailscale serve`, never `tailscale funnel`).
 
 ## More tools
@@ -141,7 +146,7 @@ cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked 
 <details>
 <summary>All <code>gunz-play</code> options</summary>
 
-`--char man|woman`, `--outfit N`, `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
+`--char man|woman`, `--look LOOK` (the profile's `look` text), `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
 `--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|clanwar|infected|gungame|dynduel|training`,
 `--mode quest --scenario NAME [--dice N] [--sacrifice A,B]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
 `"Challenge 101"`, `"Survival Prison"`; without `--dice` the die is rolled), `--time-limit S`, `--kill-limit N` (0 = none),

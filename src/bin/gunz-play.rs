@@ -1,6 +1,6 @@
 //! `gunz-play [GAME_DIR] [MAP] [OPTIONS]`: play a retail map as a GunZ character. Without
 //! GAME_DIR the Steam install is found through `libraryfolders.vdf` (`src/steam.rs`). Without MAP the
-//! main menu opens (map, mode and limits, bots, character and outfit, loadout, sensitivity);
+//! main menu opens (map, mode and limits, bots, character and clothes, loadout, sensitivity);
 //! Start re-executes this binary with the chosen options, and "Main menu" in the pause or
 //! match-end screen re-executes it back into the menu.
 //!
@@ -9,8 +9,8 @@
 //! 1..5 or the wheel switch
 //! weapon, Tab scoreboard, Esc pause menu (resume, mouse sensitivity, main menu, quit).
 //!
-//! OPTIONS (the menu writes the same ones): `--char man|woman`, `--outfit N` (1-based
-//! `AddParts` set, 0 = default), `--loadout ID,ID,..` (zitem ids), `--bots N`,
+//! OPTIONS (the menu writes the same ones): `--char man|woman`, `--look LOOK` (clothes and
+//! dyes, the profile's `look` text: six 1-based parts `;` six tints), `--loadout ID,ID,..` (zitem ids), `--bots N`,
 //! `--bots-ahead M` (spawn them M metres in front of the player), `--skill 0..1` (bot
 //! difficulty), `--sens X` (mouse sensitivity, 1 = default), `--mode MODE`, `--time-limit
 //! SECONDS` and `--kill-limit N` (0 = none; the defaults are `gametypecfg.xml`'s, none in
@@ -151,18 +151,23 @@ fn start_quest(vfs: &Vfs, config: &mut Config, headless: bool) -> Result<Quest, 
         profile.spend_quest_items(&ok.spend);
         profile.save();
     }
-    // random from the clock; headless runs stay reproducible unless GUNZ_SEED says otherwise
-    let seed = std::env::var("GUNZ_SEED")
+    let seed = seed(headless);
+    let plan = cat.plan(&ok.scenario, config.dice, seed)?;
+    config.scenario = Some(ok.scenario);
+    Quest::new(vfs, &cat, plan, config.bots, seed)
+}
+
+/// Seed of a match's random choices (quest plan, bots' clothes): the clock, but 1 in headless
+/// runs so they stay reproducible; `GUNZ_SEED` overrides both.
+fn seed(headless: bool) -> u32 {
+    std::env::var("GUNZ_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(if headless {
             1
         } else {
             gunz::profile::wall().subsec_nanos().max(1)
-        });
-    let plan = cat.plan(&ok.scenario, config.dice, seed)?;
-    config.scenario = Some(ok.scenario);
-    Quest::new(vfs, &cat, plan, config.bots, seed)
+        })
 }
 
 fn main() -> AppExit {
@@ -173,7 +178,7 @@ fn main() -> AppExit {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || {
         eprintln!(
-            "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
+            "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--look LOOK] [--loadout ID,..] [--bots N]\n       \
              [--bots-ahead M] [--skill 0..1] [--sens X] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S] [--host | --join ADDR|lan]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
@@ -264,7 +269,7 @@ fn main() -> AppExit {
     // A LAN client plays the host's map, mode and limits.
     let client = match config.net.clone() {
         Some(Net::Join(addr)) => {
-            match net::join(&addr, &name, config.woman, config.outfit, &config.loadout) {
+            match net::join(&addr, &name, config.woman, &config.look, &config.loadout) {
                 Ok((w, c)) => {
                     println!("lan: joined {} ({})", w.map, w.mode.arg());
                     (config.mode, config.time_limit, config.kill_limit) =
@@ -327,7 +332,8 @@ fn main() -> AppExit {
     let col = MapCollision::load(&vfs, &rs).unwrap_or_else(|e| panic!("{rs} collision: {e}"));
     let map = map::load(&vfs, &rs).unwrap_or_else(|e| panic!("{rs}: {e}"));
     let level = Level { vfs, map };
-    let data = ActorData::new(&level).unwrap_or_else(|e| panic!("items/characters: {e}"));
+    let mut data = ActorData::new(&level).unwrap_or_else(|e| panic!("items/characters: {e}"));
+    data.seed = seed(shot.is_some()) as u64;
 
     let secs = time.unwrap_or_else(|| script.as_ref().map_or(0.5, |s| s.secs() + 0.3));
     let mut app = view::app_plain(&format!("gunz-play {map_name}"), shot);
@@ -414,7 +420,7 @@ fn main() -> AppExit {
             yaw: start.1,
             woman: config.woman,
             loadout: config.loadout.clone(),
-            outfit: config.outfit,
+            look: config.look,
             name: if config.net.is_some() {
                 name
             } else {

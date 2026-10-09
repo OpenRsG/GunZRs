@@ -7,6 +7,7 @@
 
 use crate::{
     actor::{ActorData, DEFAULT_LOADOUT},
+    character::Look,
     clan::Clan,
     game::{Killed, Player, QuestLoot, Reward, Settings, Vitals},
     level::Level,
@@ -114,8 +115,8 @@ pub fn opt_mut(s: &mut Settings, i: usize) -> &mut bool {
 pub struct Profile {
     pub name: String,
     pub woman: bool,
-    /// Outfit part set of the character (`Character::parts` index); `None` = default.
-    pub outfit: Option<usize>,
+    /// What the character wears.
+    pub look: Look,
     /// Total XP; the level follows from it ([`progress`]).
     pub xp: u64,
     pub bounty: u32,
@@ -148,7 +149,7 @@ impl Profile {
         Self {
             name,
             woman: false,
-            outfit: None,
+            look: Look::default(),
             xp: 0,
             bounty: START_BOUNTY,
             owned: DEFAULT_LOADOUT.into_iter().collect(),
@@ -177,6 +178,13 @@ impl Profile {
     /// The saved profile (a new one if the file does not exist). Panics on an unreadable or
     /// corrupt file rather than overwrite it later. `headless`: no file unless `GUNZ_PROFILE`.
     pub fn open(headless: bool) -> Self {
+        // the browser keeps the profile in the page's local storage
+        #[cfg(target_arch = "wasm32")]
+        if !headless {
+            return crate::web::load_profile()
+                .and_then(|t| Self::parse(&t).map_err(|e| eprintln!("profile: {e}")).ok())
+                .unwrap_or_else(Self::new);
+        }
         let path = std::env::var_os("GUNZ_PROFILE")
             .map(PathBuf::from)
             .or_else(|| if headless { None } else { Self::default_path() });
@@ -208,10 +216,10 @@ impl Profile {
         let ids =
             |v: &mut dyn Iterator<Item = &u32>| v.map(u32::to_string).collect::<Vec<_>>().join(",");
         let mut text = format!(
-            "name={}\nwoman={}\noutfit={}\nxp={}\nbounty={}\nmedals={}\nowned={}\nequipped={}\nquest_items={}\nrented={}\n",
+            "name={}\nwoman={}\nlook={}\nxp={}\nbounty={}\nmedals={}\nowned={}\nequipped={}\nquest_items={}\nrented={}\n",
             self.name.replace('\n', " "),
             self.woman,
-            self.outfit.map_or("none".into(), |o| o.to_string()),
+            self.look,
             self.xp,
             self.bounty,
             self.medals,
@@ -263,10 +271,15 @@ impl Profile {
             match k.trim() {
                 "name" => p.name = v.trim().to_owned(),
                 "woman" => p.woman = num(k, v)?,
+                "look" => p.look = v.trim().parse()?,
+                // older profiles: one part set for every slot (slots it lacks keep the base)
                 "outfit" => {
-                    p.outfit = match v.trim() {
-                        "none" => None,
-                        n => Some(num(k, n)?),
+                    p.look = match v.trim() {
+                        "none" => Look::default(),
+                        n => Look {
+                            parts: [Some(num(k, n)?); 6],
+                            ..default()
+                        },
                     }
                 }
                 "xp" => p.xp = num(k, v)?,
@@ -315,6 +328,11 @@ impl Profile {
     /// Writes the file (via a temp file, so a crash never leaves half a profile); a no-op for
     /// throwaway profiles. Errors are reported, not fatal.
     pub fn save(&self) {
+        #[cfg(target_arch = "wasm32")]
+        if self.path.is_none() {
+            crate::web::store_profile(&self.to_text());
+            return;
+        }
         let Some(path) = &self.path else { return };
         let tmp = path.with_extension("tmp");
         let done = path
@@ -591,7 +609,7 @@ mod tests {
         let mut p = Profile::new();
         p.name = "Tester = 1".into();
         p.woman = true;
-        p.outfit = Some(11);
+        p.look = "12,0,3,0,0,7;1,0,0,19,0,0".parse().unwrap();
         p.add(1234, 77);
         p.owned.insert(2000000);
         p.equipped[4] = 3010013;

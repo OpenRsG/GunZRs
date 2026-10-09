@@ -313,6 +313,13 @@
    border: 2px solid rgba(255, 255, 255, .35);
    border-radius: 8px
   }
+
+  button.alt {
+   margin-top: 8px;
+   background: #2a2c33;
+   color: #e8c46a;
+   border: 1px solid #e8c46a
+  }
  </style>
 </head>
 
@@ -333,11 +340,8 @@
      <option value="berserker">Berserker</option>
     </select></label>
    <label>Bots <input id="bots" type="number" min="0" max="15" value="3"></label>
-   <label>Character <select id="char">
-     <option>man</option>
-     <option>woman</option>
-    </select></label>
    <button id="start" disabled>START</button>
+   <button id="dress" class="alt" disabled>CHARACTER &amp; CLOTHES</button>
    <div class="note" id="note">Checking WebGPU...</div>
   </div>
  </div>
@@ -498,8 +502,21 @@
    index = await r.json();
   } catch (e) {note(e.message, true); throw e;}
   for (const m of index.maps) $("map").add(new Option(m.name.replace(/\b\w/g, c => c.toUpperCase()), m.name));
-  if (saved) for (const k of ["map", "mode", "bots", "char"]) $(k).value = saved[k];
+  if (saved) for (const k of ["map", "mode", "bots"]) $(k).value = saved[k];
   else $("map").value = index.maps.some(m => m.name === "mansion") ? "mansion" : index.maps[0].name;
+
+  // Files the packs leave out (`files/`: every clothing piece and its textures) are read by the
+  // game one at a time, synchronously (`src/web.rs` `fetch`): `null` if the download fails.
+  globalThis.gunzFetch = path => {
+   const x = new XMLHttpRequest();
+   x.open("GET", "data/files/" + path.split("/").map(encodeURIComponent).join("/"), false);
+   x.overrideMimeType("text/plain; charset=x-user-defined");
+   try {x.send();} catch {return null;}
+   if (x.status !== 200) return null;
+   const s = x.responseText, b = new Uint8Array(s.length);
+   for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff;
+   return b;
+  };
 
   // The engine compiles while it downloads; the shared pack starts at once as well.
   const engineItem = item("Game engine", 0);
@@ -511,33 +528,37 @@
   const core = pack(index.core, coreItem);
   Promise.all([engine, core]).then(() => note("Ready."), e => note(e.message, true));
   note("Downloading the game in the background...");
-  $("start").disabled = false;
+  $("start").disabled = $("dress").disabled = false;
 
-  async function start() {
-   const pick = {map: $("map").value, mode: $("mode").value, bots: $("bots").value, char: $("char").value};
-   sessionStorage.setItem("gunz", JSON.stringify(pick));
-   $("start").disabled = true;
-   if (touch) fullscreen(true);
+  // Runs the engine once per page: a match (`map` set: its pack is downloaded too) or the
+  // game's own menu on its character page. The page reloads when either ends.
+  async function launch(args, map) {
+   $("start").disabled = $("dress").disabled = true;
+   if (touch && map) fullscreen(true);
    $("menu").style.display = "none";
    $("loading").style.display = "grid";
-   const entry = index.maps.find(m => m.name === pick.map);
-   const mapItem = item(`Map: ${$("map").selectedOptions[0].text}`, entry.bytes);
-   const startItem = item("Starting the match", 0);
+   const entry = map && index.maps.find(m => m.name === map);
+   const mapItem = entry && item(`Map: ${entry.name.replace(/\b\w/g, c => c.toUpperCase())}`, entry.bytes);
+   const startItem = item(map ? "Starting the match" : "Opening the character screen", 0);
    refresh(items.find(i => !i.el.classList.contains("done")));
    try {
-    const [[mod, wasm], c, m] = await Promise.all([engine, core, pack(entry, mapItem)]);
-    globalThis.gunzPacks = [c, m];
-    globalThis.gunzArgs = [pick.map, "--mode", pick.mode, "--bots", String(pick.bots), "--char", pick.char];
+    const [[mod, wasm], c, m] = await Promise.all([engine, core, entry ? pack(entry, mapItem) : null]);
+    globalThis.gunzPacks = m ? [c, m] : [c];
+    globalThis.gunzArgs = args;
     globalThis.gunzReady = () => {
      startItem.done(); $("loading").remove(); $("gunz").focus();
-     $("touch").classList.remove("off");
+     if (map && touch) $("touch").classList.remove("off");
     };
-    // 4 = play again, anything else = back to this menu (as the desktop build relaunches)
+    // a match: 4 = play again, anything else = back to this menu (as the desktop build
+    // relaunches); the game's menu: its START left the match to play (`gunzPlay`)
     globalThis.gunzExit = code => {
-     sessionStorage.setItem("gunzAgain", code === 4 ? "1" : "");
+     sessionStorage.setItem("gunzAgain", map && code === 4 ? "1" : "");
      location.reload();
     };
-    startItem.busy("reading data, building the map and the bots' paths (a few seconds)");
+    globalThis.gunzPlay = (map, flags) => sessionStorage.setItem("gunzNext", JSON.stringify([map, ...flags]));
+    if (map) sessionStorage.setItem("gunzLast", JSON.stringify(args));
+    startItem.busy(map ? "reading data, building the map and the bots' paths (a few seconds)"
+     : "reading the clothes catalogue");
     // let the browser paint that before the start-up takes the page's thread
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
     await mod.default({module_or_path: wasm});
@@ -548,8 +569,18 @@
     }
    }
   }
-  $("start").onclick = start;
-  if (saved && sessionStorage.getItem("gunzAgain")) {sessionStorage.removeItem("gunzAgain"); start();}
+  $("start").onclick = () => {
+   const pick = {map: $("map").value, mode: $("mode").value, bots: $("bots").value};
+   sessionStorage.setItem("gunz", JSON.stringify(pick));
+   // sex and clothes come from the profile the game keeps in this browser
+   launch([pick.map, "--mode", pick.mode, "--bots", String(pick.bots)], pick.map);
+  };
+  $("dress").onclick = () => launch(["--menu-page", "player", "--map", $("map").value]);
+  const next = JSON.parse(sessionStorage.getItem("gunzNext") || "null");
+  const last = JSON.parse(sessionStorage.getItem("gunzLast") || "null");
+  sessionStorage.removeItem("gunzNext");
+  if (next) launch(next, next[0]);
+  else if (last && sessionStorage.getItem("gunzAgain")) {sessionStorage.removeItem("gunzAgain"); launch(last, last[0]);}
  </script>
 </body>
 

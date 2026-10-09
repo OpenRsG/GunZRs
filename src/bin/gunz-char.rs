@@ -1,13 +1,14 @@
-//! `gunz-char GAME_DIR [man|woman] [--set N] [--shot OUT.png]`: the assembled player character
-//! in bind pose, standing at the origin. `--set N` dresses every slot that `AddParts` set N
-//! (1-based position in the character XML) provides.
+//! `gunz-char GAME_DIR [man|woman] [--set N | --look LOOK] [--shot OUT.png]`: the assembled
+//! player character in bind pose, standing at the origin. `--set N` dresses every slot that
+//! `AddParts` set N (1-based position in the character XML) provides; `--look` takes the
+//! profile's text form (`character::Look`: six 1-based parts `;` six tints).
 //! `gunz-char GAME_DIR --elu VFS/PATH.elu [--shot OUT.png]`: any single ELU model, camera
 //! framed on its bounds (every node's mesh is shown, weapon/bone helpers included).
 //! Windowed: fly camera (WASD, Esc quits).
 
 use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, prelude::*};
 use gunz::{
-    character::{self, Character, Outfit},
+    character::{self, Character, Look},
     elu::{self, Elu},
     model::{self, Textures},
     mrs::Vfs,
@@ -15,7 +16,7 @@ use gunz::{
 };
 
 enum Subject {
-    Character(Character, Outfit),
+    Character(Character, Look),
     Elu(String, Elu),
 }
 
@@ -29,7 +30,7 @@ fn main() -> AppExit {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || {
         eprintln!(
-            "usage: gunz-char GAME_DIR [man|woman] [--set N] [--shot OUT.png]\n       \
+            "usage: gunz-char GAME_DIR [man|woman] [--set N | --look LOOK] [--shot OUT.png]\n       \
              gunz-char GAME_DIR --elu VFS/PATH.elu [--shot OUT.png]"
         );
         AppExit::from_code(2)
@@ -43,7 +44,7 @@ fn main() -> AppExit {
         args.drain(i..=(i + 1).min(args.len() - 1));
         Some(v)
     };
-    let (set, path) = (option("--set"), option("--elu"));
+    let (set, path, look) = (option("--set"), option("--elu"), option("--look"));
     let Some(game) = args.first().cloned() else {
         return usage();
     };
@@ -66,16 +67,21 @@ fn main() -> AppExit {
             _ => return usage(),
         };
         let character = character::load(&vfs, name).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let outfit = match set {
-            None => Outfit::base(),
-            Some(n) => {
+        let look = match (set, look) {
+            (None, None) => Look::default(),
+            (_, Some(l)) => match l.map(|l| l.parse::<Look>()) {
+                Some(Ok(l)) => l.fit(&character),
+                Some(Err(e)) => panic!("--look: {e}"),
+                None => return usage(),
+            },
+            (Some(n), None) => {
                 let Some(n) = n.and_then(|n| n.parse::<usize>().ok()) else {
                     return usage();
                 };
                 let part = n.checked_sub(1).filter(|&p| p < character.parts.len());
                 let part =
                     part.unwrap_or_else(|| panic!("--set {n}: {} sets", character.parts.len()));
-                Outfit::from_part(&vfs, &character, part).unwrap_or_else(|e| panic!("set {n}: {e}"))
+                Look::set(&vfs, &character, part).unwrap_or_else(|e| panic!("set {n}: {e}"))
             }
         };
         println!(
@@ -84,7 +90,7 @@ fn main() -> AppExit {
             character.parts.len(),
             character.animations.len()
         );
-        (name.to_string(), Subject::Character(character, outfit))
+        (name.to_string(), Subject::Character(character, look))
     };
     let mut app = view::app(&format!("gunz-char {title}"), shot);
     app.insert_resource(ClearColor(Color::srgb(0.18, 0.2, 0.24)))
@@ -105,7 +111,7 @@ fn spawn(
     let mut textures = Textures::new(&scene.vfs, "model/");
     // Camera: in front of the subject (+Z side), looking toward -Z.
     let (center, radius) = match &scene.subject {
-        Subject::Character(ch, outfit) => {
+        Subject::Character(ch, look) => {
             character::spawn(
                 &mut commands,
                 &mut meshes,
@@ -115,7 +121,7 @@ fn spawn(
                 &mut textures,
                 &scene.vfs,
                 ch,
-                outfit,
+                look,
                 Transform::IDENTITY,
             )
             .unwrap_or_else(|e| panic!("spawn: {e}"));

@@ -40,6 +40,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::clan::ClanPlugin)
             .add_plugins(crate::npc::NpcPlugin)
             .add_plugins(crate::blitz::BlitzPlugin)
+            .add_plugins(crate::killcam::KillcamPlugin)
             .add_plugins(crate::perf::PerfPlugin);
     }
 }
@@ -247,6 +248,18 @@ pub struct Settings {
     pub sensitivity: f32,
     /// Background-music loudness, 0..=1 (`music.rs`; **inferred** default).
     pub music: f32,
+    /// Ramping kill sounds on consecutive kills (iGunZ `/killsounds` idea).
+    pub kill_sounds: bool,
+    /// Play the player's own `.wav` on every hit the player lands (iGunZ `/hitsound` idea).
+    pub hit_sound: bool,
+    /// Fixed, non-random bullet spread pattern.
+    pub static_spread: bool,
+    /// Teammates' HP/AP bars and ammo above their heads.
+    pub team_bars: bool,
+    /// Blood splatter on screen when the player is hurt.
+    pub screen_blood: bool,
+    /// Orbitable kill camera on the killer after death.
+    pub killcam: bool,
 }
 
 impl Default for Settings {
@@ -254,6 +267,12 @@ impl Default for Settings {
         Self {
             sensitivity: 0.0025,
             music: 0.5,
+            kill_sounds: true,
+            hit_sound: false,
+            static_spread: false,
+            team_bars: true,
+            screen_blood: true,
+            killcam: true,
         }
     }
 }

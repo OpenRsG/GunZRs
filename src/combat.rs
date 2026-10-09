@@ -11,7 +11,7 @@ use crate::{
     elu,
     game::{
         Afflict, Bot, Damage, Dead, Fire, HitShape, Impact, Killed, Mods, Player, Protected, Push,
-        Score, Team, Vitals, friendly,
+        Score, Settings, Team, Vitals, friendly,
     },
     item::{SPY_ICE, WeaponKind},
     level::Level,
@@ -55,6 +55,10 @@ const HEAT_COOL: f32 = 1.0;
 /// Vertical speed (m/s) above which an actor counts as airborne for spread (*inferred*; the
 /// controller's grounded flag is private, and stairs also trip this briefly).
 const AIR_SPEED: f32 = 3.0;
+/// Static spread: a single-bullet gun cycles through this many fixed points of the cone
+/// (*inferred*: eight keeps the pattern readable); a shotgun uses its 12 pellet points.
+const STATIC_SHOTS: u32 = 8;
+const GOLDEN_ANGLE: f32 = 2.399_963;
 /// Rate (1/s) at which an actor's sampled running/airborne state follows its real motion.
 const SPREAD_FOLLOW: f32 = 10.0;
 /// Fraction of a blast's damage the shooter takes from their own rocket or grenade. *Inferred*:
@@ -70,6 +74,7 @@ pub struct CombatPlugin;
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Vfx>()
+            .add_message::<Wounded>()
             .add_systems(Startup, (init_fx, projectile::init))
             .add_systems(
                 Update,
@@ -125,6 +130,8 @@ struct Spread {
     heat: f32,
     /// Time of the latest shot (heat cools from there).
     shot: f32,
+    /// Shots taken so far (picks the point of the fixed spread pattern).
+    shots: u32,
 }
 
 impl Spread {
@@ -139,6 +146,7 @@ impl Spread {
         self.heat =
             ((self.heat - (now - self.shot) * HEAT_COOL).max(0.0) + ctrl * HEAT_PER_CTRL).min(1.0);
         self.shot = now;
+        self.shots = self.shots.wrapping_add(1);
     }
 }
 
@@ -217,12 +225,27 @@ pub(crate) fn rnd(s: &mut u32) -> f32 {
     (*s >> 8) as f32 / (1u32 << 24) as f32
 }
 
-/// `dir` perturbed uniformly inside a cone of radius `spread` per metre.
-fn jitter(dir: Vec3, spread: f32, s: &mut u32) -> Vec3 {
+/// `dir` bent by `r` (0..1) of the cone radius `spread` per metre, towards angle `a`.
+fn cone(dir: Vec3, spread: f32, a: f32, r: f32) -> Vec3 {
     let u = dir.any_orthonormal_vector();
     let v = dir.cross(u);
-    let (a, r) = (rnd(s) * TAU, rnd(s).sqrt() * spread);
+    let r = r * spread;
     (dir + u * a.cos() * r + v * a.sin() * r).normalize()
+}
+
+/// `dir` perturbed uniformly inside a cone of radius `spread` per metre.
+fn jitter(dir: Vec3, spread: f32, s: &mut u32) -> Vec3 {
+    let a = rnd(s) * TAU;
+    cone(dir, spread, a, rnd(s).sqrt())
+}
+
+/// Point `k` of `n` on a golden-angle spiral filling the unit disc (`setting static_spread`):
+/// (angle, radius fraction). Evenly spread, never the exact centre (r >= sqrt(0.5/n)).
+fn fixed(k: u32, n: u32) -> (f32, f32) {
+    (
+        k as f32 * GOLDEN_ANGLE,
+        ((k as f32 + 0.5) / n as f32).sqrt(),
+    )
 }
 
 /// Yaw (Intent convention: 0 = -Z) of a direction.
@@ -770,6 +793,7 @@ fn resolve_fire(
     mut hands: Query<&mut Hand>,
     protected: Query<(), With<Protected>>,
     mut seed: Local<u32>,
+    settings: Res<Settings>,
 ) {
     if *seed == 0 {
         *seed = 0x2545_F491;
@@ -797,9 +821,9 @@ fn resolve_fire(
         let mut hits: Vec<(Entity, Vec3, Vec3, f32)> = Vec::new();
         let now = time.elapsed_secs();
         let ctrl = w.ctrl_ability.unwrap_or(0) as f32;
-        let (mut spread, mut player) = (0.0, false);
+        let (mut spread, mut player, mut shot) = (0.0, false, 0);
         if let Ok((mut s, p)) = spreads.get_mut(f.shooter) {
-            (spread, player) = (s.cone(ctrl, now), p);
+            (spread, player, shot) = (s.cone(ctrl, now), p, s.shots % STATIC_SHOTS);
             s.shoot(ctrl, now);
         }
         let pellets = if w.kind == WeaponKind::Shotgun {
@@ -809,8 +833,16 @@ fn resolve_fire(
             1
         };
         let (mut landed, mut reach) = (0, f32::MAX);
-        for _ in 0..pellets {
-            let d = jitter(dir, spread, &mut seed);
+        for k in 0..pellets {
+            let d = if player && settings.static_spread {
+                let (a, r) = fixed(
+                    if pellets > 1 { k } else { shot },
+                    pellets.max(STATIC_SHOTS),
+                );
+                cone(dir, spread, a, r)
+            } else {
+                jitter(dir, spread, &mut seed)
+            };
             let wall = col.raycast(f.origin, d, GUN_RANGE);
             let mut best = wall.as_ref().map_or(GUN_RANGE, |h| h.distance);
             let mut who = None;
@@ -904,6 +936,16 @@ fn resolve_fire(
     }
 }
 
+/// What one hit actually took from an actor's health and armour (after armour, mods and
+/// overkill); the HUD builds the player's damage report and blood splatter from it.
+#[derive(Message)]
+pub(crate) struct Wounded {
+    pub target: Entity,
+    pub attacker: Entity,
+    pub hp: f32,
+    pub ap: f32,
+}
+
 fn apply_damage(
     mut msgs: MessageReader<Damage>,
     data: Res<ActorData>,
@@ -915,6 +957,7 @@ fn apply_damage(
     mods: Query<&Mods>,
     humans: Query<(), Or<(With<Player>, With<Bot>)>>,
     mut killed: MessageWriter<Killed>,
+    mut wounded: MessageWriter<Wounded>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -949,6 +992,12 @@ fn apply_damage(
         });
         let (ap, hp) = (v.ap, v.hp);
         absorb(&mut v, amount, pierce);
+        wounded.write(Wounded {
+            target: d.target,
+            attacker: d.attacker,
+            hp: hp - v.hp.max(0.0),
+            ap: ap - v.ap,
+        });
         info!(
             "t={:.2} damage: {} -> {} {:.0} (pierce {pierce}; ap {ap:.0} -> {:.0}, hp {hp:.0} -> {:.0})",
             time.elapsed_secs(),
@@ -1034,5 +1083,29 @@ mod tests {
             s.cone(10.0, 10.0),
             10.0 * SPREAD_PER_CTRL * (1.0 + RUN_SPREAD)
         );
+    }
+
+    #[test]
+    fn static_spread_is_deterministic_and_inside_the_cone() {
+        let dir = Vec3::new(0.3, 0.2, -1.0).normalize();
+        let spread = 0.06;
+        for n in [STATIC_SHOTS, SHOTGUN_PELLETS] {
+            for k in 0..n {
+                let (a, r) = fixed(k, n);
+                assert_eq!((a, r), fixed(k, n));
+                assert!((0.1..=1.0).contains(&r), "no centre bullet, none outside");
+                let d = cone(dir, spread, a, r);
+                // Off-axis tangent of the cone: at most `spread` per metre.
+                assert!((1.0 / d.dot(dir).powi(2) - 1.0).sqrt() <= spread + 1e-5);
+            }
+            let pts: Vec<_> = (0..n)
+                .map(|k| cone(dir, spread, fixed(k, n).0, fixed(k, n).1))
+                .collect();
+            assert!(
+                pts.iter()
+                    .enumerate()
+                    .all(|(i, p)| pts[..i].iter().all(|q| p.distance(*q) > 1e-4))
+            );
+        }
     }
 }

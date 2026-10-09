@@ -10,13 +10,14 @@ use crate::{
     actor::{Actor, ActorData},
     game::{
         ActorSound, Blast, Blocked, Cue, Damage, Dead, Fire, Impact, Killed, Loadout, PlaySound,
-        Player,
+        Player, Settings,
     },
     item::Item,
     level::Level,
     map::Map,
     mrs::Vfs,
     pickup::{Picked, SOUND as PICKUP_SOUND},
+    profile::Profile,
     view::{SCALE, Shot, to_bevy},
 };
 use bevy::prelude::*;
@@ -31,6 +32,13 @@ const SOUND_LIFE: f32 = 10.0;
 const MAX_LIVE: usize = 48;
 /// Looping ambient sources playing at once (the nearest win).
 const MAX_AMBIENT: usize = 8;
+/// Kill-streak sound (**inferred**: the retail data has no announcer or multikill clips; the 0.3 s
+/// `if_score_get` score blip fits) and its playback speeds for streak steps 1..4: unison, major
+/// third, fifth, octave. A kill within `STREAK_SECS` of the last continues the streak
+/// (**inferred**); the player's death ends it.
+const STREAK_SOUND: &str = "if_score_get";
+const STREAK_PITCH: [f32; 4] = [1.0, 1.26, 1.5, 2.0];
+const STREAK_SECS: f32 = 10.0;
 /// A shell casing hits the floor this long after the shot (**inferred**).
 const SLUG_DELAY: f32 = 0.45;
 /// Impact sounds per frame (a shotgun blast is eight pellets).
@@ -48,7 +56,15 @@ impl Plugin for AudioPlugin {
             (
                 load.run_if(resource_exists::<Level>.and_then(resource_exists::<ActorData>))
                     .run_if(not(resource_exists::<Sounds>)),
-                (combat_sounds, actor_sounds, requested, later, ambient, reap)
+                (
+                    combat_sounds,
+                    feedback,
+                    actor_sounds,
+                    requested,
+                    later,
+                    ambient,
+                    reap,
+                )
                     .run_if(resource_exists::<Sounds>),
             ),
         );
@@ -557,6 +573,11 @@ impl Sfx<'_, '_> {
     /// is dropped: stems are unique across `sound/`). `local` sounds (the player's own) are 2D
     /// and prefer the `_2d` variant; the rest are positioned at `at`.
     fn play(&mut self, name: &str, local: bool, at: Vec3) {
+        self.play_at(name, local, at, 1.0);
+    }
+
+    /// [`Sfx::play`] at playback `speed` (pitch and tempo scale together).
+    fn play_at(&mut self, name: &str, local: bool, at: Vec3, speed: f32) {
         let mut stem = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
         if local && self.sounds.exists(&format!("{stem}_2d")) {
             stem.push_str("_2d");
@@ -564,7 +585,38 @@ impl Sfx<'_, '_> {
         let Some(h) = self.sounds.handle(&self.level.vfs, &mut self.assets, &stem) else {
             return;
         };
-        let reach = self.sounds.reach.get(&stem).copied().unwrap_or(DEFAULT);
+        self.emit(&stem, h, local, at, speed);
+    }
+
+    /// The player's own `custom/hitsound.wav`, decoded on first use; a missing or unplayable file
+    /// is logged once and the hit stays silent.
+    fn play_hitsound(&mut self, profile: &Profile) {
+        const KEY: &str = "custom/hitsound";
+        let h = match self.sounds.cache.get(KEY) {
+            Some(h) => h.clone(),
+            None => {
+                let path = profile.hitsound_path();
+                let h = path
+                    .as_ref()
+                    .and_then(|p| std::fs::read(p).ok())
+                    .filter(|b| playable(b))
+                    .map(|b| self.assets.add(AudioSource { bytes: b.into() }));
+                match (&h, &path) {
+                    (None, p) => info!("audio: no playable hit sound at {p:?}"),
+                    (_, Some(p)) => info!("audio: hit sound {}", p.display()),
+                    _ => {}
+                }
+                self.sounds.cache.insert(KEY.into(), h.clone());
+                h
+            }
+        };
+        if let Some(h) = h {
+            self.emit("hitsound", h, true, Vec3::ZERO, 1.0);
+        }
+    }
+
+    fn emit(&mut self, stem: &str, h: Handle<AudioSource>, local: bool, at: Vec3, speed: f32) {
+        let reach = self.sounds.reach.get(stem).copied().unwrap_or(DEFAULT);
         let spatial = !local && !reach.flat;
         if spatial
             && self
@@ -576,7 +628,15 @@ impl Sfx<'_, '_> {
         }
         // Headless `--shot` runs stay silent (a host audio device would play them).
         if self.shot.is_some() {
-            info!("sfx {stem}{}", if spatial { "" } else { " (2D)" });
+            info!(
+                "sfx {stem}{}{}",
+                if spatial { "" } else { " (2D)" },
+                if speed == 1.0 {
+                    String::new()
+                } else {
+                    format!(" x{speed}")
+                }
+            );
             return;
         }
         if self.live.iter().count() >= MAX_LIVE {
@@ -584,7 +644,9 @@ impl Sfx<'_, '_> {
         }
         self.commands.spawn((
             AudioPlayer::new(h),
-            PlaybackSettings::DESPAWN.with_spatial(spatial),
+            PlaybackSettings::DESPAWN
+                .with_spatial(spatial)
+                .with_speed(speed),
             Transform::from_translation(at),
             Expires(self.time.elapsed_secs() + SOUND_LIFE),
         ));
@@ -610,6 +672,42 @@ fn reap(mut commands: Commands, time: Res<Time>, q: Query<(Entity, &Expires)>) {
 /// Voice stem prefix of an actor.
 fn voice(woman: bool) -> &'static str {
     if woman { "fem" } else { "mal" }
+}
+
+/// The player's optional hit and kill feedback: `custom/hitsound.wav` on every hit it lands and
+/// the rising kill-streak sound ([`STREAK_PITCH`]).
+#[allow(clippy::too_many_arguments)]
+fn feedback(
+    time: Res<Time>,
+    settings: Res<Settings>,
+    profile: Res<Profile>,
+    mut damage: MessageReader<Damage>,
+    mut killed: MessageReader<Killed>,
+    players: Query<(), With<Player>>,
+    mut streak: Local<(u32, f32)>,
+    mut sfx: Sfx,
+) {
+    for d in damage.read() {
+        if settings.hit_sound && players.contains(d.attacker) && d.attacker != d.target {
+            sfx.play_hitsound(&profile);
+        }
+    }
+    let now = time.elapsed_secs();
+    for k in killed.read() {
+        if players.contains(k.victim) {
+            streak.0 = 0;
+        } else if settings.kill_sounds && players.contains(k.killer) {
+            streak.0 = if now - streak.1 > STREAK_SECS {
+                1
+            } else {
+                streak.0 + 1
+            };
+            streak.1 = now;
+            let step = streak.0.min(STREAK_PITCH.len() as u32) as usize;
+            info!("kill streak {} -> step {step}", streak.0);
+            sfx.play_at(STREAK_SOUND, true, Vec3::ZERO, STREAK_PITCH[step - 1]);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1218,6 +1218,65 @@ a plain stem (97 distinct, all resolve in `sound/effect/`, **observed**; stems a
 `game::PlaySound { stem, at }` message (a position) both play them; the directory part is dropped
 and case ignored.
 
+### Combat options: kill-streak sound, custom hit sound, static spread (`audio.rs`, `combat.rs`)
+
+iGunZ-patch-note ideas, own implementation; all three are `game::Settings` toggles (off the pause menu or
+`--[no-]kill-sounds|hit-sound|static-spread`).
+
+- **Kill-streak sound** (`kill_sounds`, default on). **Observed**: no `sound/effect/` stem is an announcer, multikill
+  or streak clip (names listed; `nar*` files not decoded). **Inferred** choice: `if_score_get` (a 0.3 s
+  UI score blip) at playback speed 1.0, 1.26, 1.5, 2.0 (unison, major third, fifth, octave) for the player's 1st..4th+
+  consecutive kill, 2D. A kill within 10 s of the previous continues the streak (**inferred**); the player's own death
+  ends it. Log line `kill streak N -> step S`.
+- **Custom hit sound** (`hit_sound`, default off): every `Damage` the player deals to another actor plays
+  `<profile dir>/custom/hitsound.wav` (2D, in addition to retail `fx_myhit`). PCM WAV or Ogg only (the same decode
+  check as retail files); read once on first use, a missing/unplayable file is logged once and stays silent.
+- **Static spread** (`static_spread`, default off): the player's guns (bots keep random spread) use the same cone
+  radius, but the bullet offset is a fixed point of a golden-angle (2.39996 rad) spiral over the unit disc,
+  `r = sqrt((k+0.5)/n)`: a shotgun's 12 pellets are points 0..11 of 12 (the same rosette every shot), a single-bullet
+  gun cycles through 8 points by shot count (**inferred** count). `r >= sqrt(0.5/n)`, so no guaranteed centre bullet.
+
+### HUD extras: damage report, teammate bars, screen blood (`src/hud/fx.rs`)
+
+iGunZ-patch-note ideas, own implementation (labels: **observed** = retail file, **inferred** = ours).
+
+- **Damage report**. `combat::Wounded {target, attacker, hp, ap}` is written by `apply_damage` with what a hit
+  really took (after armour, mods and overkill). The HUD sums the player's per attacker, and on death sorts by
+  HP+AP, shows `Damage taken: H HP A AP` and one `name: H HP A AP` row per attacker (6 at most, then `+N more`)
+  under "You died" and logs `damage report: ...`. Cleared on each death and on `NewRound`; self damage is
+  "yourself".
+- **Teammate bars** (`team_bars`, Red/Blue modes only). One UI stack per teamed actor, spawned once (marker
+  `Barred` on the actor), positioned every frame after transform propagation with `Camera::world_to_viewport`
+  of the point 0.25 m over the capsule top: 64 px HP bar (the retail HP tier colours), 4 px AP bar, the
+  current weapon's magazine under them (blank for melee). Hidden when dead, off screen, beyond 120 m or when
+  `MapCollision::raycast` from the camera to that point hits a wall.
+- **Screen blood** (`screen_blood`). A hit that cost HP drops one splatter (one more per 25 HP) from a
+  pool of 12 UI images, textured with the retail `sfx/blood-mark01..05.tga` decals, on a random screen edge
+  (up to a quarter in), rotated randomly. Size `200 + 5*HP` px (max 460), peak opacity `0.6 + HP/60`
+  (max 1), fade-in 0.08 s then linear fade-out over 1.8 s (all **inferred**). Below 30% HP four corner images
+  (`blood-mark04/05`, 340 px) show with opacity `0.4 + 0.5*level` and a pulse, on top of the existing red
+  vignette.
+
+### Kill camera (`src/killcam.rs`, `Settings::killcam`; **inferred**)
+
+iGunZ-patch-note idea, own implementation. When another actor kills the player (`Killed` with `killer != victim`;
+a suicide or the `--die-at` test death has no killer) the camera holds the player's view for `DWELL` 0.5 s while
+10 `Vfx::Blood` puffs (the retail `sfx/blood01..05.tga` quads, 1.5 m/s outward and up) spray from the corpse's
+chest, then smoothsteps to the killer over `FLY_SECS` 0.9 s and orbits it at `DIST` 3.2 m (scaled up for a taller
+`HitShape`), looking at its chest from a pitch of -0.25 rad. The mouse (`Intent` yaw/pitch, so `--script yaw=`
+works too) turns it on top of a slow drift of one turn per `ORBIT_SECS` 24, the wheel zooms 1.5-9 m by 0.5 m per
+notch, and `MapCollision::sweep_sphere` (radius `actor::CAM_RADIUS`) pulls it in front of walls; the flight itself
+is an unswept blend. The killer carries a UI tag (`<name> killed` over a yellow 64 px `YOU`) on a blot generated
+once at startup (9 overlapping discs plus 16 droplets, 256x128, soft alpha edge), pinned 0.1 m over its head every
+frame with `Camera::world_to_viewport` (hidden when behind the camera). It ends at the respawn, when the killer
+disappears, when the option is switched off, or `KILLCAM_SECS` 3 s after the death once round-mode spectating has
+a target (`game::Spectate`; then `follow_camera` shows that actor, with no spectate target the killcam lasts
+until the next round). The numbers are tuning, not data. Check:
+`gunz-play GAME Citadel --mode dm --bots 1 --skill 1 --bots-ahead 8 --hp 1 --ap 0 --script "wait:1;yaw=100;wait:2"
+--time 2.6 --shot OUT.png` logs `killcam: Bot 1 killed the player`; `--time 1.3` shows the burst, `--no-killcam`
+keeps the old corpse orbit; `--mode elimination --bots 3 --ready 1 --hp 1 --ap 0 --bots-ahead 6 --script wait:1`
+with `--time 8.3 / 9.4 / 11.8` shows the flight, the orbit and the hand-over (shots in `.local/shots/Killcam/`).
+
 ## Actors: animations and movement (`src/actor.rs`, `src/bin/gunz-play.rs`)
 
 No new file format; how the retail character animations are used (**observed** = read from
@@ -1300,7 +1359,8 @@ No new file format; how the retail character animations are used (**observed** =
   twin of the NPC `*_damage_lightning` clips). A module that adds one of these effects asks
   for it with `ActionRequest { clip: "stun", .. }`; looping ones play until replaced.
 - Death camera: the corpse keeps its rotation (only living actors follow the camera yaw); the
-  camera orbits it (`DEATH_ORBIT_PERIOD` 14 s, `DEATH_DIST` 3.8 m) plus the mouse.
+  camera orbits it (`DEATH_ORBIT_PERIOD` 14 s, `DEATH_DIST` 3.8 m) plus the mouse. When another actor
+  killed the player and `killcam` is on, `killcam.rs` takes the camera over after it (see "Kill camera").
 - Frame times: `GUNZ_FRAMETIMES=1` (`src/perf.rs`) prints hitches and a p50/p99/max summary.
   Mansion, 3 bots, 60 s headless: play phase max 22.1 ms, 0 frames over 33 ms (the 50.7 ms
   frames are the first two, loading).
@@ -1857,6 +1917,15 @@ left (`[rented, 2d 5h left]`). A rental cannot be sold (**inferred**).
 Headless `--shot` runs use a throwaway default profile unless `GUNZ_PROFILE` is set. The file is
 rewritten whenever the profile changes (a kill, a purchase, Start).
 Headless shot hooks: `GUNZ_INV_SLOT=N` (9 = quest items) and `GUNZ_INV_SELL=1` (presses SELL on the first row).
+
+### Pause-menu toggles (`profile::OPTS`, `session.rs`)
+
+Six `game::Settings` bools, shown as ON/OFF buttons under the Esc menu's sensitivity row and saved as
+`opt_kill_sounds`, `opt_hit_sound`, `opt_static_spread`, `opt_team_bars`, `opt_screen_blood`, `opt_killcam`
+(`=0|1`; a missing key keeps the `Settings` default). `gunz-play --NAME` / `--no-NAME` (`_` as `-`) overrides
+the profile for that run only and is not saved; clicking a toggle saves it. The hit sound is the player's own
+file `<profile dir>/custom/hitsound.wav` (`Profile::hitsound_path`; none for a throwaway profile). Sensitivity
+is not persisted (`--sens`).
 
 ## Clans (`src/clan.rs`)
 

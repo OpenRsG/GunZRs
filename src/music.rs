@@ -1,8 +1,10 @@
 //! Background music. The retail `sound/bgm/` files are listed in `system/filelist.xml` and
 //! nothing else in the data (system/interface/map XMLs) names them, so there is no observed
-//! track-to-map mapping; the rule here is **inferred** (`docs/formats.md`, "Music"): the main
-//! menu plays `gunzmatching`; a match plays one track from the general pool picked by a hash of
-//! the map directory (the same map always gets the same track); Duel plays `leagueloop`; the
+//! track-to-map mapping, and no public source gives one either (`docs/formats.md`, "Music"); the
+//! rule here is **inferred**: the main menu plays `gunzmatching`; a match plays one track from
+//! the in-game pool (**external**: the ijji client's seven in-game tracks plus the later "duel
+//! theme" ones; lobby and character-select tracks excluded) picked by a hash of the map
+//! directory (the same map always gets the same track); Duel plays `leagueloop`; the
 //! match-end screen crossfades into the `fin` stinger. A change of wanted track crossfades.
 //! Headless `--shot` runs only log the choice. Loudness is `Settings::music`.
 
@@ -30,8 +32,19 @@ const STINGER: &str = "fin";
 const DUEL: &str = "leagueloop";
 /// Quest/challenge-quest track (**inferred** from the name "mission").
 const QUEST: &str = "trance mission_tmix";
-/// Kept out of the per-map pool: they have a role above.
-const RESERVED: [&str; 5] = [MENU, STINGER, "league", DUEL, QUEST];
+/// Kept out of the per-map pool: they have a role above, or (`theme rock(d)` = lobby,
+/// `intro retake2(d-r)` = character select) are not in-game tracks (**external**: the ijji
+/// client's track roles in the Ragezone BGM tutorial and the YouTube soundtrack rip, see
+/// `docs/formats.md`, "Music").
+const RESERVED: [&str; 7] = [
+    MENU,
+    STINGER,
+    "league",
+    DUEL,
+    QUEST,
+    "theme rock(d)",
+    "intro retake2(d-r)",
+];
 /// Samples decoded to accept a track before playing it: one second of stereo 48 kHz.
 const PROBE: usize = 96_000;
 
@@ -247,6 +260,14 @@ fn fade(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The external lobby/character-select tracks never come out of the per-map pick.
+    #[test]
+    fn lobby_tracks_are_not_in_game() {
+        for s in ["theme rock(d)", "intro retake2(d-r)", "fin", "leagueloop"] {
+            assert!(RESERVED.contains(&s), "{s}");
+        }
+    }
 
     #[test]
     fn pick_is_stable_and_in_pool() {

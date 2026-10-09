@@ -1,7 +1,9 @@
 //! Blitzkrieg's three screens: the class select at the start (`CLASS_SELECT_TIME`), the minimap
 //! and the reward panel after the match. The data has no minimap or class art (`interface/` has
-//! only the map banner `map_blitzkrieg.bmp` and the empty `blitzkrieginterface.xml`), so all
-//! three are drawn here: the minimap from the map's own floor polygons.
+//! only the map banner `map_blitzkrieg.bmp`, the empty `blitzkrieginterface.xml` and the unused
+//! `blitzinfo_panel.tga`, a stats panel with an empty icon frame), so all three are drawn here:
+//! the minimap from the map's own floor polygons, the class cards with the item icons of their
+//! weapons.
 
 use super::*;
 use crate::map::Map;
@@ -167,14 +169,30 @@ fn describe(cfg: &Cfg, class: usize) -> String {
             v("reduceDamageRatioForMyTeam") * 100.0
         ),
         4 => format!("+{:.0}% damage", v("enhanceDamageRatio") * 100.0),
-        _ => format!(
+        5 => format!(
             "+{:.0}% damage to buildings",
             v("enhanceDamageRatioAtBuilding") * 100.0
+        ),
+        6 => format!(
+            "+{:.0}% honor from\nevery gain",
+            v("aquirHonorRatio") * 100.0
+        ),
+        7 => format!(
+            "{} fire damage per second\nfor {} s on every hit\n+{:.0}% bullets",
+            v("enchantFireDamage"),
+            v("fireDamageDuration"),
+            v("addMagazineRatio") * 100.0
+        ),
+        _ => format!(
+            "Radar heals {:.0}% AP/HP\nand {:.0}% ammo; barricade\ncuts damage {:.0}%",
+            v("recoveryApHpRatio") * 100.0,
+            v("recoveryMagazineRatio") * 100.0,
+            v("reduceDamageRatio") * 100.0
         ),
     }
 }
 
-/// The class screen: six cards (click or press 1-6 / the arrows, Enter confirms) under the
+/// The class screen: nine cards (click or press 1-9 / the arrows, Enter confirms) under the
 /// countdown of message 2100.
 pub(super) fn select_ui(
     mut commands: Commands,
@@ -213,21 +231,25 @@ pub(super) fn select_ui(
                 ));
                 r.spawn((Countdown, text("", 24.0, Color::WHITE)));
                 r.spawn(Node {
-                    column_gap: px(10),
+                    column_gap: px(6),
+                    row_gap: px(6),
+                    max_width: percent(98),
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
                     ..default()
                 })
                 .with_children(|row| {
-                    for (i, (title, ..)) in CLASSES.iter().enumerate() {
+                    for (i, (title, _, book)) in CLASSES.iter().enumerate() {
                         row.spawn((
                             Card(i),
                             Button,
                             Node {
-                                width: px(188),
-                                height: px(270),
-                                padding: UiRect::all(px(10)),
+                                width: px(130),
+                                height: px(330),
+                                padding: UiRect::all(px(8)),
                                 border: UiRect::all(px(3)),
                                 flex_direction: FlexDirection::Column,
-                                row_gap: px(10),
+                                row_gap: px(8),
                                 ..default()
                             },
                             BorderColor::all(Color::srgb(0.4, 0.4, 0.4)),
@@ -236,21 +258,40 @@ pub(super) fn select_ui(
                         .with_children(|c| {
                             c.spawn(text(
                                 format!("{} {}", i + 1, title.replace("Combat ", "Combat\n")),
-                                24.0,
+                                16.0,
                                 Color::srgb(1.0, 0.9, 0.5),
                             ));
-                            c.spawn(text(describe(&blitz.cfg, i), 17.0, Color::WHITE));
+                            c.spawn(Node {
+                                column_gap: px(6),
+                                ..default()
+                            })
+                            .with_children(|icons| {
+                                for icon in &blitz.art[i] {
+                                    icons.spawn((
+                                        Node {
+                                            width: px(48),
+                                            height: px(48),
+                                            ..default()
+                                        },
+                                        icon.clone(),
+                                    ));
+                                }
+                            });
+                            c.spawn(text(describe(&blitz.cfg, i), 13.0, Color::WHITE));
                             let kit = blitz.kit[i];
                             c.spawn(text(
                                 format!("{}\n{}", name(kit[0]), name(kit[1])),
-                                16.0,
+                                12.0,
                                 Color::srgb(0.65, 0.8, 0.95),
                             ));
+                            if book.is_none() {
+                                c.spawn(text("no class book", 12.0, Color::srgb(0.6, 0.6, 0.6)));
+                            }
                         });
                     }
                 });
                 r.spawn(text(
-                    "1-6 / arrow keys / click to choose, Enter or Space to confirm",
+                    "1-9 / arrow keys / click to choose, Enter or Space to confirm",
                     20.0,
                     Color::srgb(0.8, 0.8, 0.8),
                 ));

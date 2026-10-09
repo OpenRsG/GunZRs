@@ -82,13 +82,14 @@ pub struct Routes {
 /// Per-actor multipliers a mode sets (Blitzkrieg's honor upgrades, classes and buildings); combat
 /// applies `dealt` of the attacker (`vs_buildings` too against a `building`) and `taken` of the
 /// target (`vs_actors` too when the attacker is a player or bot), the actor controller stretches
-/// the gun delay by `shot_delay`. All 1 (`building` false) = none.
+/// the gun delay by `shot_delay` and the run speed by `run`. All 1 (`building` false) = none.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Mods {
     pub dealt: f32,
     pub taken: f32,
     pub vs_actors: f32,
     pub shot_delay: f32,
+    pub run: f32,
     pub vs_buildings: f32,
     pub building: bool,
 }
@@ -100,6 +101,7 @@ impl Default for Mods {
             taken: 1.0,
             vs_actors: 1.0,
             shot_delay: 1.0,
+            run: 1.0,
             vs_buildings: 1.0,
             building: false,
         }
@@ -217,12 +219,22 @@ pub struct Bot;
 pub enum Team {
     Red,
     Blue,
+    /// Dynamic Duels: the actor fights in this arena. Arenas share the map, so actors of
+    /// different arenas are "friendly" (no damage, bullets pass through, bots ignore them) and
+    /// never collide ([`apart`]); inside one arena the two fighters are enemies.
+    Duel(u8),
+}
+
+/// Whether two actors are in different Dynamic Duels arenas: out of each other's reach.
+pub fn apart(a: Option<Team>, b: Option<Team>) -> bool {
+    matches!((a, b), (Some(Team::Duel(x)), Some(Team::Duel(y))) if x != y)
 }
 
 /// Whether two actors (each as its `Team` and whether it is a `Bot`) are allies: no damage
 /// between them (callers still let an actor hurt itself) and bots never target them.
 pub fn friendly(a: (Option<Team>, bool), b: (Option<Team>, bool)) -> bool {
     match (a.0, b.0) {
+        (Some(Team::Duel(_)), Some(Team::Duel(_))) => apart(a.0, b.0),
         (Some(x), Some(y)) => x == y,
         _ => a.1 && b.1,
     }

@@ -10,7 +10,7 @@ use crate::{
     effect::FxAssets,
     game::{
         Afflict, Blast, Bot, Damage, Dead, Fire, HitShape, Player, Protected, Push, Team, Vitals,
-        friendly,
+        apart, friendly,
     },
     item::WeaponKind,
     spy::{self, Mine},
@@ -447,7 +447,11 @@ pub(crate) fn fly(
                 let (len, d) = (step.length(), step.normalize_or(Vec3::NEG_Z));
                 let mut best = col.raycast(pos, d, len + 0.05).map(|h| h.distance);
                 for (a, g, hs) in &targets {
-                    if a == p.owner && p.wind > ROCKET_LIFE - 0.2 {
+                    let other_arena = apart(
+                        sides.get(a).ok().and_then(|s| s.0.copied()),
+                        sides.get(p.owner).ok().and_then(|s| s.0.copied()),
+                    );
+                    if other_arena || a == p.owner && p.wind > ROCKET_LIFE - 0.2 {
                         continue;
                     }
                     if let Some(t) = crate::combat::ray_capsule(pos, d, g.translation(), shape(hs))

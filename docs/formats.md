@@ -638,6 +638,8 @@ ids 15, 16, 18-21 appear nowhere). Status after this round, `--mode` is the CLI/
 | 14 | Spy (`GAME_MODE_SPY`, `spymode.xml`, `spymaplist.xml`) | `spy` | done: spy case, frost bullets, stun grenades and mines (stats **inferred**, see below) |
 | 17 | Gunman (`GAME_MODE_RANDOM_WEAPON`) | `gunman` | done (weapon pool **inferred**) |
 | 22 | clan scrim (`GAMETYPE_CLAN_SCRIM`, "Clan War") | `clanwar` | done offline, see "Clans": 4 against 4 (`MAXPLAYERS` 8), `ROUNDS` 3, no time limit = elimination rounds between the player's clan and a generated rival clan |
+| - | Gun Game (private-server mode; port design, no retail data) | `gungame` | done: weapon ladder (order and rules **inferred**) |
+| - | Dynamic Duels (private-server mode; port design, no retail data) | `dynduel` | done: several duels at once in phased arenas, winner stays, loser queues (rules **inferred**) |
 | - | "matching-only" deathmatch / team deathmatch (`GAME_MODE_MATCHING_*`), `league.xml` | - | not offline-meaningful: ranked matchmaking (`league*.xml`: Elo `elo_define`, `leaguekfactorsetting.xml` K = 50 / 30 / 20 by games played, 25 `leaguetier.xml` tiers of 100 points, one league "Classic Elimination": `deathmatch_team`, 5 rounds, 8 players, `team_kill` 0, 30 min, rating gap 300, `leaguemodule.xml` modifiers revolver damage +10 %, revolver ammo +50 %, AP +10 %); played offline it is `elimination --kill-limit 5`, the ladder and modifiers are not modelled |
 
 Not game modes: `mvptable.xml` (17 post-match MVP awards: damage, multi kill, melee dash, jump count, ...)
@@ -723,6 +725,45 @@ dual revolvers, SMG, dual SMGs, shotgun, machine gun, rifle, rocket launcher). M
 has. Check: `gunz-play GAME Mansion --mode gunman --bots 3 --time 14 --die-at 4 --respawn 2 --script wait:14`
 logs `gunman: Player gets Iron Kodachi AS + Boiler Cannon GL` at spawn and `... Rusty Dagger AS + Nico MG-K8 MK1`
 after the respawn.
+
+**Gun Game** (`--mode gungame`; no retail id, port design). Nothing here is in the data except the items: all
+constants are **inferred**. Free for all, no kill or time limit; every actor spawns with the whole ladder
+(`Arsenal`, as Gunman) and an `Equip` picks the step's weapon plus the last step's blade as melee backup (the
+blade alone on the last step). Ladder, 12 steps, first named item with a model and damage > 1 of each kind
+(`kind_item`): rocket launcher, machine gun, rifle, shotgun, dual SMGs, SMG, dual revolvers, revolver, dual
+pistols, pistol, dagger, katana. Rules: every kill (not a suicide) moves the killer up one step and swaps its
+weapon at once (ammo refilled); a kill with a melee weapon also drops the victim one step (not below the
+first; the victim's weapon is swapped too); a kill by an actor already on the last step wins (`VICTORY` for the
+player, else `DEFEAT`). A respawn keeps the step. Everyone carries `Team::Duel(0)` (one arena: all enemies, so bots
+fight each other, unlike plain deathmatch where they only target the player). The header shows
+`STEP n/N   LEADER name m/N`. `GUNZ_GUNGAME_STEPS=N` shortens the ladder to its first N-1 steps and the last (test
+runs). Check: `GUNZ_GUNGAME_STEPS=3 gunz-play GAME Mansion --mode gungame --bots 6 --skill 1 --respawn 2 --time 60`
+logs `gungame: Bot 3 promoted to step 2/3 (Nico MG-K8 MK1)`, `gungame: Bot 3 demoted to step 2` and
+`gungame: Bot 4 wins with the last step (Rusty Sword AS)` (observed, win at t=35.7 s).
+
+**Dynamic Duels** (`--mode dynduel`; no retail id, port design). Nothing here is in the data: retail has one duel arena
+(id 10) and no multi-arena map, so everything is **inferred**. One room, several one-on-one duels at once, each arena
+a "phase" of the same map (every arena uses the map's two duel sides, `spawn_team1`/`spawn_team2`). `modes/dynduel.rs`
+gives each fighter `Team::Duel(arena)`: `game::friendly` treats two `Duel` actors as allies exactly when they are in
+different arenas, so across arenas combat drops damage (`apply_damage`, blasts included), bullets/blades/rocket
+contact/stun skip the actor and bots never target it; `game::apart` also turns off body collision (`actor.rs`) and the
+bots' friendly-in-the-line-of-fire check. The system hides every actor that is not in the arena the camera shows (its
+own while the player fights, else the watched one; Space or a click while queued cycles it, the camera follows a living
+fighter there). Not filtered: sounds, sparks, blood and bullet holes of other arenas (they are heard / seen as effects
+without a body). Flow: arenas = players / 2 (the player first, odd one out queues); a duel starts 1 s after the match
+start (3 s after a duel ended) with both fighters respawned at opposite sides, health and ammo refilled, protected 3 s
+(`--protect`); it ends when a fighter dies (a kill, scored as usual) or after `--round-time` seconds (180) when the one
+with more health + armour wins (ties: the first) and is credited a kill; the winner stays on its side, the loser goes to
+the back of the queue and lies visible for 3 s, then the head of the queue takes its place (with an empty queue the
+loser itself is the challenger, a rematch). Every actor not in an arena is dead with `Dead::respawn = HOLD`. Scoreboard
+kills = duels won; the win streak shows in the header (`ARENA 2/4   STREAK 3`; queued: `ARENA 2/4 WATCHING   QUEUE #1`);
+the match ends at the time limit (default 10 min) or when the player or the best bot has `--kill-limit` wins
+(default 10). Menu limits: wins 5 / 10 / 15 / 20 / 30, minutes 0 / 10..60. No pickups; duel music (`leagueloop`). Check
+(headless, logs `.local/DynDuels/`, shots `.local/shots/DynDuels/`): `gunz-play GAME hall --mode dynduel --bots 6 --skill
+0.8 --die-at 2 --time 14` logs `dynduel: 7 players, 3 arenas, queue ["Bot 1"]`, three `dynduel: arena N: A vs B` lines,
+`arena 1: Bot 6 beats Player (streak 1); Bot 1 challenges in 3 s, queue ["Player"]` and, 3 s later, `arena 1: Bot 1 vs
+Bot 6`; every `damage:` line is between the two fighters of one arena. `--bots 5 --time 3 --script "yaw=70;wait:3"` shows
+only the player's opponent (`f_hide.png`; with the hiding switched off for the check, `f_nohide.png` shows two more bodies).
 
 **Spy** (`--mode spy`; id 14, needs at least `BASE minPlayer` = 4 actors, else free play). **Observed**
 (`spymode.xml`): `SPY_TABLE` per player count 4..12 gives the number of spies (1 for 4-6 players, 2 for 7-9,
@@ -1043,6 +1084,28 @@ medal currency, `PENALTY`; a soldier's `suffer*` states react to damage only as 
     (MVP): +748 XP, +748 bounty, +32 medals` (13 minutes, 15 + 13 medals, MVP +15 %), the panel beside the
     scoreboard and the profile's `LEVEL UP 1 -> 4  +798 XP`. With bots (`reward.png`, `--bots 5 --time 110`) the
     player is not the MVP: +650 XP, +28 medals.
+
+**Infected** (`--mode infected`, `src/modes/infected.rs`; the port's own design from the public feature description,
+no retail id, **inferred** throughout). Round mode (countdown, win screen, `--round-time`, `--ready` as Elimination;
+the kill limit counts rounds the player's side won). Everybody starts a survivor (Blue, own loadout). When the
+countdown ends one random living actor becomes patient zero (`GUNZ_SEED=N` fixes the draw, else the clock).
+A zombie is Red (so `friendly()` and the bots' target choice need nothing new), tagged ` [ZOMBIE]`, carries only
+the melee slot of its loadout (an `Equip` from its own kit), has 200 HP / 100 AP (twice the normal pair), runs
+x1.2 (`Mods::run`, 12 m/s with a blade) and its hits push the victim 6 m/s away on top of the blade's own flinch
+(1.5) or knockdown (3.5). A survivor a zombie kills is turned at once and rises after the usual 3 s at the spawn
+farthest from the living survivors; a zombie a survivor kills rises the same way; a survivor killed by anything
+else stays dead until the next round. Survivors win at the round timer with one still alive, zombies when no
+survivor is left (`infected::outcome`, unit-tested). Every new round makes everybody a survivor again (vitals,
+name, loadout restored from what the zombie had stashed). Header: `SURVIVORS n   ZOMBIES n   ROUND r   YOU a : b
+THEM   m:ss` (`a` rounds the player's side won). Constants: `ZOMBIE_VITALS`, `ZOMBIE_RUN`, `ZOMBIE_PUSH`,
+`ZOMBIE_RESPAWN` in `infected.rs`.
+- `GUNZ_SEED=1 GUNZ_PROFILE=.local/Infected/profile.txt gunz-play GAME mansion --mode infected --bots 5 --time 100
+  --round-time 90 --ready 2 --shot d.png` (`.local/shots/Infected/`): `infected: Bot 4 -> zombie (patient zero)`,
+  `infected: Bot 2 -> zombie (bitten by Bot 4)` ... `infected: Player -> zombie (bitten by Bot 5)`, `round 1 over:
+  ROUND WON | ZOMBIES win the round    ZOMBIES 1 : 0 SURVIVORS` (all six infected 69 s into a 90 s round), then round 2
+  with a new patient zero; the shot shows the header `SURVIVORS 5   ZOMBIES 1   ROUND 2` and the player back at
+  100 HP / 50 AP with its katana. With the player zombie and idle (`--bots 4 --round-time 25`): `round 1 over: ROUND
+  LOST | SURVIVORS win the round    ZOMBIES 0 : 1 SURVIVORS`.
 
 ### Sounds (**observed**)
 

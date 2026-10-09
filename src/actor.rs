@@ -1226,6 +1226,7 @@ fn drive(
     mut sound: MessageWriter<ActorSound>,
     mut requests: MessageReader<ActionRequest>,
     mut damages: MessageReader<Damage>,
+    teams: Query<&Team>,
 ) {
     let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
     let reqs: Vec<ActionRequest> = requests.read().cloned().collect();
@@ -1235,11 +1236,12 @@ fn drive(
         .map(|d| (d.target, d.item))
         .collect();
     let others: Vec<(Entity, Vec3)> = actors.iter().map(|q| (q.0, q.1.translation)).collect();
-    // Living actors block each other: whoever moves is pushed out of the others' capsules.
-    let bodies: Vec<(Entity, Vec3)> = actors
+    // Living actors block each other (not across Dynamic Duels arenas): whoever moves is
+    // pushed out of the others' capsules.
+    let bodies: Vec<(Entity, Vec3, Option<Team>)> = actors
         .iter()
         .filter(|q| !q.8)
-        .map(|q| (q.0, q.1.translation))
+        .map(|q| (q.0, q.1.translation, teams.get(q.0).ok().copied()))
         .collect();
     for (
         e,
@@ -1711,7 +1713,11 @@ fn drive(
             } => c,
             _ => 0.0,
         };
-        let speed = RUN * g.speed * control * status.map_or(1.0, Status::speed);
+        let speed = RUN
+            * g.speed
+            * control
+            * status.map_or(1.0, Status::speed)
+            * mods.map_or(1.0, |m| m.run);
         let wish = (right * walk.x + fwd * walk.y) * speed;
         let mut hv = Vec3::new(a.vel.x, 0.0, a.vel.z);
         match a.state {
@@ -1788,7 +1794,8 @@ fn drive(
         let moved_up = mv.pos.y - tf.translation.y;
         tf.translation = mv.pos;
         if alive {
-            for &(_, p) in bodies.iter().filter(|b| b.0 != e) {
+            let mine = teams.get(e).ok().copied();
+            for &(_, p, _) in bodies.iter().filter(|b| b.0 != e && !apart(mine, b.2)) {
                 let d = Vec3::new(tf.translation.x - p.x, 0.0, tf.translation.z - p.z);
                 let len = d.length();
                 if len < 2.0 * RADIUS && (tf.translation.y - p.y).abs() < HEIGHT {

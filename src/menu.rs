@@ -79,6 +79,15 @@ pub enum Mode {
     /// id 22 (`GAMETYPE_CLAN_SCRIM`, "Clan War" in `strings.xml`): the player's clan against a
     /// rival clan, 4 against 4, elimination rounds (`clan.rs`).
     ClanWar,
+    /// No retail id (port design, `modes/gungame.rs`): free for all up a fixed weapon ladder,
+    /// every kill swaps your weapon for the next; a kill from the last step wins.
+    GunGame,
+    /// No retail id (port design, `modes/infected.rs`): rounds in which a random actor turns
+    /// zombie; a zombie's kill turns the survivor, who respawns as a zombie.
+    Infected,
+    /// No retail id (port design, `modes/dynduel.rs`): one room, several one-on-one duels at
+    /// once in separate arenas; the winner stays, the loser queues and the next challenges.
+    DynDuel,
 }
 
 /// The choices of one mode's limit steppers: `gametypecfg.xml`'s `ROUNDS` and `LIMITTIME`
@@ -91,7 +100,7 @@ pub struct Limits {
 }
 
 impl Mode {
-    pub const ALL: [Mode; 15] = [
+    pub const ALL: [Mode; 18] = [
         Mode::Deathmatch,
         Mode::Team,
         Mode::Gladiator,
@@ -107,6 +116,9 @@ impl Mode {
         Mode::Spy,
         Mode::Blitzkrieg,
         Mode::ClanWar,
+        Mode::GunGame,
+        Mode::Infected,
+        Mode::DynDuel,
     ];
 
     pub fn name(self) -> &'static str {
@@ -126,6 +138,9 @@ impl Mode {
             Mode::Spy => "Spy",
             Mode::Blitzkrieg => "Blitzkrieg",
             Mode::ClanWar => "Clan War",
+            Mode::GunGame => "Gun Game",
+            Mode::Infected => "Infected",
+            Mode::DynDuel => "Dynamic Duels",
         }
     }
 
@@ -147,6 +162,9 @@ impl Mode {
             Mode::Spy => "spy",
             Mode::Blitzkrieg => "blitzkrieg",
             Mode::ClanWar => "clanwar",
+            Mode::GunGame => "gungame",
+            Mode::Infected => "infected",
+            Mode::DynDuel => "dynduel",
         }
     }
 
@@ -177,6 +195,7 @@ impl Mode {
                 | Mode::Duel
                 | Mode::DuelTournament
                 | Mode::Spy
+                | Mode::Infected
                 | Mode::ClanWar
         )
     }
@@ -194,7 +213,10 @@ impl Mode {
     /// Whether the map's item pickups exist (*inferred*: not in the one-on-one duel, nor in
     /// the training range).
     pub fn items(self) -> bool {
-        !matches!(self, Mode::Duel | Mode::DuelTournament | Mode::Training)
+        !matches!(
+            self,
+            Mode::Duel | Mode::DuelTournament | Mode::DynDuel | Mode::Training
+        )
     }
 
     /// What the kill limit counts: kills, team kills, or round wins.
@@ -238,6 +260,15 @@ impl Mode {
             Mode::ClanWar => {
                 "Your clan and bot members against a rival clan, 4 against 4. Rounds, no respawn. Clan points change."
             }
+            Mode::GunGame => {
+                "Free for all up a weapon ladder: each kill upgrades you, a melee kill demotes the victim. Clear the last step to win."
+            }
+            Mode::Infected => {
+                "Rounds: one random player turns zombie. Survivors outlast the timer, a zombie's kill turns you."
+            }
+            Mode::DynDuel => {
+                "Several one-on-one duels at once. The winner stays, the loser queues and watches, the next in line challenges."
+            }
         }
     }
 
@@ -279,6 +310,12 @@ impl Mode {
             Mode::Blitzkrieg => l(&[0], 0, LONG, 0),
             // `gametypecfg.xml` game type 22: `ROUNDS` 3 (the only choice), `LIMITTIME` -1.
             Mode::ClanWar => l(&[3], 3, &[0], 0),
+            // No limits (*inferred*): a match ends when someone clears the ladder.
+            Mode::GunGame => l(&[0], 0, &[0], 0),
+            // Rounds to win and match minutes (*inferred*; a round is 3 minutes at most).
+            Mode::Infected => l(&[3, 5, 10, 20], 5, SHORT, 20),
+            // Duel wins to end and match minutes (*inferred*).
+            Mode::DynDuel => l(&[5, 10, 15, 20, 30], 10, LONG, 10),
         }
     }
 }

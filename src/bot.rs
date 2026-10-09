@@ -8,7 +8,7 @@ use crate::{
     actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RUN},
     col::MapCollision,
     combat::{EYE, HIT_RADIUS, is_melee, rnd, yaw_of},
-    game::{Acting, Bot, Dead, Guarding, Intent, Loadout, Status, Team, Vitals, friendly},
+    game::{Acting, Bot, Dead, Guarding, Intent, Loadout, Status, Team, Vitals, apart, friendly},
     item::{Items, Weapon, WeaponKind},
     level::Level,
     nav::{Kick, Kind, Nav, PDT, Search, Step, walkable},
@@ -1207,6 +1207,7 @@ fn bot_ai(
                 !actors.iter().any(|(e, g, tm, b)| {
                     e != me
                         && friendly(mine, (tm.copied(), b))
+                        && !apart(team.copied(), tm.copied())
                         && seg_dist(eye, aim, g.translation() + Vec3::Y) < 0.7
                 })
             });

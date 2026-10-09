@@ -159,8 +159,18 @@ impl Archive {
 pub struct Vfs {
     pub archives: Vec<Archive>,
     index: HashMap<String, (usize, usize)>,
-    /// Pack files; `None` for a file the install has but no loaded pack carries.
-    files: Arc<HashMap<String, Option<Vec<u8>>>>,
+    files: Arc<HashMap<String, Packed>>,
+}
+
+/// A file of a pack.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Packed {
+    Bytes(Vec<u8>),
+    /// In the install, but no loaded pack carries it.
+    NameOnly,
+    /// Served on its own next to the packs and downloaded when read (the browser build's
+    /// clothes: `web::fetch`).
+    Fetch,
 }
 
 pub fn normalize(path: &str) -> String {
@@ -186,23 +196,26 @@ fn trace(path: &str) {
 /// Header of a pack: `GZPK`, then a little-endian `u32` file count and per file a `u16` name
 /// length, the normalized name, a `u32` length and the bytes. Length [`NAME_ONLY`] has no bytes:
 /// the file exists in the install but is not packed ([`Vfs::exists`] still sees it, so checks
-/// such as the character's outfit list behave as with the install).
+/// such as the character's animation list behave as with the install); length [`FETCH`] has
+/// none either, the file is downloaded when read ([`Packed::Fetch`]).
 const PACK: &[u8; 4] = b"GZPK";
 const NAME_ONLY: u32 = u32::MAX;
+const FETCH: u32 = u32::MAX - 1;
 
-/// Writes `files` (normalized path, bytes; `None` = name only) as one pack.
-pub fn pack(files: &[(String, Option<Vec<u8>>)]) -> Vec<u8> {
+/// Writes `files` (normalized path and contents) as one pack.
+pub fn pack(files: &[(String, Packed)]) -> Vec<u8> {
     let mut out = PACK.to_vec();
     out.extend((files.len() as u32).to_le_bytes());
-    for (name, bytes) in files {
+    for (name, file) in files {
         out.extend((name.len() as u16).to_le_bytes());
         out.extend(name.as_bytes());
-        match bytes {
-            Some(b) => {
+        match file {
+            Packed::Bytes(b) => {
                 out.extend((b.len() as u32).to_le_bytes());
                 out.extend(b);
             }
-            None => out.extend(NAME_ONLY.to_le_bytes()),
+            Packed::NameOnly => out.extend(NAME_ONLY.to_le_bytes()),
+            Packed::Fetch => out.extend(FETCH.to_le_bytes()),
         }
     }
     out
@@ -238,7 +251,7 @@ impl Vfs {
     }
 
     /// The files of [`pack`]s; a later pack's bytes replace an earlier one's of the same name,
-    /// a name-only entry never replaces bytes.
+    /// an entry without bytes never replaces one with bytes.
     pub fn from_packs<'a>(packs: impl IntoIterator<Item = &'a [u8]>) -> io::Result<Self> {
         let mut files = HashMap::new();
         for p in packs {
@@ -256,10 +269,14 @@ impl Vfs {
                 let n = u16::from_le_bytes(take(2)?.try_into().unwrap()) as usize;
                 let name = String::from_utf8(take(n)?.to_vec()).map_err(|_| bad())?;
                 let len = u32::from_le_bytes(take(4)?.try_into().unwrap());
-                if len == NAME_ONLY {
-                    files.entry(name).or_insert(None);
-                } else {
-                    files.insert(name, Some(take(len as usize)?.to_vec()));
+                let file = match len {
+                    NAME_ONLY => Packed::NameOnly,
+                    FETCH => Packed::Fetch,
+                    _ => Packed::Bytes(take(len as usize)?.to_vec()),
+                };
+                let slot = files.entry(name).or_insert(Packed::NameOnly);
+                if matches!(file, Packed::Bytes(_)) || *slot == Packed::NameOnly {
+                    *slot = file;
                 }
             }
         }
@@ -274,11 +291,20 @@ impl Vfs {
         let path = normalize(path);
         trace(&path);
         match self.files.get(&path) {
-            Some(Some(b)) => return Ok(b.clone()),
-            Some(None) => {
+            Some(Packed::Bytes(b)) => return Ok(b.clone()),
+            Some(Packed::NameOnly) => {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("{path} is not in the downloaded packs"),
+                ));
+            }
+            #[cfg(target_arch = "wasm32")]
+            Some(Packed::Fetch) => return crate::web::fetch(&path),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(Packed::Fetch) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("{path} is downloaded only by the browser build"),
                 ));
             }
             None => {}
@@ -301,9 +327,26 @@ impl Vfs {
         let packed = self
             .files
             .iter()
-            .filter(|(_, b)| b.is_some())
+            .filter(|(_, f)| **f != Packed::NameOnly)
             .map(|(n, _)| n);
         self.index.keys().chain(packed).map(String::as_str)
+    }
+
+    /// Directory names of the maps (`maps/<dir>/<file>.rs`), sorted, whether or not their files
+    /// are loaded (the browser build downloads a map's pack once it is picked).
+    pub fn maps(&self) -> Vec<String> {
+        let mut maps: Vec<String> = self
+            .index
+            .keys()
+            .chain(self.files.keys())
+            .filter_map(|p| {
+                let (dir, file) = p.strip_prefix("maps/")?.split_once('/')?;
+                (file.ends_with(".rs") && !file.contains('/')).then(|| dir.to_owned())
+            })
+            .collect();
+        maps.sort_unstable();
+        maps.dedup();
+        maps
     }
 }
 
@@ -370,24 +413,26 @@ mod tests {
     #[test]
     fn packs_round_trip_and_later_packs_win() {
         let a = pack(&[
-            ("maps/x/x.rs".into(), Some(b"one".to_vec())),
-            ("system/a.xml".into(), Some(vec![])),
-            ("model/big.elu".into(), None),
+            ("maps/x/x.rs".into(), Packed::Bytes(b"one".to_vec())),
+            ("system/a.xml".into(), Packed::Bytes(vec![])),
+            ("model/big.elu".into(), Packed::NameOnly),
+            ("model/man/set.elu".into(), Packed::Fetch),
         ]);
         let b = pack(&[
-            ("maps/x/x.rs".into(), Some(b"two".to_vec())),
-            ("system/a.xml".into(), None),
+            ("maps/x/x.rs".into(), Packed::Bytes(b"two".to_vec())),
+            ("system/a.xml".into(), Packed::NameOnly),
+            ("maps/x/x.rs".into(), Packed::Fetch),
         ]);
         let vfs = Vfs::from_packs([&a[..], &b[..]]).unwrap();
         assert_eq!(vfs.read("Maps\\X\\X.rs").unwrap(), b"two");
-        // a name-only entry neither hides bytes nor makes an unpacked file readable
+        // an entry without bytes neither hides bytes nor makes an unpacked file readable
         assert_eq!(vfs.read("system/a.xml").unwrap(), b"");
         assert!(vfs.exists("model/big.elu") && vfs.read("model/big.elu").is_err());
         assert!(!vfs.exists("system/b.xml"));
-        // listings offer only files with bytes
+        // listings offer files with bytes and files that are downloaded when read
         let mut listed: Vec<&str> = vfs.paths().collect();
         listed.sort_unstable();
-        assert_eq!(listed, ["maps/x/x.rs", "system/a.xml"]);
+        assert_eq!(listed, ["maps/x/x.rs", "model/man/set.elu", "system/a.xml"]);
         assert!(Vfs::from_packs([&a[..a.len() - 1]]).is_err());
     }
 }

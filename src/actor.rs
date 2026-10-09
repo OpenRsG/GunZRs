@@ -23,7 +23,7 @@
 use crate::{
     ani::{Ani, FPS},
     anim::{Animator, Loop},
-    character::{self, Character, Outfit},
+    character::{self, Character, Look, Wardrobe},
     col::MapCollision,
     combat::{SWITCH_DELAY, Vfx},
     elu,
@@ -163,8 +163,7 @@ pub struct PlayerSetup {
     pub woman: bool,
     /// zitem ids for the loadout slots; empty = [`DEFAULT_LOADOUT`].
     pub loadout: Vec<u32>,
-    /// Outfit part index (`Character::parts`); `None` = base body.
-    pub outfit: Option<usize>,
+    pub look: Look,
     /// Shown name; empty = "Player".
     pub name: String,
 }
@@ -175,6 +174,10 @@ pub struct ActorData {
     pub items: Items,
     men: Character,
     women: Character,
+    /// `[man, woman]`: what bots pick their clothes from.
+    wardrobes: [Wardrobe; 2],
+    /// Seeds the bots' clothes ([`ActorData::random_look`]); 1 until the game sets it.
+    pub seed: u64,
     pub(crate) spawns: Vec<(Vec3, Vec3)>,
     /// Actors falling below this height are put back on a spawn point.
     fall_limit: f32,
@@ -249,8 +252,14 @@ impl ActorData {
         let men = character::load(&level.vfs, "heroman1")?;
         let women = character::load(&level.vfs, "herowoman1")?;
         let clips = [clip_table(&level.vfs, &men), clip_table(&level.vfs, &women)];
+        let items = Items::load(&level.vfs)?;
         Ok(Self {
-            items: Items::load(&level.vfs)?,
+            wardrobes: [
+                Wardrobe::new(&men, &items, false),
+                Wardrobe::new(&women, &items, true),
+            ],
+            seed: 1,
+            items,
             men,
             women,
             fall_limit: level
@@ -261,6 +270,11 @@ impl ActorData {
             spawns: level.spawn_points(),
             clips,
         })
+    }
+
+    /// Random clothes for a bot; `salt` tells the bots of one match apart.
+    pub fn random_look(&self, woman: bool, salt: u64) -> Look {
+        self.wardrobes[woman as usize].random(self.seed ^ salt.wrapping_mul(0x2545_f491_4f6c_dd1d))
     }
 
     /// A new map was loaded (quest sectors): take its spawn points and fall limit.
@@ -358,8 +372,8 @@ pub struct Actor {
     weapons: Vec<Vec<Entity>>,
     /// Every weapon item the actor spawned with, parallel to `weapons`; [`Equip`] picks from it.
     pub(crate) kit: Vec<u32>,
-    /// Outfit part set it spawned with (`ActorSpec::outfit`).
-    pub(crate) outfit: Option<usize>,
+    /// What it spawned wearing (`ActorSpec::look`).
+    pub(crate) look: Look,
     /// Loadout slot -> index into `kit`/`weapons` (identity until an [`Equip`]).
     carry: Vec<usize>,
     /// Slot whose weapon models are visible.
@@ -415,8 +429,7 @@ pub struct ActorSpec {
     pub woman: bool,
     /// zitem ids for slots 0..; empty = [`DEFAULT_LOADOUT`].
     pub loadout: Vec<u32>,
-    /// Index into the character's `parts` for an outfit (`None` = base body).
-    pub outfit: Option<usize>,
+    pub look: Look,
     /// `Bot` (AI writes `Intent`) or `Player` (gunz-play input does).
     pub bot: bool,
 }
@@ -435,28 +448,37 @@ pub struct ActorSpawner<'w, 's> {
 }
 
 impl ActorSpawner<'_, '_> {
+    /// Random clothes for a bot ([`ActorData::random_look`]).
+    pub fn random_look(&self, woman: bool, salt: u64) -> Look {
+        self.data.random_look(woman, salt)
+    }
+
     pub fn spawn(&mut self, spec: ActorSpec) -> Entity {
         let vfs = &self.level.vfs;
         let ch = self.data.character(spec.woman);
-        let outfit = match spec.outfit {
-            Some(part) => Outfit::from_part(vfs, ch, part)
-                .unwrap_or_else(|e| panic!("outfit {part} of {}: {e}", ch.name)),
-            None => Outfit::base(),
-        };
+        let look = spec.look.fit(ch);
         let mut textures = Textures::new(vfs, "model/");
-        let body = character::spawn(
-            &mut self.commands,
-            &mut self.meshes,
-            &mut self.bindposes,
-            &mut self.images,
-            &mut self.standard,
-            &mut textures,
-            vfs,
-            ch,
-            &outfit,
-            Transform::from_rotation(Quat::from_rotation_y(PI)),
-        )
-        .unwrap_or_else(|e| panic!("character {}: {e}", ch.name));
+        let mut body = |look: &Look| {
+            character::spawn(
+                &mut self.commands,
+                &mut self.meshes,
+                &mut self.bindposes,
+                &mut self.images,
+                &mut self.standard,
+                &mut textures,
+                vfs,
+                ch,
+                look,
+                Transform::from_rotation(Quat::from_rotation_y(PI)),
+            )
+        };
+        // a piece that cannot be read (a browser download that failed) leaves the base body
+        let body = body(&look)
+            .or_else(|e| {
+                warn!("{}'s clothes: {e}", spec.name);
+                body(&Look::default())
+            })
+            .unwrap_or_else(|e| panic!("character {}: {e}", ch.name));
         let ids = match (&self.arsenal, spec.loadout.is_empty()) {
             (Some(a), _) => a.0.clone(),
             (None, true) => DEFAULT_LOADOUT.to_vec(),
@@ -534,7 +556,7 @@ impl ActorSpawner<'_, '_> {
                     weapons,
                     carry: (0..kit.len()).collect(),
                     kit,
-                    outfit: spec.outfit,
+                    look,
                     shown: 0,
                     vel: Vec3::ZERO,
                     grounded: false,
@@ -760,7 +782,7 @@ fn spawn_player(mut spawner: ActorSpawner, setup: Res<PlayerSetup>) {
         yaw: setup.yaw.unwrap_or_else(|| yaw_of(dir)),
         woman: setup.woman,
         loadout: setup.loadout.clone(),
-        outfit: setup.outfit,
+        look: setup.look,
         bot: false,
     });
 }

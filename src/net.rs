@@ -13,6 +13,7 @@
 
 use crate::{
     actor::{Actor, ActorData, ActorSpawner, ActorSpec, EMOTES, pick_spawn, yaw_of},
+    character::Look,
     combat::Wounded,
     game::{Bot, Dead, Intent, Killed, Loadout, Player, Remote, Score, Team, Vitals},
     menu::Mode,
@@ -29,7 +30,7 @@ use std::{
 /// TCP port of the host, and the UDP port it answers LAN probes on.
 pub const PORT: u16 = 7790;
 const MAGIC: &[u8; 4] = b"GZRS";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const PROBE: &[u8] = b"GZRS?";
 const ANSWER: &[u8] = b"GZRS!";
 /// A peer that lets this much unsent data pile up has stalled: it is dropped.
@@ -126,6 +127,14 @@ impl W {
         self.0.extend_from_slice(&s.as_bytes()[..end]);
         self
     }
+    /// Six parts (`u16`, `u16::MAX` = base piece) and six tints; the spawner checks both.
+    fn look(&mut self, l: &Look) -> &mut Self {
+        for p in l.parts {
+            self.u16(p.unwrap_or(u16::MAX));
+        }
+        self.0.extend(l.tints);
+        self
+    }
 }
 
 /// Reads a frame; every getter is `None` past its end (or for a non-finite float), so a short
@@ -163,6 +172,16 @@ impl<'a> R<'a> {
         let (s, rest) = self.0.split_at_checked(n)?;
         self.0 = rest;
         String::from_utf8(s.to_vec()).ok()
+    }
+    fn look(&mut self) -> Option<Look> {
+        let parts = [(); 6].map(|_| self.u16().map(|p| (p != u16::MAX).then_some(p)));
+        let tints = self.take::<6>()?;
+        Some(Look {
+            parts: [
+                parts[0]?, parts[1]?, parts[2]?, parts[3]?, parts[4]?, parts[5]?,
+            ],
+            tints,
+        })
     }
 }
 
@@ -519,7 +538,7 @@ fn admit(
     }
     let name = r.str().ok_or_else(bad)?;
     let woman = r.u8().ok_or_else(bad)? != 0;
-    let outfit = r.u8().ok_or_else(bad)?;
+    let look = r.look().ok_or_else(bad)?;
     let kit: Vec<u32> = (0..r.u8().ok_or_else(bad)?.min(8))
         .map(|_| r.u32())
         .collect::<Option<_>>()
@@ -527,7 +546,7 @@ fn admit(
     if clock.over.is_some() {
         return Err("the match is over".into());
     }
-    let parts = data.character(woman).parts.len();
+    // the spawner drops parts and tints this install does not have (`Look::fit`)
     let kit = kit
         .into_iter()
         .filter(|&id| {
@@ -559,7 +578,7 @@ fn admit(
             yaw: yaw_of(dir),
             woman,
             loadout: kit,
-            outfit: Some(outfit as usize).filter(|&p| p < parts),
+            look,
             bot: true,
         },
     ))
@@ -634,7 +653,7 @@ fn host_send(
                     .u8(!bot as u8)
                     .str(name)
                     .u8(a.woman as u8)
-                    .u8(a.outfit.map_or(u8::MAX, |p| p.min(254) as u8))
+                    .look(&a.look)
                     .u8(a.kit.len().min(255) as u8);
                 for &id in a.kit.iter().take(255) {
                     w.u32(id);
@@ -718,7 +737,7 @@ pub fn join(
     addr: &str,
     name: &str,
     woman: bool,
-    outfit: Option<usize>,
+    look: &Look,
     kit: &[u32],
 ) -> Result<(Welcome, Client), String> {
     let to = if addr == "lan" {
@@ -741,7 +760,7 @@ pub fn join(
     w.u16(VERSION)
         .str(name)
         .u8(woman as u8)
-        .u8(outfit.map_or(u8::MAX, |p| p.min(254) as u8))
+        .look(look)
         .u8(kit.len().min(8) as u8);
     for &id in kit.iter().take(8) {
         w.u32(id);
@@ -949,8 +968,8 @@ fn client_recv(
 /// A [`SPAWN`] frame: another actor of the host appears (this client's own player is already
 /// there).
 fn spawn(r: &mut R, client: &mut Client, spawner: &mut ActorSpawner) -> Option<()> {
-    let (id, human, name, woman, outfit) =
-        (r.u64()?, r.u8()? != 0, r.str()?, r.u8()? != 0, r.u8()?);
+    let (id, human, name, woman, look) =
+        (r.u64()?, r.u8()? != 0, r.str()?, r.u8()? != 0, r.look()?);
     let kit: Vec<u32> = (0..r.u8()?).map(|_| r.u32()).collect::<Option<_>>()?;
     let (pos, yaw, team) = (r.v3()?, r.f32()?, team_of(r.u8()?));
     if id == client.me || client.ids.contains_key(&id) {
@@ -963,7 +982,7 @@ fn spawn(r: &mut R, client: &mut Client, spawner: &mut ActorSpawner) -> Option<(
         yaw,
         woman,
         loadout: kit,
-        outfit: (outfit != u8::MAX).then_some(outfit as usize),
+        look,
         bot: true,
     });
     let mut ec = spawner.commands.entity(e);

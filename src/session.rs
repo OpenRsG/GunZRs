@@ -9,6 +9,7 @@ use crate::{
     game::{Frozen, Hold, Player, Score, Settings, Team, Vitals},
     menu::{Art, Mode, button, heading, hover, panel},
     modes::{Berserker, ModesPlugin, Phase, Round},
+    net::Lan,
     profile::{OPTS, Profile, opt_mut},
     view::Shot,
 };
@@ -312,6 +313,7 @@ fn pause_key(
     frozen: Option<Res<Frozen>>,
     hold: Option<Res<Hold>>,
     pause_at: Option<Res<PauseAt>>,
+    lan: Option<Res<Lan>>,
     mut commands: Commands,
     mut vtime: ResMut<Time<Virtual>>,
 ) {
@@ -324,6 +326,10 @@ fn pause_key(
     }
     if scripted || keys.just_pressed(KeyCode::Escape) {
         freeze(&mut commands, &mut vtime, frozen.is_none());
+        // A LAN match goes on for everybody else: the menu only takes the player's input away.
+        if lan.is_some() {
+            vtime.unpause();
+        }
     }
 }
 

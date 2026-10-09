@@ -41,6 +41,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::npc::NpcPlugin)
             .add_plugins(crate::blitz::BlitzPlugin)
             .add_plugins(crate::killcam::KillcamPlugin)
+            .add_plugins(crate::net::NetPlugin)
             .add_plugins(crate::perf::PerfPlugin);
     }
 }
@@ -213,6 +214,12 @@ pub struct Player;
 /// An AI-controlled actor.
 #[derive(Component)]
 pub struct Bot;
+
+/// A human actor whose input arrives over the LAN (`net.rs`): on the host a joined player, on a
+/// client the host's player and the other clients. Neither `Player` nor `Bot`; it aims like a
+/// player.
+#[derive(Component)]
+pub struct Remote;
 
 /// Side in team deathmatch. Actors without a `Team` play free-for-all: bots only target the
 /// player and never hurt each other.

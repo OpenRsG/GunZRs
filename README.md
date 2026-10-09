@@ -93,12 +93,13 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, kill feed, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
 | Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; a rising kill-streak sound and your own hit sound (`custom/hitsound.wav` next to the profile) |
 | Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars and screen blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
+| LAN multiplayer | HOST LAN / JOIN LAN in the menu (or `--host` / `--join ADDR`, `--join lan` finds the host by broadcast): deathmatch, team deathmatch, gladiator and team gladiator with the host's bots. The host decides hits, deaths and scores; each player moves their own character. TCP and UDP port 7790 must be open on the host |
 
 ### Not done yet
 
 | Area | State |
 |---|---|
-| Online multiplayer | Not started; every match is local, with bots as the other players |
+| Online multiplayer | LAN only (see above), our own protocol; the round, quest and Blitzkrieg modes are not played over the LAN yet, and nothing talks to the retail servers |
 | Online clans | Clan chat, invitations, the war lobby and matchmaking need a server; rival clans are generated bots that never play each other |
 | Blitzkrieg extras | Nine classes are playable (three of them have no class book, so whether retail offered them is unknown); neither the data nor public sources give class art or loadouts, so the cards show weapon icons and the class guns are the port's guesses; the data has no medal shop stock or prices (its messages suggest the server sends them), so medals are stored and shown but cannot be spent |
 | Quest extras | The challenge quest's gacha reward item (3000xxx) is not in the item data, so it cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon's skeletons follow the data's id scheme and a public wiki, but its XP, bounty and drops are not in the data |
@@ -125,7 +126,7 @@ cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked 
 `--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|clanwar|infected|gungame|dynduel|training`,
 `--mode quest --scenario NAME [--dice N] [--sacrifice A,B]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
 `"Challenge 101"`, `"Survival Prison"`; without `--dice` the die is rolled), `--time-limit S`, `--kill-limit N` (0 = none),
-`--respawn S`, `--protect S`, `--round-time S`, `--ready S`. A match ends at the time or
+`--respawn S`, `--protect S`, `--round-time S`, `--ready S`, `--host` or `--join ADDR|lan` (LAN). A match ends at the time or
 kill/round limit (defaults per mode from `gametypecfg.xml`) with victory, defeat or draw.
 
 Testing without a window: every viewer accepts `--shot OUT.png` to render one 1280x720 frame

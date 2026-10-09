@@ -84,7 +84,8 @@ impl Plugin for CombatPlugin {
                     projectile::launch,
                     projectile::fly,
                     projectile::regen,
-                    apply_damage,
+                    // A LAN client mirrors the host's health, deaths and kills instead.
+                    apply_damage.run_if(not(resource_exists::<crate::net::Client>)),
                     spawn_elu_fx,
                     spawn_sprites,
                     update_sprites,

@@ -44,6 +44,10 @@
 //! Rules (not in the menu): `--respawn S` (seconds dead before the respawn, default 5),
 //! `--protect S` (spawn protection, default 3), `--round-time S` (round limit, default 180),
 //! `--ready S` (countdown before a round, default 3).
+//! LAN (also the menu's HOST LAN / JOIN LAN): `--host` serves this match on TCP+UDP port 7790
+//! (modes `dm`, `tdm`, `gladiator`, `team-gladiator`); `--join ADDR[:PORT]` plays the match of the
+//! host at ADDR, `--join lan` finds it with a broadcast. A joining player brings its character and
+//! weapons; map, mode, limits and bots are the host's (`src/net.rs`).
 //! Quest: `--mode quest --scenario NAME [--dice N] [--sacrifice A,B] [--bots N]` plays a retail quest
 //! (no MAP: the scenario's first sector is the map). NAME is a scenario title (`"Quest Mansion QL0"`,
 //! `"Goblin King"`), `"Challenge 101"`, `"Survival Prison"` or a special id / challenge id;
@@ -86,9 +90,10 @@ use gunz::{
     game::{GamePlugin, Settings},
     level::{Level, LevelPlugin},
     map,
-    menu::{self, Config, Mode, Page, take_arg},
+    menu::{self, Config, Mode, Net, Page, take_arg},
     modes::DieAt,
     mrs::Vfs,
+    net::{self, Host, Lan},
     profile::{OPTS, Profile, opt_mut},
     quest::{Catalog, Quest},
     session::{EXIT_AGAIN, EXIT_MENU, PauseAt, Rules, StartVitals},
@@ -105,6 +110,11 @@ fn relaunch(game: &str, config: &Config, menu: bool) -> AppExit {
     let exe = std::env::current_exe().expect("own executable path");
     let mut cmd = Command::new(exe);
     cmd.arg(game);
+    // back in the menu, hosting or joining is chosen again
+    let config = &Config {
+        net: config.net.clone().filter(|_| !menu),
+        ..config.clone()
+    };
     match (&config.map, menu) {
         (Some(map), true) => cmd.args(["--map", map]),
         (Some(map), false) => cmd.arg(map),
@@ -162,7 +172,7 @@ fn main() -> AppExit {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
              [--bots-ahead M] [--skill 0..1] [--sens X] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
-             [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S]\n       \
+             [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S] [--host | --join ADDR|lan]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
              [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory|clan] [--npc NAME[,NAME..]]\n\
@@ -243,6 +253,32 @@ fn main() -> AppExit {
         },
     };
     let vfs = Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
+    let name = Profile::open(shot.is_some()).name;
+    // A LAN client plays the host's map, mode and limits.
+    let client = match config.net.clone() {
+        Some(Net::Join(addr)) => {
+            match net::join(&addr, &name, config.woman, config.outfit, &config.loadout) {
+                Ok((w, c)) => {
+                    println!("lan: joined {} ({})", w.map, w.mode.arg());
+                    (config.mode, config.time_limit, config.kill_limit) =
+                        (w.mode, w.time_limit, w.kill_limit);
+                    Some((w, c))
+                }
+                Err(e) => {
+                    eprintln!("--join: {e}");
+                    if shot.is_some() {
+                        return AppExit::from_code(2);
+                    }
+                    config.net = None;
+                    return match menu::run(vfs, config, Page::Match, None) {
+                        Some(chosen) => relaunch(&game, &chosen, false),
+                        None => AppExit::Success,
+                    };
+                }
+            }
+        }
+        _ => None,
+    };
     // Quest mode plays a scenario's sectors in turn: its first sector is the map. Without a
     // scenario (or MAP) the menu picks one; `--menu-page` always shows the menu.
     let wanted = page.is_none()
@@ -266,7 +302,8 @@ fn main() -> AppExit {
         None
     };
     let first = quest.as_ref().map(|q| q.first_map().to_owned());
-    let Some(map_name) = first.clone().or_else(|| args.first().cloned()) else {
+    let joined = client.as_ref().map(|(w, _)| w.map.clone());
+    let Some(map_name) = (first.clone().or(joined)).or_else(|| args.first().cloned()) else {
         // No MAP: the main menu; Start leaves the choice behind, then the game starts.
         return match menu::run(vfs, config, page.unwrap_or(Page::Match), shot) {
             Some(chosen) => relaunch(&game, &chosen, false),
@@ -324,11 +361,34 @@ fn main() -> AppExit {
     rules.round_secs = round_time.unwrap_or(rules.round_secs);
     rules.ready = ready.unwrap_or(rules.ready);
     // The training range has no bots, only dummies; a clan war is 4 against 4 with the player.
-    let bots = match config.mode {
+    let mut bots = match config.mode {
         Mode::Training => 0,
         Mode::ClanWar => 2 * gunz::clan::WAR_SIZE - 1,
         _ => config.bots,
     };
+    let mut start = (
+        at.map(|p| Vec3::from(to_bevy(p)) * SCALE),
+        yaw.map(f32::to_radians),
+    );
+    match (client, &config.net) {
+        // The host's bots and rules; its spawn point unless `--at`/`--yaw` say otherwise.
+        (Some((w, c)), _) => {
+            (rules.respawn, rules.protect, bots) = (w.respawn, w.protect, 0);
+            start = (start.0.or(Some(w.at)), start.1.or(Some(w.yaw)));
+            app.insert_resource(c).insert_resource(Lan);
+        }
+        (None, Some(Net::Host)) => match Host::bind(&map_name) {
+            Ok(h) => {
+                println!("lan: hosting {map_name} on port {}", net::PORT);
+                app.insert_resource(h).insert_resource(Lan);
+            }
+            Err(e) => {
+                eprintln!("--host: port {}: {e}", net::PORT);
+                return AppExit::from_code(2);
+            }
+        },
+        _ => {}
+    }
     if hp.is_some() || ap.is_some() {
         app.insert_resource(StartVitals { hp, ap });
     }
@@ -341,11 +401,16 @@ fn main() -> AppExit {
             effect::WarmFxPlugin,
         ))
         .insert_resource(PlayerSetup {
-            at: at.map(|p| Vec3::from(to_bevy(p)) * SCALE),
-            yaw: yaw.map(f32::to_radians),
+            at: start.0,
+            yaw: start.1,
             woman: config.woman,
             loadout: config.loadout.clone(),
             outfit: config.outfit,
+            name: if config.net.is_some() {
+                name
+            } else {
+                String::new()
+            },
         })
         .insert_resource({
             let mut s = Settings {

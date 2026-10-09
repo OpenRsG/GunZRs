@@ -23,6 +23,7 @@ pub mod modes;
 pub mod mrs;
 pub mod music;
 pub mod nav;
+pub mod net;
 pub mod npc;
 pub mod perf;
 pub mod pickup;

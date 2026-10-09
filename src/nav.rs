@@ -1239,6 +1239,10 @@ fn par<T: Send>(n: usize, f: impl Fn(u32) -> T + Sync) -> Vec<T> {
 
 /// [`par`] with the ids handed out `block` at a time.
 fn par_blocks<T: Send>(n: usize, block: usize, f: impl Fn(u32) -> T + Sync) -> Vec<T> {
+    // The browser build has no threads.
+    if cfg!(target_arch = "wasm32") {
+        return (0..n as u32).map(f).collect();
+    }
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut blocks: Vec<(usize, Vec<T>)> = std::thread::scope(|s| {
         let workers: Vec<_> = (0..threads())

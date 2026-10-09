@@ -198,30 +198,35 @@ fn clip_table(vfs: &Vfs, ch: &Character) -> HashMap<u32, HashMap<String, Clip>> 
     let mut files: Vec<&str> = ch.animations.iter().map(|a| a.file.as_str()).collect();
     files.sort_unstable();
     files.dedup();
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let loaded: HashMap<&str, Arc<Ani>> = std::thread::scope(|s| {
-        let jobs: Vec<_> = files
-            .chunks(files.len().div_ceil(threads).max(1))
-            .map(|chunk| {
-                s.spawn(move || {
-                    chunk
-                        .iter()
-                        .filter_map(|&f| {
-                            let ani = vfs
-                                .read(f)
-                                .and_then(|b| crate::ani::load(&b))
-                                .map_err(|e| warn!("{f}: {e}"))
-                                .ok()?;
-                            Some((f, Arc::new(ani)))
-                        })
-                        .collect::<Vec<_>>()
+    let load = |f: &str| {
+        vfs.read(f)
+            .and_then(|b| crate::ani::load(&b))
+            .map_err(|e| warn!("{f}: {e}"))
+            .ok()
+            .map(Arc::new)
+    };
+    // The browser build has no threads.
+    let loaded: HashMap<&str, Arc<Ani>> = if cfg!(target_arch = "wasm32") {
+        files.iter().filter_map(|&f| Some((f, load(f)?))).collect()
+    } else {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        std::thread::scope(|s| {
+            let jobs: Vec<_> = files
+                .chunks(files.len().div_ceil(threads).max(1))
+                .map(|chunk| {
+                    s.spawn(move || {
+                        chunk
+                            .iter()
+                            .filter_map(|&f| Some((f, load(f)?)))
+                            .collect::<Vec<_>>()
+                    })
                 })
-            })
-            .collect();
-        jobs.into_iter()
-            .flat_map(|j| j.join().expect("animation loader panicked"))
-            .collect()
-    });
+                .collect();
+            jobs.into_iter()
+                .flat_map(|j| j.join().expect("animation loader panicked"))
+                .collect()
+        })
+    };
     let mut table: HashMap<u32, HashMap<String, Clip>> = HashMap::new();
     for a in &ch.animations {
         if let Some(ani) = loaded.get(a.file.as_str()) {

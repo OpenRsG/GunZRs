@@ -9,8 +9,9 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// Keystream prefix recovered from the retail archives (see `docs/formats.md`).
 /// Indices 84 and 87 rest on a single observation; no retail name reaches them.
@@ -56,6 +57,7 @@ pub struct Entry {
     pub data: u64,
 }
 
+#[derive(Clone)]
 pub struct Archive {
     pub path: PathBuf,
     pub entries: Vec<Entry>,
@@ -151,14 +153,59 @@ impl Archive {
 }
 
 /// Game virtual file system: `<dir>/<archive stem>/<entry name>` keyed case-insensitively,
-/// e.g. `Maps.mrs` + `Mansion/Mansion.rs` -> `maps/mansion/mansion.rs`.
+/// e.g. `Maps.mrs` + `Mansion/Mansion.rs` -> `maps/mansion/mansion.rs`. Either the archives of
+/// an install ([`Vfs::mount`]) or files held in memory ([`Vfs::from_packs`], the browser build).
+#[derive(Clone)]
 pub struct Vfs {
     pub archives: Vec<Archive>,
     index: HashMap<String, (usize, usize)>,
+    /// Pack files; `None` for a file the install has but no loaded pack carries.
+    files: Arc<HashMap<String, Option<Vec<u8>>>>,
 }
 
 pub fn normalize(path: &str) -> String {
     path.replace('\\', "/").to_ascii_lowercase()
+}
+
+/// `GUNZ_TRACE=FILE`: every path read is appended to FILE, one per line, so `gunz-pack` knows
+/// what a match needs.
+fn trace(path: &str) {
+    static OUT: LazyLock<Option<Mutex<File>>> = LazyLock::new(|| {
+        let p = std::env::var_os("GUNZ_TRACE")?;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p);
+        Some(Mutex::new(f.ok()?))
+    });
+    if let Some(Ok(mut f)) = OUT.as_ref().map(Mutex::lock) {
+        let _ = writeln!(f, "{path}");
+    }
+}
+
+/// Header of a pack: `GZPK`, then a little-endian `u32` file count and per file a `u16` name
+/// length, the normalized name, a `u32` length and the bytes. Length [`NAME_ONLY`] has no bytes:
+/// the file exists in the install but is not packed ([`Vfs::exists`] and [`Vfs::paths`] still
+/// see it, so listings and checks behave as with the install).
+const PACK: &[u8; 4] = b"GZPK";
+const NAME_ONLY: u32 = u32::MAX;
+
+/// Writes `files` (normalized path, bytes; `None` = name only) as one pack.
+pub fn pack(files: &[(String, Option<Vec<u8>>)]) -> Vec<u8> {
+    let mut out = PACK.to_vec();
+    out.extend((files.len() as u32).to_le_bytes());
+    for (name, bytes) in files {
+        out.extend((name.len() as u16).to_le_bytes());
+        out.extend(name.as_bytes());
+        match bytes {
+            Some(b) => {
+                out.extend((b.len() as u32).to_le_bytes());
+                out.extend(b);
+            }
+            None => out.extend(NAME_ONLY.to_le_bytes()),
+        }
+    }
+    out
 }
 
 impl Vfs {
@@ -183,23 +230,76 @@ impl Vfs {
             }
             archives.push(archive);
         }
-        Ok(Self { archives, index })
+        Ok(Self {
+            archives,
+            index,
+            files: Arc::default(),
+        })
+    }
+
+    /// The files of [`pack`]s; a later pack's bytes replace an earlier one's of the same name,
+    /// a name-only entry never replaces bytes.
+    pub fn from_packs<'a>(packs: impl IntoIterator<Item = &'a [u8]>) -> io::Result<Self> {
+        let mut files = HashMap::new();
+        for p in packs {
+            let bad = || invalid("truncated pack".into());
+            let mut r = p
+                .strip_prefix(PACK)
+                .ok_or_else(|| invalid("not a pack".into()))?;
+            let mut take = |n: usize| -> io::Result<&[u8]> {
+                let (a, b) = r.split_at_checked(n).ok_or_else(bad)?;
+                r = b;
+                Ok(a)
+            };
+            let count = u32::from_le_bytes(take(4)?.try_into().unwrap());
+            for _ in 0..count {
+                let n = u16::from_le_bytes(take(2)?.try_into().unwrap()) as usize;
+                let name = String::from_utf8(take(n)?.to_vec()).map_err(|_| bad())?;
+                let len = u32::from_le_bytes(take(4)?.try_into().unwrap());
+                if len == NAME_ONLY {
+                    files.entry(name).or_insert(None);
+                } else {
+                    files.insert(name, Some(take(len as usize)?.to_vec()));
+                }
+            }
+        }
+        Ok(Self {
+            archives: Vec::new(),
+            index: HashMap::new(),
+            files: Arc::new(files),
+        })
     }
 
     pub fn read(&self, path: &str) -> io::Result<Vec<u8>> {
+        let path = normalize(path);
+        trace(&path);
+        match self.files.get(&path) {
+            Some(Some(b)) => return Ok(b.clone()),
+            Some(None) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{path} is not in the downloaded packs"),
+                ));
+            }
+            None => {}
+        }
         let &(a, e) = self
             .index
-            .get(&normalize(path))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.to_string()))?;
+            .get(&path)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.clone()))?;
         self.archives[a].read(&self.archives[a].entries[e])
     }
 
     pub fn exists(&self, path: &str) -> bool {
-        self.index.contains_key(&normalize(path))
+        let path = normalize(path);
+        self.files.contains_key(&path) || self.index.contains_key(&path)
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {
-        self.index.keys().map(String::as_str)
+        self.index
+            .keys()
+            .chain(self.files.keys())
+            .map(String::as_str)
     }
 }
 
@@ -261,5 +361,25 @@ mod tests {
         assert_eq!(archive.read(&archive.entries[0]).unwrap(), text);
         assert_eq!(archive.read(&archive.entries[1]).unwrap(), b"raw".to_vec());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn packs_round_trip_and_later_packs_win() {
+        let a = pack(&[
+            ("maps/x/x.rs".into(), Some(b"one".to_vec())),
+            ("system/a.xml".into(), Some(vec![])),
+            ("model/big.elu".into(), None),
+        ]);
+        let b = pack(&[
+            ("maps/x/x.rs".into(), Some(b"two".to_vec())),
+            ("system/a.xml".into(), None),
+        ]);
+        let vfs = Vfs::from_packs([&a[..], &b[..]]).unwrap();
+        assert_eq!(vfs.read("Maps\\X\\X.rs").unwrap(), b"two");
+        // a name-only entry neither hides bytes nor makes an unpacked file readable
+        assert_eq!(vfs.read("system/a.xml").unwrap(), b"");
+        assert!(vfs.exists("model/big.elu") && vfs.read("model/big.elu").is_err());
+        assert!(!vfs.exists("system/b.xml"));
+        assert!(Vfs::from_packs([&a[..a.len() - 1]]).is_err());
     }
 }

@@ -10,8 +10,8 @@
 //! In headless `--shot` runs the app loop waits to 1/60 s per frame, so a frame time is
 //! `max(16.7 ms, real work)`; hitches are the frames where the work exceeded that.
 
+use bevy::platform::time::Instant;
 use bevy::{app::MainScheduleOrder, audio::AudioSource, ecs::schedule::ScheduleLabel, prelude::*};
-use std::time::Instant;
 
 pub const HITCH_MS: f32 = 20.0;
 /// Frames counted as loading (shader compiles, first-use asset reads) in the summary: 1.5 s

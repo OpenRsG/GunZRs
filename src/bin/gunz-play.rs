@@ -99,7 +99,7 @@ use gunz::{
     session::{EXIT_AGAIN, EXIT_MENU, PauseAt, Rules, StartVitals},
     view::{self, SCALE, Shot, to_bevy},
 };
-use std::{path::Path, process::Command, time::Duration};
+use std::{process::Command, time::Duration};
 
 /// Simulated seconds before a headless script starts, so pipelines compile and actors land.
 const LEAD: f32 = 1.5;
@@ -152,14 +152,13 @@ fn start_quest(vfs: &Vfs, config: &mut Config, headless: bool) -> Result<Quest, 
         profile.save();
     }
     // random from the clock; headless runs stay reproducible unless GUNZ_SEED says otherwise
-    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let seed = std::env::var("GUNZ_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(if headless {
             1
         } else {
-            clock.map_or(1, |t| t.subsec_nanos())
+            gunz::profile::wall().subsec_nanos().max(1)
         });
     let plan = cat.plan(&ok.scenario, config.dice, seed)?;
     config.scenario = Some(ok.scenario);
@@ -167,6 +166,10 @@ fn start_quest(vfs: &Vfs, config: &mut Config, headless: bool) -> Result<Quest, 
 }
 
 fn main() -> AppExit {
+    // In the browser the page chose the match; the packs it downloaded are the game files.
+    #[cfg(target_arch = "wasm32")]
+    let mut args = gunz::web::args();
+    #[cfg(not(target_arch = "wasm32"))]
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || {
         eprintln!(
@@ -237,11 +240,14 @@ fn main() -> AppExit {
             return usage();
         }
     };
+    #[cfg(target_arch = "wasm32")]
+    let (game, vfs) = (String::new(), gunz::web::vfs().expect("game packs"));
     // GAME_DIR is the first argument when it is a directory (or looks like a path, so a typo
     // is reported as a bad directory); otherwise find the Steam install.
+    #[cfg(not(target_arch = "wasm32"))]
     let game = match args
         .first()
-        .filter(|a| Path::new(a).is_dir() || a.contains(['/', '\\']))
+        .filter(|a| std::path::Path::new(a).is_dir() || a.contains(['/', '\\']))
     {
         Some(_) => args.remove(0),
         None => match gunz::steam::find_game() {
@@ -252,6 +258,7 @@ fn main() -> AppExit {
             }
         },
     };
+    #[cfg(not(target_arch = "wasm32"))]
     let vfs = Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
     let name = Profile::open(shot.is_some()).name;
     // A LAN client plays the host's map, mode and limits.
@@ -392,6 +399,8 @@ fn main() -> AppExit {
     if hp.is_some() || ap.is_some() {
         app.insert_resource(StartVitals { hp, ap });
     }
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugins(gunz::web::WebPlugin);
     let sensitivity = Settings::default().sensitivity * config.sens;
     let exit = app
         .add_plugins((

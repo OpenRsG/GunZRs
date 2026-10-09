@@ -7,6 +7,7 @@
 use super::{WARM, percentile};
 use bevy::{
     camera::visibility::ViewVisibility,
+    platform::time::Instant,
     prelude::*,
     render::{Render, RenderApp, RenderSystems as S},
     ui::Node,
@@ -14,7 +15,6 @@ use bevy::{
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 const SETS: [(S, &str); 12] = [

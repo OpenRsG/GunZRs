@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GunZRs</title>
+  <link rel="modulepreload" href="pkg/gunz-play.js">
+  <link rel="preload" href="pkg/gunz-play_bg.wasm" as="fetch" type="application/wasm" crossorigin>
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #0b0c10;
+      color: #ddd;
+      font: 15px system-ui, sans-serif;
+      overflow: hidden
+    }
+
+    #game {
+      position: fixed;
+      inset: 0
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      outline: none
+    }
+
+    #menu {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center
+    }
+
+    .box {
+      background: #15171d;
+      border: 1px solid #333;
+      padding: 24px 28px;
+      min-width: 340px;
+      border-radius: 6px
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: 26px;
+      letter-spacing: 2px;
+      color: #e8c46a
+    }
+
+    label {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      align-items: center;
+      margin: 8px 0
+    }
+
+    select,
+    input {
+      background: #0f1115;
+      color: #ddd;
+      border: 1px solid #444;
+      padding: 5px;
+      border-radius: 3px
+    }
+
+    button {
+      margin-top: 14px;
+      width: 100%;
+      padding: 10px;
+      font-size: 17px;
+      background: #e8c46a;
+      color: #111;
+      border: 0;
+      border-radius: 4px;
+      cursor: pointer
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: default
+    }
+
+    #bar {
+      height: 4px;
+      background: #333;
+      margin-top: 12px
+    }
+
+    #fill {
+      height: 100%;
+      width: 0;
+      background: #e8c46a;
+      transition: width .1s
+    }
+
+    #status {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #999;
+      min-height: 1.2em
+    }
+
+    .err {
+      color: #f77 !important
+    }
+  </style>
+</head>
+
+<body>
+  <div id="game"><canvas id="gunz" tabindex="0"></canvas></div>
+  <div id="menu">
+    <div class="box">
+      <h1>GUNZRS</h1>
+      <label>Map <select id="map"></select></label>
+      <label>Mode <select id="mode">
+          <option value="dm">Deathmatch</option>
+          <option value="tdm">Team deathmatch</option>
+          <option value="gladiator">Gladiator</option>
+          <option value="team-gladiator">Team gladiator</option>
+          <option value="elimination">Elimination</option>
+          <option value="assassinate">Assassinate</option>
+          <option value="duel">Duel</option>
+          <option value="berserker">Berserker</option>
+        </select></label>
+      <label>Bots <input id="bots" type="number" min="0" max="15" value="3"></label>
+      <label>Character <select id="char">
+          <option>man</option>
+          <option>woman</option>
+        </select></label>
+      <button id="start" disabled>START</button>
+      <div id="bar">
+        <div id="fill"></div>
+      </div>
+      <div id="status">Loading...</div>
+    </div>
+  </div>
+  <script type="module">
+    const $ = id => document.getElementById(id);
+    const status = (t, err) => {$("status").textContent = t; $("status").classList.toggle("err", !!err);};
+    const progress = f => $("fill").style.width = `${Math.round(f * 100)}%`;
+    const saved = JSON.parse(sessionStorage.getItem("gunz") || "null");
+
+    if (!navigator.gpu || !(await navigator.gpu.requestAdapter().catch(() => null))) {
+      status("This browser has no WebGPU (try a current Chrome, Edge or Firefox; on Linux enable it in the browser's flags).", true);
+      throw new Error("no WebGPU");
+    }
+
+    // Downloads a gzip pack once per CRC (the URL changes with it, so HTTP caching is exact),
+    // inflating while it streams; `onBytes` reports compressed bytes received.
+    function pack(entry, onBytes) {
+      return fetch(`data/${entry.file}?v=${entry.crc}`).then(async r => {
+        if (!r.ok) throw new Error(`${entry.file}: HTTP ${r.status}`);
+        const counted = r.body.pipeThrough(new TransformStream({
+          transform(chunk, c) {onBytes(chunk.byteLength); c.enqueue(chunk);}
+        }));
+        return new Uint8Array(await new Response(counted.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+      });
+    }
+
+    const index = await fetch("data/index.json", {cache: "no-cache"}).then(r => {
+      if (!r.ok) throw new Error("data/index.json missing: run web/build.sh");
+      return r.json();
+    }).catch(e => {status(e.message, true); throw e;});
+    for (const m of index.maps) $("map").add(new Option(m.name.replace(/\b\w/g, c => c.toUpperCase()), m.name));
+    if (saved) for (const k of ["map", "mode", "bots", "char"]) $(k).value = saved[k];
+    else $("map").value = index.maps.some(m => m.name === "mansion") ? "mansion" : index.maps[0].name;
+
+    // The shared pack (characters, weapons, effects, sounds) starts right away; the wasm module
+    // too. A map's pack is fetched only once that map is chosen.
+    let got = 0, need = index.core.bytes;
+    const tick = n => {got += n; progress(got / need);};
+    const core = pack(index.core, tick);
+    const engine = import("./pkg/gunz-play.js");
+    core.then(() => status("Ready."), e => status(e.message, true));
+    $("start").disabled = false;
+    status("Downloading game data...");
+
+    async function start() {
+      const pick = {map: $("map").value, mode: $("mode").value, bots: $("bots").value, char: $("char").value};
+      sessionStorage.setItem("gunz", JSON.stringify(pick));
+      $("start").disabled = true;
+      const entry = index.maps.find(m => m.name === pick.map);
+      need += entry.bytes;
+      status(`Loading ${pick.map}...`);
+      try {
+        const [c, m, mod] = await Promise.all([core, pack(entry, tick), engine]);
+        globalThis.gunzPacks = [c, m];
+        globalThis.gunzArgs = [pick.map, "--mode", pick.mode, "--bots", String(pick.bots), "--char", pick.char];
+        // 4 = play again, anything else = back to this menu (as the desktop build relaunches)
+        globalThis.gunzExit = code => {
+          sessionStorage.setItem("gunzAgain", code === 4 ? "1" : "");
+          location.reload();
+        };
+        $("menu").remove();
+        $("gunz").focus();
+        await mod.default();
+      } catch (e) {
+        // winit hands control to the browser's event loop by throwing; that is not a failure
+        if (!String(e).includes("Using exceptions for control flow")) {status(String(e), true); throw e;}
+      }
+    }
+    $("start").onclick = start;
+    if (saved && sessionStorage.getItem("gunzAgain")) {sessionStorage.removeItem("gunzAgain"); start();}
+  </script>
+</body>
+
+</html>

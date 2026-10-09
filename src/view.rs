@@ -79,6 +79,9 @@ pub fn app_plain(title: &str, shot: Option<String>) -> App {
         primary_window: shot.is_none().then(|| Window {
             title: format!("Gunz2Rust - {title}"),
             present_mode,
+            // the browser build draws into `<canvas id="gunz">` and follows its size
+            canvas: Some("#gunz".into()),
+            fit_canvas_to_parent: true,
             ..default()
         }),
         exit_condition: if shot.is_some() {

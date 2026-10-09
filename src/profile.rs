@@ -22,14 +22,22 @@ use std::{
     fs, io,
     path::PathBuf,
     str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
+
+/// Time since the Unix epoch (the browser's clock in the web build, where `SystemTime` panics).
+pub fn wall() -> Duration {
+    #[cfg(target_arch = "wasm32")]
+    return Duration::from_secs_f64(js_sys::Date::now() / 1e3);
+    #[cfg(not(target_arch = "wasm32"))]
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
 
 /// Wall-clock Unix seconds (rental expiries).
 pub fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+    wall().as_secs()
 }
 
 /// Highest level (**inferred**; `grank.xml` lists 35 ranks but no level numbers).

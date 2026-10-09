@@ -747,7 +747,7 @@ fn spawn(
             let p = Vec3::from(to_bevy(v.pos)) * SCALE;
             (min, max) = (min.min(p), max.max(p));
         }
-        let t = std::time::Instant::now();
+        let t = bevy::platform::time::Instant::now();
         let n = Nav::new(&col, min, max);
         info!(
             "npc nav: {} floor nodes in {:.2}s",

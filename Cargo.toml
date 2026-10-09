@@ -11,8 +11,24 @@ bevy = { version = "0.19", features = ["dds", "bmp", "tga", "jpeg", "wav", "mp3"
 flate2 = "1"
 roxmltree = "0.21"
 
+# Browser build (`web/build.sh`): WebGPU rendering, page URL and packs from JavaScript.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.19", features = ["webgpu", "web"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The browser build: one codegen unit with fat LTO (smaller and faster wasm), no unwinding.
+[profile.web]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

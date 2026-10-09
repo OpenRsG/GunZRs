@@ -107,6 +107,21 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
 | Exact feel | Movement constants come from replays of older clients, so parity with the Steam client is unproven; tumble speed and the wall-climb height are still estimates (listed as **inferred** in `docs/formats.md`) |
 
+## In the browser (WebGPU)
+
+```sh
+web/build.sh                  # wasm client + data packs from your install into web/dist
+python3 web/dist/serve.py     # http://localhost:8080 (WebGPU needs localhost or HTTPS)
+```
+
+`web/` builds the same game for the browser. `gunz-pack` plays a short traced match on every
+map and keeps only the files those matches read. The result is one shared pack (characters,
+weapons, effects, sounds; about 27 MB gzipped instead of the 1.6 GB install) plus one pack per
+map (3-14 MB). The page fetches the shared pack and the wasm module (7 MB brotli) right away
+and a map's pack only once you pick that map. Packs are cached for good by their CRC.
+Offline only for now: no LAN, profile not saved, and the menu is a small HTML form (map, mode,
+bots, character). `web/dist` holds retail bytes, so serve it to yourself, never publicly.
+
 ## More tools
 
 ```sh

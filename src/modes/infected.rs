@@ -151,11 +151,10 @@ pub(super) fn spread(
         if *seed == 0 {
             // like the quest roll: `GUNZ_SEED=N` fixes it, otherwise the clock; small seeds
             // give alike first xorshift outputs, so scramble
-            let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
             let s: u32 = std::env::var("GUNZ_SEED")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| clock.map_or(1, |t| t.subsec_nanos()));
+                .unwrap_or_else(|| crate::profile::wall().subsec_nanos().max(1));
             *seed = s.wrapping_mul(0x9E37_79B1) | 1;
         }
         if !alive.is_empty() {

@@ -336,7 +336,8 @@ struct Cached {
     life: f32,
 }
 
-/// The effect loader borrows its VFS for as long as it lives, so combat mounts its own.
+/// The effect loader borrows its VFS for as long as it lives, so combat keeps a copy (the index
+/// and a shared reference to any in-memory files).
 static EFFECT_VFS: OnceLock<Vfs> = OnceLock::new();
 
 #[derive(Resource)]
@@ -361,17 +362,7 @@ fn init_fx(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let root = level
-        .vfs
-        .archives
-        .iter()
-        .map(|a| &a.path)
-        .min_by_key(|p| p.components().count())
-        .and_then(|p| p.parent())
-        .expect("no archives mounted");
-    let vfs = EFFECT_VFS.get_or_init(|| {
-        Vfs::mount(root).unwrap_or_else(|e| panic!("mount {}: {e}", root.display()))
-    });
+    let vfs = EFFECT_VFS.get_or_init(|| level.vfs.clone());
     let mut texture = |name: &str| {
         let bytes = vfs
             .read(&format!("sfx/{name}"))

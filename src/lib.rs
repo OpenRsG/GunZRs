@@ -13,6 +13,7 @@ pub mod elu;
 pub mod game;
 pub mod hud;
 pub mod item;
+pub mod killcam;
 pub mod level;
 pub mod map;
 pub mod melee;

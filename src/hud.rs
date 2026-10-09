@@ -22,6 +22,8 @@ use bevy::{
 };
 use std::collections::VecDeque;
 
+mod fx;
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
@@ -30,6 +32,7 @@ impl Plugin for HudPlugin {
             .init_resource::<Feed>()
             .init_resource::<Hurt>()
             .init_resource::<Shake>()
+            .add_plugins(fx::plugin)
             .add_systems(
                 Update,
                 (
@@ -579,7 +582,27 @@ fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<C
                     Show::Death,
                     Visibility::Hidden,
                     overlay(Color::srgba(0.3, 0.0, 0.0, 0.55)),
-                    children![label(Label::Death, 40.0, WHITE)]
+                    children![(
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: px(14),
+                            ..default()
+                        },
+                        children![
+                            label(Label::Death, 40.0, WHITE),
+                            (
+                                fx::ReportText,
+                                Text::new(""),
+                                TextFont::from_font_size(20.0),
+                                TextColor(Color::srgb(1.0, 0.8, 0.8)),
+                                TextLayout {
+                                    justify: Justify::Center,
+                                    ..default()
+                                },
+                            ),
+                        ],
+                    )]
                 ),
                 (
                     Show::Board,

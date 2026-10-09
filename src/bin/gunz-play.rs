@@ -15,6 +15,10 @@
 //! difficulty), `--sens X` (mouse sensitivity, 1 = default), `--mode MODE`, `--time-limit
 //! SECONDS` and `--kill-limit N` (0 = none; the defaults are `gametypecfg.xml`'s, none in
 //! headless runs), `--map NAME` (with no MAP: preselect it in the menu).
+//! TOGGLES (also in the pause menu, saved in the profile as `opt_NAME=0|1`; a flag overrides the
+//! profile for this run): `--kill-sounds`/`--no-kill-sounds` (default on), `--hit-sound` (plays
+//! `<profile dir>/custom/hitsound.wav`, default off), `--static-spread` (off), `--team-bars` (on),
+//! `--screen-blood` (on), `--killcam` (on); each has a `--no-` form.
 //! MODE is `dm` (deathmatch), `tdm` (team deathmatch), `gladiator` / `team-gladiator` (melee
 //! weapons only), `elimination` (team rounds, no respawn until the round ends), `assassinate`
 //! (rounds, one VIP per team), `duel` (one-on-one rounds, the winner stays, the rest queue and
@@ -85,7 +89,7 @@ use gunz::{
     menu::{self, Config, Mode, Page, take_arg},
     modes::DieAt,
     mrs::Vfs,
-    profile::Profile,
+    profile::{OPTS, Profile, opt_mut},
     quest::{Catalog, Quest},
     session::{EXIT_AGAIN, EXIT_MENU, PauseAt, Rules, StartVitals},
     view::{self, SCALE, Shot, to_bevy},
@@ -157,7 +161,7 @@ fn main() -> AppExit {
     let usage = || {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--outfit N] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--sens X] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
+             [--bots-ahead M] [--skill 0..1] [--sens X] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
@@ -198,6 +202,17 @@ fn main() -> AppExit {
     ) else {
         return usage();
     };
+    // `--NAME` / `--no-NAME` override the profile's pause-menu toggles for this run only.
+    let mut toggles = vec![];
+    for (i, (key, _)) in OPTS.iter().enumerate() {
+        let flag = key.replace('_', "-");
+        for (f, on) in [(format!("--{flag}"), true), (format!("--no-{flag}"), false)] {
+            if let Some(at) = args.iter().position(|a| *a == f) {
+                args.remove(at);
+                toggles.push((i, on));
+            }
+        }
+    }
     let mut config = match Config::parse(&mut args, shot.is_some()) {
         Ok(c) => c,
         Err(e) => {
@@ -332,9 +347,16 @@ fn main() -> AppExit {
             loadout: config.loadout.clone(),
             outfit: config.outfit,
         })
-        .insert_resource(Settings {
-            sensitivity,
-            ..default()
+        .insert_resource({
+            let mut s = Settings {
+                sensitivity,
+                ..default()
+            };
+            Profile::open(headless).apply(&mut s);
+            for &(i, on) in &toggles {
+                *opt_mut(&mut s, i) = on;
+            }
+            s
         })
         .insert_resource(rules)
         .insert_resource(BotCount(bots))

@@ -8,7 +8,7 @@
 use crate::{
     actor::{ActorData, DEFAULT_LOADOUT},
     clan::Clan,
-    game::{Killed, Player, QuestLoot, Reward, Vitals},
+    game::{Killed, Player, QuestLoot, Reward, Settings, Vitals},
     level::Level,
     menu::Mode,
     mrs::Vfs,
@@ -76,6 +76,32 @@ pub fn result_reward(headline: &str) -> (u32, u32) {
     }
 }
 
+/// The `Settings` bools the pause menu toggles: profile key (also the `--KEY`/`--no-KEY` flag
+/// with `_` as `-`) and label. Order = [`opt_mut`]. `hit_sound` plays
+/// `<profile dir>/custom/hitsound.wav` ([`Profile::hitsound_path`]).
+pub const OPTS: [(&str, &str); 6] = [
+    ("kill_sounds", "Kill sounds"),
+    ("hit_sound", "Hit sound"),
+    ("static_spread", "Fixed spread"),
+    ("team_bars", "Team bars"),
+    ("screen_blood", "Screen blood"),
+    ("killcam", "Killcam"),
+];
+
+pub fn opt_mut(s: &mut Settings, i: usize) -> &mut bool {
+    [
+        &mut s.kill_sounds,
+        &mut s.hit_sound,
+        &mut s.static_spread,
+        &mut s.team_bars,
+        &mut s.screen_blood,
+        &mut s.killcam,
+    ]
+    .into_iter()
+    .nth(i)
+    .unwrap()
+}
+
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Profile {
     pub name: String,
@@ -97,6 +123,8 @@ pub struct Profile {
     pub rented: BTreeMap<u32, u64>,
     /// The offline clan (`clan.rs`); `None` = not in one.
     pub clan: Option<Clan>,
+    /// The pause-menu toggles ([`OPTS`] order), saved as `opt_NAME=0|1`.
+    pub opts: [bool; OPTS.len()],
     /// Where [`Profile::save`] writes; `None` = throwaway.
     path: Option<PathBuf>,
 }
@@ -120,6 +148,7 @@ impl Profile {
             quest_items: BTreeMap::new(),
             medals: 0,
             rented: BTreeMap::new(),
+            opts: std::array::from_fn(|i| *opt_mut(&mut Settings::default(), i)),
             clan: None,
             path: None,
         }
@@ -191,6 +220,9 @@ impl Profile {
                 .collect::<Vec<_>>()
                 .join(","),
         );
+        for (o, on) in OPTS.iter().zip(self.opts) {
+            text += &format!("opt_{}={}\n", o.0, on as u8);
+        }
         if let Some(c) = &self.clan {
             text += &format!("clan={}\n", c.to_text());
         }
@@ -262,6 +294,10 @@ impl Profile {
                     }
                 }
                 "clan" => p.clan = Some(Clan::parse(v)?),
+                k if k.starts_with("opt_") => {
+                    let i = OPTS.iter().position(|o| o.0 == &k[4..]);
+                    p.opts[i.ok_or(format!("unknown key {k:?}"))?] = num::<u8>(k, v)? != 0;
+                }
                 _ => return Err(format!("unknown key {k:?}")),
             }
         }
@@ -280,6 +316,18 @@ impl Profile {
             .and_then(|()| fs::rename(&tmp, path));
         if let Err(e) = done {
             eprintln!("profile: cannot save {}: {e}", path.display());
+        }
+    }
+
+    /// `<profile dir>/custom/hitsound.wav`, the player's own hit sound (`None`: throwaway profile).
+    pub fn hitsound_path(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.parent()?.join("custom/hitsound.wav"))
+    }
+
+    /// Copies the saved toggles into `s`.
+    pub fn apply(&self, s: &mut Settings) {
+        for (i, &on) in self.opts.iter().enumerate() {
+            *opt_mut(s, i) = on;
         }
     }
 
@@ -561,6 +609,13 @@ mod tests {
         let mut back = Profile::parse(&text).unwrap();
         back.path = p.path.clone();
         assert_eq!(back, p);
+        let mut p = Profile::new();
+        p.opts = [false, true, true, false, false, true];
+        let q = Profile::parse(&p.to_text()).unwrap();
+        assert!(p.to_text().contains("opt_hit_sound=1\n") && q.opts == p.opts);
+        let mut s = Settings::default();
+        q.apply(&mut s);
+        assert!(!s.kill_sounds && s.hit_sound && s.static_spread && !s.team_bars && s.killcam);
         assert!(Profile::parse("bogus=1").is_err());
         assert!(Profile::parse("equipped=1,2").is_err());
         assert!(Profile::parse("clan=Phoenix|1|2|3").is_err());

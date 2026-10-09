@@ -9,6 +9,7 @@ use crate::{
     game::{Frozen, Hold, Player, Score, Settings, Team, Vitals},
     menu::{Art, Mode, button, heading, hover, panel},
     modes::{Berserker, ModesPlugin, Phase, Round},
+    profile::{OPTS, Profile, opt_mut},
     view::Shot,
 };
 use bevy::{
@@ -339,9 +340,15 @@ struct SensText;
 enum Act {
     Resume,
     Sens(i32),
+    /// Toggles `profile::OPTS[i]`.
+    Opt(usize),
     Menu,
     Again,
     Quit,
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "ON" } else { "OFF" }
 }
 
 /// Sensitivity steps: quarters of the default.
@@ -361,6 +368,8 @@ fn panels(
     pause: Query<Entity, With<PauseUi>>,
     end: Query<Entity, With<EndUi>>,
     mut sens: Query<&mut Text, With<SensText>>,
+    opts: Query<(&Act, &Children)>,
+    mut texts: Query<&mut Text, Without<SensText>>,
 ) {
     let (Some(art), Ok(camera)) = (art, camera.single()) else {
         return;
@@ -377,6 +386,14 @@ fn panels(
         _ => {}
     }
     if settings.is_changed() {
+        let mut s = settings.clone();
+        for (a, kids) in &opts {
+            if let (Act::Opt(i), Some(&k)) = (a, kids.first()) {
+                if let Ok(mut t) = texts.get_mut(k) {
+                    t.0 = on_off(*opt_mut(&mut s, *i)).into();
+                }
+            }
+        }
         for mut t in &mut sens {
             t.0 = sens_text(&settings);
         }
@@ -441,6 +458,40 @@ fn spawn_pause(commands: &mut Commands, art: &Art, camera: Entity, settings: &Se
                         ));
                         s.spawn(button(art, 34.0, 30.0, ">", 16.0, Act::Sens(1)));
                     });
+                    p.spawn(Node {
+                        flex_wrap: FlexWrap::Wrap,
+                        justify_content: JustifyContent::Center,
+                        width: px(360),
+                        row_gap: px(4),
+                        ..default()
+                    })
+                    .with_children(|g| {
+                        let mut s = settings.clone();
+                        for (i, (_, label)) in OPTS.iter().enumerate() {
+                            g.spawn(Node {
+                                width: px(180),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::SpaceBetween,
+                                padding: UiRect::horizontal(px(4)),
+                                ..default()
+                            })
+                            .with_children(|c| {
+                                c.spawn((
+                                    Text::new(*label),
+                                    TextFont::from_font_size(16.0),
+                                    TextColor(Color::WHITE),
+                                ));
+                                c.spawn(button(
+                                    art,
+                                    48.0,
+                                    26.0,
+                                    on_off(*opt_mut(&mut s, i)),
+                                    14.0,
+                                    Act::Opt(i),
+                                ));
+                            });
+                        }
+                    });
                     p.spawn(button(art, 300.0, 44.0, "RETURN TO MENU", 20.0, Act::Menu));
                     p.spawn(button(art, 300.0, 44.0, "QUIT", 20.0, Act::Quit));
                 });
@@ -485,6 +536,7 @@ fn spawn_end(commands: &mut Commands, art: &Art, camera: Entity, headline: &str)
 fn buttons(
     clicks: Query<(&Interaction, &Act), Changed<Interaction>>,
     mut settings: ResMut<Settings>,
+    mut profile: Option<ResMut<Profile>>,
     mut commands: Commands,
     mut vtime: ResMut<Time<Virtual>>,
     mut exit: MessageWriter<AppExit>,
@@ -495,6 +547,13 @@ fn buttons(
         }
         match *a {
             Act::Resume => freeze(&mut commands, &mut vtime, false),
+            Act::Opt(i) => {
+                let on = !*opt_mut(&mut settings, i);
+                *opt_mut(&mut settings, i) = on;
+                if let Some(p) = profile.as_mut() {
+                    p.opts[i] = on;
+                }
+            }
             Act::Sens(d) => {
                 let unit = Settings::default().sensitivity;
                 let quarters = (settings.sensitivity / unit * 4.0).round() + d as f32;

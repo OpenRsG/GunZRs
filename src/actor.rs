@@ -116,7 +116,7 @@ const DOUBLE_TAP: f32 = 0.3;
 pub const WALL_GRACE: f32 = 0.15;
 const CAM_DIST: f32 = 3.0;
 /// Radius of the sphere the camera sweeps, so it stays clear of walls.
-const CAM_RADIUS: f32 = 0.25;
+pub const CAM_RADIUS: f32 = 0.25;
 /// Height of the player's camera pivot (the aim ray starts here), above the head.
 const CAM_HEIGHT: f32 = 1.75;
 const CAM_SHOULDER: f32 = 0.35;

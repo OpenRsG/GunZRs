@@ -32,6 +32,10 @@ pub const HIT_RADIUS: f32 = 0.35;
 pub const HIT_HEIGHT: f32 = 1.8;
 /// Eye height above the feet (same as the actor controller's).
 pub(crate) const EYE: f32 = 1.55;
+/// A bullet this high above a human's feet hit the head (the top 0.3 m of the 1.8 m capsule;
+/// **inferred**: retail shows a HEADSHOT banner and counts headshot kills, the data has no
+/// head zone).
+const HEAD_FROM: f32 = 1.5;
 /// Hitscan reach (the retail guns have no range attribute; maps are smaller than this).
 const GUN_RANGE: f32 = 200.0;
 /// Pellets per shotgun shot. *Inferred*: zitem.xml has no pellet count, but a 13 damage shotgun
@@ -938,6 +942,7 @@ pub(crate) struct Wounded {
     pub ap: f32,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_damage(
     mut msgs: MessageReader<Damage>,
     data: Res<ActorData>,
@@ -948,6 +953,7 @@ fn apply_damage(
     sides: Query<(Option<&Team>, Has<Bot>)>,
     mods: Query<&Mods>,
     humans: Query<(), Or<(With<Player>, With<Bot>)>>,
+    bodies: Query<(&GlobalTransform, Option<&HitShape>)>,
     mut killed: MessageWriter<Killed>,
     mut wounded: MessageWriter<Wounded>,
     time: Res<Time>,
@@ -1014,16 +1020,26 @@ fn apply_damage(
         {
             s.kills += 1;
         }
+        let head = data
+            .items
+            .get(d.item)
+            .and_then(|i| i.weapon.as_ref())
+            .is_some_and(|w| is_gun(w.kind))
+            && bodies
+                .get(d.target)
+                .is_ok_and(|(g, hs)| hs.is_none() && d.point.y - g.translation().y >= HEAD_FROM);
         info!(
-            "t={:.2} kill: {} killed {}",
+            "t={:.2} kill: {} killed {}{}",
             time.elapsed_secs(),
             name(d.attacker),
-            name(d.target)
+            name(d.target),
+            if head { " (headshot)" } else { "" }
         );
         killed.write(Killed {
             victim: d.target,
             killer: d.attacker,
             item: d.item,
+            head,
         });
     }
 }

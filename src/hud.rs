@@ -22,6 +22,7 @@ use bevy::{
 };
 use std::collections::VecDeque;
 
+mod feed;
 mod fx;
 
 pub struct HudPlugin;
@@ -29,10 +30,9 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Marks>()
-            .init_resource::<Feed>()
             .init_resource::<Hurt>()
             .init_resource::<Shake>()
-            .add_plugins(fx::plugin)
+            .add_plugins((fx::plugin, feed::plugin))
             .add_systems(
                 Update,
                 (
@@ -42,6 +42,8 @@ impl Plugin for HudPlugin {
                         spawn_ui.run_if(not(any_with_component::<Root>)),
                         track,
                         update,
+                        crate::menu::fit,
+                        touch_layout.run_if(resource_exists::<crate::game::TouchScreen>),
                         earned,
                         indicators,
                     )
@@ -81,10 +83,6 @@ struct Marks {
     notice: (f32, String),
 }
 
-/// Kill feed lines with their expiry (`Time::elapsed_secs`).
-#[derive(Resource, Default)]
-struct Feed(Vec<(f32, String)>);
-
 /// Recent hits on the player: seconds left, the attacker and where the hit came from.
 #[derive(Resource, Default)]
 struct Hurt(Vec<(f32, Entity, Vec3)>);
@@ -104,8 +102,6 @@ struct Decals {
     seed: u32,
 }
 
-const FEED_LIFE: f32 = 6.0;
-const FEED_LINES: usize = 6;
 const BOARD_ROWS: usize = 12;
 const MAX_DECALS: usize = 128;
 /// Bullet hole size (m) and blood-mark size range (m) (**inferred**).
@@ -216,6 +212,21 @@ struct Flash;
 #[derive(Component)]
 struct LowHp;
 
+/// The weapon name and ammo panel (bottom right; bottom centre on a touch screen).
+#[derive(Component)]
+struct WeaponBox;
+
+/// On a touch screen the fire button covers the bottom right corner: the weapon panel moves to
+/// the bottom centre.
+fn touch_layout(mut panel: Query<(&mut Node, &mut UiTransform), With<WeaponBox>>) {
+    for (mut node, mut tf) in &mut panel {
+        if node.right != Val::Auto {
+            (node.right, node.left, node.bottom) = (Val::Auto, percent(50), px(8));
+            tf.translation = Val2::new(percent(-50), px(0));
+        }
+    }
+}
+
 /// Damage-direction arc `i` (index into [`Hurt`]).
 #[derive(Component)]
 struct Indicator(usize);
@@ -227,7 +238,6 @@ enum Label {
     Ap,
     Ammo,
     Weapon,
-    Feed,
     Death,
     Score,
     Names,
@@ -520,6 +530,8 @@ fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<C
                     children![label(Label::Clock, 22.0, WHITE)],
                 ),
                 (
+                    WeaponBox,
+                    UiTransform::default(),
                     Node {
                         position_type: PositionType::Absolute,
                         right: px(24),
@@ -553,21 +565,6 @@ fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<C
                             ],
                         ),
                     ],
-                ),
-                (
-                    Node {
-                        position_type: PositionType::Absolute,
-                        right: px(16),
-                        top: px(16),
-                        ..default()
-                    },
-                    children![(
-                        label(Label::Feed, 18.0, WHITE),
-                        TextLayout {
-                            justify: Justify::Right,
-                            ..default()
-                        },
-                    )],
                 ),
                 (
                     Node {
@@ -703,9 +700,7 @@ fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<C
 /// Folds this frame's messages into the transient overlays and the kill feed.
 #[allow(clippy::too_many_arguments)]
 fn track(
-    time: Res<Time>,
     real: Res<Time<Real>>,
-    data: Res<ActorData>,
     mut damage: MessageReader<Damage>,
     mut killed: MessageReader<Killed>,
     mut blasts: MessageReader<Blast>,
@@ -714,7 +709,6 @@ fn track(
     transforms: Query<&GlobalTransform>,
     names: Query<&Name>,
     mut marks: ResMut<Marks>,
-    mut feed: ResMut<Feed>,
     mut hurt: ResMut<Hurt>,
     mut shake: ResMut<Shake>,
 ) {
@@ -762,28 +756,13 @@ fn track(
             shake.0 = shake.0.max(s.trauma * near);
         }
     }
-    let now = time.elapsed_secs();
     for k in killed.read() {
-        let name = |e| names.get(e).map_or("?", |n| n.as_str());
-        let line = if k.killer == k.victim {
-            format!("{} suicide", name(k.victim))
-        } else {
-            let weapon = data
-                .items
-                .get(k.item)
-                .and_then(|i| i.name.as_deref())
-                .unwrap_or("?");
-            format!("{} [{weapon}] {}", name(k.killer), name(k.victim))
-        };
-        feed.0.push((now + FEED_LIFE, line));
         if players.contains(k.killer) && k.killer != k.victim {
+            let name = names.get(k.victim).map_or("?", |n| n.as_str());
             marks.kill = 0.8;
-            marks.notice = (2.0, format!("You killed {}", name(k.victim)));
+            marks.notice = (2.0, format!("You killed {name}"));
         }
     }
-    feed.0.retain(|(until, _)| *until > now);
-    let extra = feed.0.len().saturating_sub(FEED_LINES);
-    feed.0.drain(..extra);
 }
 
 /// The red arcs around the crosshair pointing at whoever hurt the player, relative to the
@@ -911,7 +890,6 @@ fn set(text: &mut Text, s: String) {
 fn update(
     data: Res<ActorData>,
     marks: Res<Marks>,
-    feed: Res<Feed>,
     keys: Res<ButtonInput<KeyCode>>,
     clock: Option<Res<Clock>>,
     player: Query<(&Vitals, &Loadout, &Score, Option<&Dead>, Option<&Status>), With<Player>>,
@@ -926,7 +904,6 @@ fn update(
         (With<LowHp>, Without<Fill>, Without<Show>),
     >,
     real: Res<Time<Real>>,
-    war: Option<Res<crate::clan::ClanWar>>,
 ) {
     let Ok((vitals, loadout, score, dead, status)) = player.single() else {
         return;
@@ -953,14 +930,6 @@ fn update(
             Label::Weapon => item
                 .and_then(|i| i.name.clone())
                 .unwrap_or_else(|| format!("item {}", slot.item)),
-            // a clan war draws its own feed with emblems (`clan.rs`)
-            Label::Feed if war.is_some() => String::new(),
-            Label::Feed => feed
-                .0
-                .iter()
-                .map(|(_, s)| s.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
             Label::Death => dead.map_or(String::new(), |d| {
                 if d.respawn >= HOLD {
                     "You died - waiting to rejoin".to_owned()

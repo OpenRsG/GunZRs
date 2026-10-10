@@ -723,6 +723,7 @@ mod tests {
                     victim,
                     killer,
                     item: 0,
+                    head: false,
                 });
         };
         kill(player, bot);

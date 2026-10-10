@@ -128,17 +128,20 @@ const HELD: [Ctl; 10] = [
     Ctl::Key(KeyCode::Tab),
     Ctl::Key(KeyCode::Escape),
 ];
-/// Taps after the held controls, cleared once read.
+/// Taps after the held controls, cleared once read; then the aim assist strength (0..=1).
 const NEXT_WEAPON: usize = 12;
 const DASH: usize = 13;
+const AIM_ASSIST: usize = 14;
 
-/// The page's touch controls (`globalThis.gunzTouch`, a `Float32Array(14)`; absent without a
-/// touch screen): `[0..2]` is the look drag in pixels since the last frame, added to the mouse
-/// motion, then [`HELD`], next weapon (a scroll step) and dash. Dash taps the stick's direction
-/// (forward if none) twice on consecutive frames, which `drive` takes as a tumble. Runs right
-/// after Bevy's input systems, so a touch reaches the game in the same frame as a key would.
-/// Also tells the page when the game pauses or resumes (`globalThis.gunzPaused(bool)`): it
-/// hides the controls so taps reach the pause and end menus.
+/// The page's touch controls (`globalThis.gunzTouch`, a `Float32Array(15)`; absent without a
+/// touch screen): `[0..2]` is the look drag in pixels since the last frame, then [`HELD`], next
+/// weapon (a scroll step), dash and the aim assist strength (`Settings::aim_assist`). Dash taps
+/// the stick's direction (forward if none) twice on consecutive frames, which `drive` takes as a
+/// tumble. The look drag replaces the mouse motion: the browser also reports every finger's
+/// movement (the stick's too) as mouse motion. Runs right after Bevy's input systems, so a touch
+/// reaches the game in the same frame as a key would. Also tells the page when the game pauses
+/// or resumes (`globalThis.gunzPaused(bool)`): it hides the controls so taps reach the pause and
+/// end menus.
 #[allow(clippy::too_many_arguments)]
 fn touch(
     mut keys: ResMut<ButtonInput<KeyCode>>,
@@ -146,13 +149,19 @@ fn touch(
     mut motion: ResMut<AccumulatedMouseMotion>,
     mut scroll: ResMut<AccumulatedMouseScroll>,
     frozen: Option<Res<Frozen>>,
+    settings: Option<ResMut<crate::game::Settings>>,
     mut down: Local<[bool; HELD.len()]>,
     mut dash: Local<(u8, usize)>,
     mut paused: Local<bool>,
+    touch_screen: Option<Res<crate::game::TouchScreen>>,
+    mut commands: Commands,
 ) {
     let Ok(t) = global("gunzTouch").dyn_into::<Float32Array>() else {
         return;
     };
+    if touch_screen.is_none() {
+        commands.insert_resource(crate::game::TouchScreen);
+    }
     let v = t.to_vec();
     if v.len() <= DASH {
         return;
@@ -167,7 +176,13 @@ fn touch(
             _ => {}
         }
     }
-    motion.delta += Vec2::new(v[0], v[1]);
+    motion.delta = Vec2::new(v[0], v[1]);
+    let aim = v.get(AIM_ASSIST).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+    if let Some(mut s) = settings
+        && s.aim_assist != aim
+    {
+        s.aim_assist = aim;
+    }
     if v[NEXT_WEAPON] != 0.0 {
         scroll.delta.y -= 1.0;
     }

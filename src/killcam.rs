@@ -136,6 +136,7 @@ fn killcam(
     mut tag: Query<(&mut Node, &mut Visibility), With<Tag>>,
     mut cam: Local<Option<Cam>>,
     mut seed: Local<u32>,
+    ui: Res<UiScale>,
 ) {
     let Ok((me, intent, dead)) = player.single() else {
         return;
@@ -281,7 +282,7 @@ fn killcam(
     if *vis != want {
         *vis = want;
     }
-    if let Some(p) = at {
+    if let Some(p) = at.map(|p| p / ui.0) {
         node.left = px(p.x - TAG.x / 2.0);
         node.top = px((p.y - TAG.y + 20.0).max(4.0));
     }

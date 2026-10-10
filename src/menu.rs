@@ -1615,9 +1615,9 @@ fn preview(
     commands.entity(parent).add_child(model.root);
 }
 
-/// Shrinks the menu to fit windows smaller than its 1280 x 720 layout (phones, small browser
-/// windows).
-fn fit(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>) {
+/// Shrinks the menu and the match HUD to fit windows smaller than their 1280 x 720 layout
+/// (phones, small browser windows). UI placed at a projected 3D point divides by the scale.
+pub fn fit(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>) {
     let Ok(w) = windows.single() else { return };
     let s = (w.width() / 1280.0).min(w.height() / 720.0).min(1.0);
     if s > 0.0 && scale.0 != s {

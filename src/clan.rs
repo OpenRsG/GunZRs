@@ -6,8 +6,7 @@
 //! names on the HUD header, kill feed and scoreboard, clan points settled when the match ends.
 
 use crate::{
-    actor::ActorData,
-    game::{Killed, Player, Reward, Team},
+    game::{Player, Reward, Team},
     level::Level,
     menu::{Art, Mode, Page, State, button, heading, panel},
     mrs::Vfs,
@@ -938,11 +937,12 @@ pub struct ClanWar {
     next: [usize; 2],
 }
 
-/// An actor of the war: its side and its name without the clan.
+/// An actor of the war: its side and its name without the clan (the HUD's kill feed shows the
+/// side's emblem by it).
 #[derive(Component)]
-struct Member {
-    side: usize,
-    name: String,
+pub(crate) struct Member {
+    pub side: usize,
+    pub name: String,
 }
 
 #[derive(Component)]
@@ -954,35 +954,21 @@ struct Strip;
 #[derive(Component)]
 struct Points(usize);
 
-#[derive(Component)]
-struct FeedBox;
-
-/// Recent kills: seconds they expire at, the killer's side and name, weapon (`None` = suicide),
-/// the victim's side and name.
-#[derive(Resource, Default)]
-struct FeedLog(Vec<(f32, (usize, String), Option<String>, (usize, String))>);
-
-const FEED_LIFE: f32 = 6.0;
-const FEED_LINES: usize = 6;
-
 pub struct ClanPlugin;
 
 impl Plugin for ClanPlugin {
     fn build(&self, app: &mut App) {
         let war = |rules: Option<Res<Rules>>| rules.is_some_and(|r| r.mode == Mode::ClanWar);
-        app.init_resource::<FeedLog>()
-            .add_systems(Startup, setup.run_if(war))
-            .add_systems(
-                Update,
-                (
-                    tag,
-                    overlay.run_if(not(any_with_component::<Overlay>)),
-                    strip,
-                    feed,
-                    settle,
-                )
-                    .run_if(resource_exists::<ClanWar>),
-            );
+        app.add_systems(Startup, setup.run_if(war)).add_systems(
+            Update,
+            (
+                tag,
+                overlay.run_if(not(any_with_component::<Overlay>)),
+                strip,
+                settle,
+            )
+                .run_if(resource_exists::<ClanWar>),
+        );
     }
 }
 
@@ -1137,18 +1123,6 @@ fn overlay(
                 s.spawn(strip(&war.sides[0], 0));
                 s.spawn(strip(&war.sides[1], 1));
             });
-            r.spawn((
-                FeedBox,
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(16),
-                    top: px(84),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::FlexEnd,
-                    row_gap: px(3),
-                    ..default()
-                },
-            ));
         });
 }
 
@@ -1183,69 +1157,6 @@ fn strip(
             t.0 = text;
         }
     }
-}
-
-/// The emblem kill feed: `[emblem] killer  [weapon]  [emblem] victim`.
-#[allow(clippy::too_many_arguments)]
-fn feed(
-    mut commands: Commands,
-    time: Res<Time>,
-    data: Res<ActorData>,
-    art: Res<ClanArt>,
-    war: Res<ClanWar>,
-    mut killed: MessageReader<Killed>,
-    members: Query<&Member>,
-    boxes: Query<Entity, With<FeedBox>>,
-    mut log: ResMut<FeedLog>,
-) {
-    let now = time.elapsed_secs();
-    let who = |e| members.get(e).map(|m| (m.side, m.name.clone())).ok();
-    let mut dirty = false;
-    for k in killed.read() {
-        let (Some(killer), Some(victim)) = (who(k.killer), who(k.victim)) else {
-            continue;
-        };
-        let weapon = (k.killer != k.victim).then(|| {
-            data.items
-                .get(k.item)
-                .and_then(|i| i.name.clone())
-                .unwrap_or_else(|| "?".into())
-        });
-        log.0.push((now + FEED_LIFE, killer, weapon, victim));
-        dirty = true;
-    }
-    let before = log.0.len();
-    log.0.retain(|l| l.0 > now);
-    let extra = log.0.len().saturating_sub(FEED_LINES);
-    log.0.drain(..extra);
-    if !dirty && log.0.len() == before {
-        return;
-    }
-    let Ok(feed) = boxes.single() else { return };
-    commands.entity(feed).despawn_children().with_children(|f| {
-        for (_, killer, weapon, victim) in &log.0 {
-            f.spawn(Node {
-                align_items: AlignItems::Center,
-                column_gap: px(6),
-                ..default()
-            })
-            .with_children(|r| {
-                let s = &war.sides[killer.0];
-                r.spawn(mark(&art, s.emblem, s.bg, 22.0));
-                match weapon {
-                    Some(w) => {
-                        r.spawn(line(format!("{} [{w}]", killer.1), 18.0, Color::WHITE));
-                        let s = &war.sides[victim.0];
-                        r.spawn(mark(&art, s.emblem, s.bg, 22.0));
-                        r.spawn(line(&victim.1, 18.0, Color::WHITE));
-                    }
-                    None => {
-                        drop(r.spawn(line(format!("{} suicide", killer.1), 18.0, Color::WHITE)))
-                    }
-                }
-            });
-        }
-    });
 }
 
 /// The match is over and its result paid: records the war in the clan (Elo points, win/loss) and

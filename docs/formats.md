@@ -1147,7 +1147,17 @@ the player characters and is not used by `gunz-play`.
 - **BGM**: see "Music" below (no data file maps a map or mode to a track; the choice is **inferred**).
 - **Visual**: bullet-hole / blood-mark decals from `sfx/*bulletmark*`, `sfx/blood-mark*` at the
   collision hit point along its normal; red damage-direction arcs; red edge vignette below low HP
-  that pulses faster as health falls; hit marker, kill feed and centre kill notice.
+  that pulses faster as health falls; hit marker and centre kill notice.
+- **Kill feed** (`src/hud/feed.rs`): one row per kill, newest at the bottom, sliding in and out:
+  killer, weapon icon, victim. The icons are the retail kill log's (`bitmapalias.xml`
+  `Ingame_KillLogArrow_0..14` = dagger, sword, blade, pistol, 2 pistols, revolver, 2 revolvers,
+  SMG, 2 SMGs, shotgun, rifle, machine gun, rocket, grenade, fall: 108 x 29 cells of
+  `ingame_01.png` from (0, 799), 4 per row, 109 x 30 apart); grenades of every kind and mines use
+  13, suicides 14. A gun kill whose last bullet hit at 1.5 m or more above the victim's feet is a
+  headshot (**inferred**: retail counts headshot kills and has the `Ingame_KillDirection_HeadShot`
+  banner, `ingame_00.png` (0, 596, 411 x 62), but no head zone in the data): the row gets a
+  HEAD SHOT tag cut from that banner, and the player's own headshot flashes the banner. Clan wars
+  add each side's emblem. LAN protocol 3 carries the headshot flag with each kill.
 - **Coverage** (headless run log): surface sets 35/35, voices 13/13, misc cues 16/16, zitem
   `snd_fire/reload/dryfire` 19/19 (`swing`, the one name without a file, is aliased to
   `blade_swing`: **inferred**, every other melee item and `animationevent.xml` `melee_attack` use

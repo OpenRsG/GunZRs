@@ -8,6 +8,8 @@ the game packs for good: the page asks for them as `?v=CRC`, so a changed pack h
 sent as gzip and cached for a day.
 localhost counts as a secure context, which WebGPU needs; another host needs HTTPS, e.g.
 `tailscale serve --bg --https=10000 http://127.0.0.1:8080` in front of this.
+`POST /log` prints the page's reports (errors, warnings and GPU details of the device it runs
+on, one line per request) to stderr: the way to see what went wrong on a phone or tablet.
 """
 import http.server, os, sys
 
@@ -51,6 +53,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", cache)
         self.end_headers()
         return f
+
+    def do_POST(self):
+        if self.path != "/log":
+            self.send_error(404)
+            return
+        n = min(int(self.headers.get("Content-Length") or 0), 8192)
+        line = self.rfile.read(n).decode("utf-8", "replace").replace("\n", " | ")
+        sys.stderr.write(f"page: {line}\n")
+        self.send_response(204)
+        self.end_headers()
+
+    def log_request(self, code="-", size="-"):
+        if self.path != "/log":
+            super().log_request(code, size)
 
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))

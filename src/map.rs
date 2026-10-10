@@ -45,6 +45,8 @@ pub struct Dummy {
 }
 
 pub struct Map {
+    /// VFS path of the `.rs` file, e.g. `maps/mansion/mansion.rs`.
+    pub rs: String,
     /// VFS directory holding the map, e.g. `maps/mansion/`.
     pub dir: String,
     pub materials: Vec<Material>,
@@ -197,6 +199,7 @@ pub fn load(vfs: &Vfs, rs_path: &str) -> io::Result<Map> {
     let (mut materials, dummies, objects) = read_xml(&String::from_utf8_lossy(&xml), &names)?;
     materials.push(Material::default());
     Ok(Map {
+        rs: rs_path.to_owned(),
         dir,
         materials,
         vertices,

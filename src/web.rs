@@ -103,9 +103,21 @@ pub struct WebPlugin;
 
 impl Plugin for WebPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, touch.after(InputSystems))
+        app.add_systems(PreUpdate, (touch.after(InputSystems), gpu_errors))
             .add_systems(Update, (ready, relock, raw_input))
             .add_systems(Last, exit);
+    }
+}
+
+/// GPU errors the page saw (`globalThis.gunzGpuErrors`, a count, and `gunzGpuError`, the last
+/// message): Safari hands them only to `uncapturederror` listeners, never to wgpu's handler,
+/// so bevy's error handling never hears of them there.
+fn gpu_errors(world: &mut World, mut seen: Local<f64>) {
+    let n = global("gunzGpuErrors").as_f64().unwrap_or(0.0);
+    if n > *seen {
+        *seen = n;
+        let what = global("gunzGpuError").as_string().unwrap_or_default();
+        crate::gfx::gpu_failed(world, &what);
     }
 }
 
@@ -130,7 +142,7 @@ const DASH: usize = 13;
 const AIM_ASSIST: usize = 14;
 
 /// The page's touch controls (`globalThis.gunzTouch`, a `Float32Array(15)`; absent without a
-/// touch screen): `[0..2]` is the look drag in pixels since the last frame, then [`HELD`],
+/// touch screen, or while the player uses a mouse and keyboard on one): `[0..2]` is the look drag in pixels since the last frame, then [`HELD`],
 /// pause, next weapon, dash and the aim assist strength (`Settings::aim_assist`). They hold
 /// actions in the [`Pad`], so they work whatever the keys are bound to. The look drag replaces
 /// the mouse motion: the browser also reports every finger's movement (the stick's too) as
@@ -150,6 +162,10 @@ fn touch(
     mut commands: Commands,
 ) {
     let Ok(t) = global("gunzTouch").dyn_into::<Float32Array>() else {
+        if touch_screen.is_some() {
+            commands.remove_resource::<crate::game::TouchScreen>();
+            *pad = Pad::default();
+        }
         return;
     };
     if touch_screen.is_none() {
@@ -243,12 +259,16 @@ fn raw_input(profile: Option<Res<Profile>>, mut sent: Local<Option<bool>>) {
 
 fn exit(mut exits: MessageReader<AppExit>) {
     if let Some(e) = exits.read().last() {
-        let code = match e {
+        leave(match e {
             AppExit::Success => 0,
-            AppExit::Error(c) => c.get(),
-        };
-        if let Ok(f) = global("gunzExit").dyn_into::<Function>() {
-            let _ = f.call1(&JsValue::NULL, &code.into());
-        }
+            AppExit::Error(c) => c.get().into(),
+        });
+    }
+}
+
+/// Hands the end of the game to the page (`globalThis.gunzExit(code)`).
+pub fn leave(code: i32) {
+    if let Ok(f) = global("gunzExit").dyn_into::<Function>() {
+        let _ = f.call1(&JsValue::NULL, &code.into());
     }
 }

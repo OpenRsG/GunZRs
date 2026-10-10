@@ -42,7 +42,7 @@ impl Plugin for HudPlugin {
                         panels::scores,
                         panels::banner,
                         crate::menu::fit_hud,
-                        panels::touch_layout.run_if(resource_exists::<crate::game::TouchScreen>),
+                        panels::touch_layout,
                         panels::earned,
                         indicators,
                     )

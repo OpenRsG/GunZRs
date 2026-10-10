@@ -551,6 +551,7 @@ mod tests {
             lm_uv: [0.0; 2],
         };
         let map = Map {
+            rs: String::new(),
             dir: String::new(),
             materials: Vec::new(),
             vertices: vec![

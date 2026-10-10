@@ -166,9 +166,11 @@ sudo tailscale serve --bg --https=10000 http://127.0.0.1:8090   # HTTPS on your 
 `web/` builds the same game for the browser. `gunz-pack` plays a short traced match on every
 map (and opens the game's menu) and keeps only the files those runs read. The result is one
 shared pack (characters, weapons, effects, sounds; about 40 MB gzipped instead of the 1.6 GB
-install) plus one pack per map (3-14 MB). The page fetches the shared pack and the wasm module
-(7 MB brotli) right away and a map's pack only once you pick that map. Packs are cached for
-good by their CRC. Clothes are too many to pack (hundreds of MB): every other file under
+install) plus one pack per map (3-14 MB, with the bots' path graph computed ahead, so a match
+starts without the seconds of path building). The page fetches the shared pack and the wasm
+module (7 MB brotli) right away and a map's pack only once you pick that map. Packs are cached
+for good by their CRC and the engine by its content hash, so a match start downloads nothing
+again. Clothes are too many to pack (hundreds of MB): every other file under
 `model/` is served on its own from `data/files/` and downloaded when the game reads it (a bot's
 outfit at the start of a match, a piece you browse to). The page opens on the game's own main
 menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS) behind a loading screen that
@@ -183,7 +185,12 @@ aim towards the visible enemy nearest the crosshair while you turn, move or shoo
 own; 0 = off), a floating or fixed stick and its dead zone, button size and opacity,
 left-handed layout, vibration, and a layout editor to drag each control anywhere and resize it.
 The menus and the match HUD shrink to fit windows smaller than 1280 x 720 (phones), and with
-touch controls the weapon and ammo panel moves to the bottom centre, clear of FIRE.
+touch controls the weapon and ammo panel moves to the bottom centre, clear of FIRE. A tablet
+with a keyboard or mouse switches to them at the first key or mouse use (the controls hide,
+the pointer locks for aiming) and back at the next touch. If the browser's WebGPU rejects
+something the GRAPHICS settings use (Safari reports such errors only to the page, which hands
+them on), the match drops to ORIGINAL and says so; `serve.py` prints what the page reports
+about errors and the device's GPU (`POST /log`), so a phone's problem shows up in its log.
 No LAN in the browser. `web/dist` holds retail bytes, so serve it only to your own devices (a
 tailnet-only `tailscale serve`, never `tailscale funnel`).
 

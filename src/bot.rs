@@ -19,7 +19,6 @@ use crate::{
         BOUNCE, FRAG_RADIUS, FRICTION, FUSE, Flashed, GRAVITY, SmokeCloud, THROW_DELAY, THROW_LIFT,
         THROW_SPEED, smoke_blocks,
     },
-    view::{SCALE, to_bevy},
 };
 use bevy::prelude::*;
 use std::f32::consts::{PI, TAU};
@@ -252,18 +251,7 @@ fn spawn_bots(
         return;
     }
     let points = level.spawn_points();
-    let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
-    for v in &level.map.vertices {
-        let p = Vec3::from(to_bevy(v.pos)) * SCALE;
-        (min, max) = (min.min(p), max.max(p));
-    }
-    let t = bevy::platform::time::Instant::now();
-    let nav = Nav::new(&col, min, max);
-    info!(
-        "bot nav: {} floor nodes in {:.2}s (map box {min} .. {max})",
-        nav.nodes.len(),
-        t.elapsed().as_secs_f32()
-    );
+    let nav = Nav::load_or_new(&level.vfs, &level.map, &col);
     spawner.commands.insert_resource(nav);
     spawner
         .commands

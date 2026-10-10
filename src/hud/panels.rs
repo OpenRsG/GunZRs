@@ -114,12 +114,20 @@ pub(super) struct WeaponBox;
 pub(super) struct Earned;
 
 /// On a touch screen the fire button covers the bottom right corner: the weapon panel moves to
-/// the bottom centre.
-pub(super) fn touch_layout(mut panel: Query<(&mut Node, &mut UiTransform), With<WeaponBox>>) {
+/// the bottom centre, and back when the player switches to mouse and keyboard.
+pub(super) fn touch_layout(
+    touch: Option<Res<crate::game::TouchScreen>>,
+    mut panel: Query<(&mut Node, &mut UiTransform), With<WeaponBox>>,
+) {
     for (mut node, mut tf) in &mut panel {
-        if node.right != Val::Auto {
-            (node.right, node.left, node.bottom) = (Val::Auto, percent(50), px(8));
-            tf.translation = Val2::new(percent(-50), px(0));
+        let centre = touch.is_some();
+        if (node.right == Val::Auto) != centre {
+            (node.right, node.left, node.bottom) = if centre {
+                (Val::Auto, percent(50), px(8))
+            } else {
+                (px(24), Val::Auto, px(24))
+            };
+            tf.translation = Val2::new(if centre { percent(-50) } else { px(0) }, px(0));
         }
     }
 }

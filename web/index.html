@@ -6,7 +6,7 @@
  <meta name="viewport"
   content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
  <title>GunZRs</title>
- <link rel="modulepreload" href="pkg/gunz-play.js">
+ <link rel="modulepreload" href="pkg/gunz-play.js?v=__BUILD__">
  <style>
   html,
   body {
@@ -40,23 +40,36 @@
    inset: 0;
    display: grid;
    place-items: center;
-   background: #0b0c10
+   background: radial-gradient(ellipse at 50% 30%, #241b11 0%, #0d0e12 55%, #060708 100%)
   }
 
+  /* every line keeps its height (status cut to one line, numbers in fixed-width digits), so
+     nothing below it moves while the text changes */
   .box {
-   background: #15171d;
-   border: 1px solid #333;
-   padding: 24px 28px;
-   width: min(520px, 90vw);
-   border-radius: 6px;
-   box-sizing: border-box
+   width: min(460px, 88vw);
+   font-variant-numeric: tabular-nums
   }
 
-  h1 {
-   margin: 0 0 16px;
-   font-size: 26px;
-   letter-spacing: 2px;
-   color: #e8c46a
+  .logo {
+   text-align: center;
+   font: 900 64px/1 system-ui, sans-serif;
+   letter-spacing: 12px;
+   padding-left: 12px;
+   background: linear-gradient(#ffe7a3, #e8c46a 55%, #9c7128);
+   -webkit-background-clip: text;
+   background-clip: text;
+   color: transparent;
+   filter: drop-shadow(0 4px 20px rgba(232, 196, 106, .22))
+  }
+
+  .sub {
+   text-align: center;
+   margin-top: 8px;
+   padding-left: 9px;
+   font-size: 12px;
+   font-weight: 600;
+   letter-spacing: 9px;
+   color: #7d828e
   }
 
   input {
@@ -83,36 +96,42 @@
    color: #f77 !important
   }
 
-  .item {
-   margin: 10px 0
-  }
-
-  .row {
+  .head {
    display: flex;
-   justify-content: space-between;
-   font-size: 13px;
-   color: #aaa;
-   margin-bottom: 4px
+   align-items: baseline;
+   gap: 12px;
+   height: 20px;
+   margin: 38px 0 10px
   }
 
-  .row b {
-   color: #ddd;
-   font-weight: 500
+  .head:has(.err) {
+   height: auto
   }
 
-  .item.active b {
+  #now {
+   flex: 1;
+   min-width: 0;
+   font-size: 14px;
+   color: #c9ccd4;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis
+  }
+
+  #now.err {
+   white-space: normal
+  }
+
+  #pct {
+   font-size: 15px;
+   font-weight: 700;
    color: #e8c46a
   }
 
-  .item.done .row span::after {
-   content: " \2713";
-   color: #8c8
-  }
-
   .bar {
-   height: 6px;
-   background: #2a2c33;
-   border-radius: 3px;
+   height: 4px;
+   background: rgba(255, 255, 255, .08);
+   border-radius: 2px;
    overflow: hidden;
    position: relative
   }
@@ -122,11 +141,61 @@
    height: 100%;
    width: 0;
    background: #e8c46a;
-   transition: width .15s
+   transition: width .2s
+  }
+
+  #total {
+   height: 8px;
+   border-radius: 4px
+  }
+
+  #total i {
+   background: linear-gradient(90deg, #a87b2c, #ffd77a);
+   box-shadow: 0 0 14px rgba(255, 215, 122, .45)
+  }
+
+  #items {
+   display: grid;
+   gap: 10px;
+   margin-top: 24px
+  }
+
+  .item {
+   display: grid;
+   grid-template-columns: 1fr 72px 96px;
+   align-items: center;
+   gap: 12px;
+   font-size: 12.5px;
+   color: #8a8f9c
+  }
+
+  .item b {
+   font-weight: 500;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis
+  }
+
+  .item span {
+   text-align: right;
+   white-space: nowrap
+  }
+
+  .item.active b {
+   color: #ece6d6
+  }
+
+  .item.done {
+   color: #6c717c
+  }
+
+  .item.done span::after {
+   content: " \2713";
+   color: #8c8
   }
 
   .item.done .bar i {
-   background: #8c8
+   background: #7fbf7f
   }
 
   /* an endless stripe for steps without a byte count; transform keeps it moving on the
@@ -146,16 +215,19 @@
    }
   }
 
-  #total {
-   height: 10px;
-   margin-top: 18px
-  }
+  @media (max-height: 460px) {
+   .logo {
+    font-size: 42px
+   }
 
-  #now {
-   margin-top: 10px;
-   font-size: 14px;
-   color: #ddd;
-   min-height: 1.3em
+   .head {
+    margin-top: 20px
+   }
+
+   #items {
+    margin-top: 14px;
+    gap: 7px
+   }
   }
 
   /* touch controls: a stick on the left (floating, or fixed), look by dragging anywhere else
@@ -326,6 +398,25 @@
 
   #editbar.off,
   #panel.off {
+   display: none
+  }
+
+  #toast {
+   position: fixed;
+   top: 14px;
+   left: 50%;
+   transform: translateX(-50%);
+   max-width: min(640px, 90vw);
+   padding: 10px 16px;
+   background: rgba(60, 14, 14, .92);
+   border: 1px solid #c55;
+   border-radius: 8px;
+   color: #fdd;
+   font-size: 14px;
+   z-index: 10
+  }
+
+  #toast.off {
    display: none
   }
 
@@ -526,12 +617,14 @@
  <div id="game"><canvas id="gunz" tabindex="0"></canvas></div>
  <div id="loading" class="screen">
   <div class="box">
-   <h1>LOADING</h1>
-   <div id="items"></div>
+   <div class="logo">GUNZ</div>
+   <div class="sub">THE DUEL</div>
+   <div class="head"><span id="now"></span><b id="pct"></b></div>
    <div class="bar" id="total"><i></i></div>
-   <div id="now"></div>
+   <div id="items"></div>
   </div>
  </div>
+ <div id="toast" class="off"></div>
  <div id="touch" class="off">
   <div id="stick"><i></i></div>
   <button class="ctl" id="fire" data-k="7" data-look><svg viewBox="0 0 24 24">
@@ -604,6 +697,68 @@
   const $ = id => document.getElementById(id);
   const fail = t => {$("now").textContent = t; $("now").classList.add("err");};
   const mb = n => (n / 1048576).toFixed(1);
+  // `web/build.sh` writes the engine's content hash here: its files are then cached for good
+  // (`serve.py`), so a match start (the page reloads for every match) downloads nothing again.
+  const BUILD = "__BUILD__";
+
+  // Problems on devices this machine cannot run (WebGPU differs per browser and GPU) go back to
+  // the server that sent the page, which prints them (`serve.py`, `POST log`): errors and
+  // warnings of the page and the game, wasm panics, GPU errors, and the browser with its GPU's
+  // features and limits. At most 200 distinct lines per page.
+  const reported = new Set();
+  function report(line) {
+   line = String(line).slice(0, 2000);
+   if (reported.size >= 200 || reported.has(line)) return;
+   reported.add(line);
+   fetch("log", {method: "POST", body: line, keepalive: true}).catch(() => { });
+  }
+  // the game logs every level through console.log with %c styles: its WARN and ERROR lines count
+  for (const level of ["log", "warn", "error"]) {
+   const write = console[level];
+   console[level] = (...a) => {
+    write.apply(console, a);
+    const text = typeof a[0] === "string" ? a[0].replaceAll("%c", "") : String(a[0]);
+    if (level !== "log" || /^(WARN|ERROR)/.test(text)) report(`${level}: ${text}`);
+   };
+  }
+  addEventListener("error", e => report(`page error: ${e.message} ${e.filename}:${e.lineno}`));
+  addEventListener("unhandledrejection", e => report(`page rejection: ${e.reason}`));
+  if (globalThis.GPUAdapter) {
+   // the game reads these (`src/web.rs` `gpu_errors`): Safari never hands the errors to wgpu
+   const failed = line => {
+    report(line);
+    globalThis.gunzGpuError = line;
+    globalThis.gunzGpuErrors = (globalThis.gunzGpuErrors || 0) + 1;
+   };
+   const requestDevice = GPUAdapter.prototype.requestDevice;
+   GPUAdapter.prototype.requestDevice = async function (desc) {
+    const l = this.limits, keys = ["maxStorageBuffersPerShaderStage", "maxSampledTexturesPerShaderStage",
+     "maxStorageTexturesPerShaderStage", "maxColorAttachmentBytesPerSample", "maxInterStageShaderVariables"];
+    report(`gpu: ${navigator.userAgent} | ${[...this.features].sort().join(" ")} | ${keys.map(k => `${k}=${l[k]}`).join(" ")}`);
+    const device = await requestDevice.call(this, desc);
+    device.addEventListener("uncapturederror", e => failed(`gpu error: ${e.error.message}`));
+    device.lost.then(i => report(`gpu lost: ${i.reason} ${i.message}`));
+    return device;
+   };
+   // which shader or pipeline a browser rejects (Safari compiles WGSL its own way): the label,
+   // the compiler's message and the line it points at
+   const createShaderModule = GPUDevice.prototype.createShaderModule;
+   GPUDevice.prototype.createShaderModule = function (d) {
+    const m = createShaderModule.call(this, d);
+    m.getCompilationInfo?.().then(info => {
+     for (const e of info.messages) if (e.type === "error")
+      report(`shader ${d.label || "?"} ${e.lineNum}:${e.linePos}: ${e.message} | ${(String(d.code).split("\n")[e.lineNum - 1] || "").trim()}`);
+    }, () => { });
+    return m;
+   };
+   const createRenderPipeline = GPUDevice.prototype.createRenderPipeline;
+   GPUDevice.prototype.createRenderPipeline = function (d) {
+    this.pushErrorScope("validation");
+    const p = createRenderPipeline.call(this, d);
+    this.popErrorScope().then(e => e && failed(`pipeline ${d.label || "?"}: ${e.message}`), () => { });
+    return p;
+   };
+  }
 
   // Fullscreen (landscape on a phone); a touch screen also asks on its first touch of a page.
   async function fullscreen(on) {
@@ -646,6 +801,7 @@
   // [14] aim assist strength. The settings live in this browser (`gunzrs.touch`).
   const touch = matchMedia("(pointer: coarse)").matches || new URLSearchParams(location.search).has("touch");
   let playing = false; // a match is on screen (its controls may show)
+  let showControls = () => { }; // shows or hides them (set below with them)
   if (touch) {
    const T = globalThis.gunzTouch = new Float32Array(15);
    const LOOK = 2.2;  // look speed at sensitivity 1: mouse counts per dragged CSS pixel (times the game's own)
@@ -779,10 +935,24 @@
    addEventListener("blur", () => letGo());
    document.addEventListener("visibilitychange", () => document.hidden && letGo());
    // the game paused or ended: hand taps to its menus, let go of everything
+   let gamePaused = false, desk = false;
+   showControls = () => layer.classList.toggle("off", !editing && (!playing || gamePaused || desk));
    globalThis.gunzPaused = paused => {
-    if (!editing) layer.classList.toggle("off", paused);
+    gamePaused = paused; showControls();
     if (paused) letGo();
    };
+   // A touch screen with a mouse or keyboard (a tablet in a keyboard case): the controls go
+   // away at the first key or mouse use and come back at the next touch. Without `gunzTouch`
+   // the game reads the mouse and keyboard and locks the pointer for aiming (`src/web.rs`).
+   const mode = toDesk => {
+    if (toDesk === desk) return;
+    desk = toDesk;
+    if (desk) {letGo(); delete globalThis.gunzTouch;} else globalThis.gunzTouch = T;
+    showControls();
+   };
+   addEventListener("keydown", () => mode(true), true);
+   addEventListener("pointerdown", e => mode(e.pointerType === "mouse"), true);
+   addEventListener("pointermove", e => e.pointerType === "mouse" && e.movementX + e.movementY !== 0 && mode(true), true);
 
    // The settings sheet. Opened in a match it pauses the game (Esc) and resumes it on DONE.
    let pausedBy = false;
@@ -819,7 +989,7 @@
     editing = on;
     panel.classList.toggle("off", on); $("editbar").classList.toggle("off", !on);
     layer.classList.toggle("edit", on);
-    layer.classList.toggle("off", !on && (!playing || pausedBy));
+    showControls();
     if (on) letGo(); else pick(null);
     place();
    }
@@ -842,13 +1012,13 @@
    throw new Error("no WebGPU");
   }
 
-  // One line of the loading screen: name, size, its own bar. Every download starts on page load.
+  // One line of the loading screen: name, its own bar, size. Every download starts on page load.
   class Item {
    constructor(label, bytes) {
     this.label = label; this.total = bytes || 0; this.got = 0; this.started = 0;
     this.el = document.createElement("div");
     this.el.className = "item";
-    this.el.innerHTML = `<div class="row"><b></b><span></span></div><div class="bar"><i></i></div>`;
+    this.el.innerHTML = `<b></b><div class="bar"><i></i></div><span></span>`;
     this.el.querySelector("b").textContent = label;
     $("items").append(this.el);
     this.paint();
@@ -862,7 +1032,7 @@
    paint() {
     const f = this.total ? Math.min(1, this.got / this.total) : 0;
     this.el.querySelector("i").style.width = `${f * 100}%`;
-    // a step without bytes is described in the status line below the bars
+    // a step without bytes is described in the status line above the bars
     this.el.querySelector("span").textContent = this.total ? `${mb(this.got)} / ${mb(this.total)} MB` : "";
    }
   }
@@ -870,12 +1040,13 @@
   function refresh(current) {
    const total = items.reduce((s, i) => s + i.total, 0), got = items.reduce((s, i) => s + Math.min(i.got, i.total), 0);
    $("total").querySelector("i").style.width = `${total ? got / total * 100 : 0}%`;
+   $("pct").textContent = total ? `${Math.floor(got / total * 100)}%` : "";
    if (!current) return;
    for (const i of items) i.el.classList.toggle("active", i === current);
    const secs = (performance.now() - current.started) / 1000;
    const rate = secs > 0.3 ? current.got / secs : 0;
-   $("now").textContent = current.text ? `${current.label}: ${current.text}`
-    : `Downloading ${current.label}` + (rate ? ` at ${mb(rate)} MB/s, ${Math.max(0, (current.total - current.got) / rate).toFixed(0)} s left` : "...");
+   $("now").textContent = current.text ? `${current.label} · ${current.text}`
+    : current.label + (rate ? ` · ${mb(rate)} MB/s · ${Math.max(0, (current.total - current.got) / rate).toFixed(0)} s left` : "...");
   }
   function item(label, bytes) {const i = new Item(label, bytes); items.push(i); return i;}
 
@@ -914,8 +1085,8 @@
   // The engine compiles while it downloads; the shared pack starts at once as well.
   const engineItem = item("Game engine", 0);
   const engine = Promise.all([
-   import("./pkg/gunz-play.js"),
-   download("pkg/gunz-play_bg.wasm", engineItem).then(r => WebAssembly.compileStreaming(r)),
+   import(`./pkg/gunz-play.js?v=${BUILD}`),
+   download(`pkg/gunz-play_bg.wasm?v=${BUILD}`, engineItem).then(r => WebAssembly.compileStreaming(r)),
   ]).then(x => {engineItem.done(); return x;});
   const coreItem = item("Characters, weapons, effects and sounds", index.core.bytes);
   const core = pack(index.core, coreItem);
@@ -935,18 +1106,20 @@
     globalThis.gunzArgs = args;
     globalThis.gunzReady = () => {
      startItem.done(); $("loading").remove(); $("gunz").focus();
-     if (map && touch) {$("touch").classList.remove("off"); playing = true;}
+     report(`ready: ${map || "menu"} after ${(performance.now() / 1000).toFixed(1)} s`);
+     if (map && touch) {playing = true; showControls();}
     };
     // a match: 4 = play again, anything else = back to the main menu (as the desktop build
     // relaunches); the main menu: its START left the match to play (`gunzPlay`)
     globalThis.gunzExit = code => {
      sessionStorage.setItem("gunzAgain", map && code === 4 ? "1" : "");
+     // 1: the match gave up after GPU errors (`src/gfx.rs` `gpu_failed`); the menu says so
+     if (map && code === 1 && globalThis.gunzGpuError) sessionStorage.setItem("gunzFailed", globalThis.gunzGpuError);
      location.reload();
     };
     globalThis.gunzPlay = (map, flags) => sessionStorage.setItem("gunzNext", JSON.stringify([map, ...flags]));
     if (map) sessionStorage.setItem("gunzLast", JSON.stringify(args));
-    startItem.busy(map ? "reading data, building the map and the bots' paths (a few seconds)"
-     : "reading the item and clothes catalogues");
+    startItem.busy(map ? "preparing the map and the bots (a few seconds)" : "reading the item catalogue");
     // let the browser paint that before the start-up takes the page's thread
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
     await mod.default({module_or_path: wasm});
@@ -963,6 +1136,15 @@
   if (next) launch(next, next[0]);
   else if (last && sessionStorage.getItem("gunzAgain")) {sessionStorage.removeItem("gunzAgain"); launch(last, last[0]);}
   else launch([]);
+  const failure = sessionStorage.getItem("gunzFailed");
+  if (failure) {
+   sessionStorage.removeItem("gunzFailed");
+   const t = $("toast");
+   t.textContent = `The match could not be drawn in this browser (${failure.split("\n")[0]}). The details went to the server log.`;
+   t.classList.remove("off");
+   t.onclick = () => t.remove();
+   setTimeout(() => t.remove(), 15000);
+  }
  </script>
 </body>
 

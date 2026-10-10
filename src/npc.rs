@@ -27,7 +27,6 @@ use crate::{
     level::Level,
     model::{self, Textures},
     nav::{Nav, walkable},
-    view::{SCALE, to_bevy},
 };
 use bevy::{ecs::system::SystemParam, mesh::skinning::SkinnedMeshInverseBindposes, prelude::*};
 use data::{Action, ActorDef, Data, Ev, Fsm, Func, ModelDef, Next, NpcDef, Skill};
@@ -742,19 +741,7 @@ fn spawn(
     }
     // Monsters route through the same floor graph as bots; the map has one once either needs it.
     if nav.is_none() {
-        let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
-        for v in &level.map.vertices {
-            let p = Vec3::from(to_bevy(v.pos)) * SCALE;
-            (min, max) = (min.min(p), max.max(p));
-        }
-        let t = bevy::platform::time::Instant::now();
-        let n = Nav::new(&col, min, max);
-        info!(
-            "npc nav: {} floor nodes in {:.2}s",
-            n.nodes.len(),
-            t.elapsed().as_secs_f32()
-        );
-        commands.insert_resource(n);
+        commands.insert_resource(Nav::load_or_new(&level.vfs, &level.map, &col));
     }
     let vfs = &level.vfs;
     let mut textures = Textures::new(vfs, "model/");

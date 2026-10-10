@@ -59,14 +59,6 @@
    color: #e8c46a
   }
 
-  label {
-   display: grid;
-   grid-template-columns: 110px 1fr;
-   align-items: center;
-   margin: 8px 0
-  }
-
-  select,
   input {
    background: #0f1115;
    color: #ddd;
@@ -87,24 +79,8 @@
    cursor: pointer
   }
 
-  button:disabled {
-   opacity: .5;
-   cursor: default
-  }
-
-  .note {
-   margin-top: 10px;
-   font-size: 13px;
-   color: #999;
-   min-height: 1.2em
-  }
-
   .err {
    color: #f77 !important
-  }
-
-  #loading {
-   display: none
   }
 
   .item {
@@ -543,39 +519,11 @@
    border: 2px solid rgba(255, 255, 255, .35);
    border-radius: 8px
   }
-
-  button.alt {
-   margin-top: 8px;
-   background: #2a2c33;
-   color: #e8c46a;
-   border: 1px solid #e8c46a
-  }
  </style>
 </head>
 
 <body>
  <div id="game"><canvas id="gunz" tabindex="0"></canvas></div>
- <div id="menu" class="screen">
-  <div class="box">
-   <h1>GUNZRS</h1>
-   <label>Map <select id="map"></select></label>
-   <label>Mode <select id="mode">
-     <option value="dm">Deathmatch</option>
-     <option value="tdm">Team deathmatch</option>
-     <option value="gladiator">Gladiator</option>
-     <option value="team-gladiator">Team gladiator</option>
-     <option value="elimination">Elimination</option>
-     <option value="assassinate">Assassinate</option>
-     <option value="duel">Duel</option>
-     <option value="berserker">Berserker</option>
-    </select></label>
-   <label>Bots <input id="bots" type="number" min="0" max="15" value="3"></label>
-   <button id="start" disabled>START</button>
-   <button id="dress" class="alt" disabled>CHARACTER &amp; CLOTHES</button>
-   <button id="controls" class="alt">TOUCH CONTROLS</button>
-   <div class="note" id="note">Checking WebGPU...</div>
-  </div>
- </div>
  <div id="loading" class="screen">
   <div class="box">
    <h1>LOADING</h1>
@@ -654,11 +602,10 @@
  <button id="fs" title="Fullscreen">&#x26F6;</button>
  <script type="module">
   const $ = id => document.getElementById(id);
-  const note = (t, err) => {$("note").textContent = t; $("note").classList.toggle("err", !!err);};
+  const fail = t => {$("now").textContent = t; $("now").classList.add("err");};
   const mb = n => (n / 1048576).toFixed(1);
-  const saved = JSON.parse(sessionStorage.getItem("gunz") || "null");
 
-  // Fullscreen (landscape on a phone); a touch screen also goes fullscreen on START.
+  // Fullscreen (landscape on a phone); a touch screen also asks on its first touch of a page.
   async function fullscreen(on) {
    if (on && !document.fullscreenElement) {
     await document.documentElement.requestFullscreen?.({navigationUI: "hide"}).catch(() => { });
@@ -699,7 +646,6 @@
   // [14] aim assist strength. The settings live in this browser (`gunzrs.touch`).
   const touch = matchMedia("(pointer: coarse)").matches || new URLSearchParams(location.search).has("touch");
   let playing = false; // a match is on screen (its controls may show)
-  if (!touch) $("controls").remove();
   if (touch) {
    const T = globalThis.gunzTouch = new Float32Array(15);
    const LOOK = 2.2;  // look speed at sensitivity 1: mouse counts per dragged CSS pixel (times the game's own)
@@ -882,7 +828,6 @@
     cfg.scale[picked.id] = Math.min(1.8, Math.max(0.6, (cfg.scale[picked.id] || 1) + d));
     place(); save();
    };
-   $("controls").onclick = openPanel;
    $("p-done").onclick = closePanel;
    $("p-edit").onclick = () => edit(true);
    $("p-reset").onclick = () => {cfg = {...DEF, pos: {}, scale: {}}; save(); sync(); place();};
@@ -893,12 +838,11 @@
   }
 
   if (!navigator.gpu || !(await navigator.gpu.requestAdapter().catch(() => null))) {
-   note("This browser has no WebGPU (try a current Chrome, Edge or Firefox; on Linux enable it in the browser's flags). The page must be opened over HTTPS or localhost.", true);
+   fail("This browser has no WebGPU (try a current Chrome, Edge or Firefox; on Linux enable it in the browser's flags). The page must be opened over HTTPS or localhost.");
    throw new Error("no WebGPU");
   }
 
-  // One line of the loading screen: name, size, its own bar. Every download starts on page load
-  // (in the background while the menu is up) and reports here; the screen shows once START is hit.
+  // One line of the loading screen: name, size, its own bar. Every download starts on page load.
   class Item {
    constructor(label, bytes) {
     this.label = label; this.total = bytes || 0; this.got = 0; this.started = 0;
@@ -952,10 +896,7 @@
    const r = await fetch("data/index.json", {cache: "no-cache"});
    if (!r.ok) throw new Error("data/index.json is missing: run web/build.sh");
    index = await r.json();
-  } catch (e) {note(e.message, true); throw e;}
-  for (const m of index.maps) $("map").add(new Option(m.name.replace(/\b\w/g, c => c.toUpperCase()), m.name));
-  if (saved) for (const k of ["map", "mode", "bots"]) $(k).value = saved[k];
-  else $("map").value = index.maps.some(m => m.name === "mansion") ? "mansion" : index.maps[0].name;
+  } catch (e) {fail(e.message); throw e;}
 
   // Files the packs leave out (`files/`: every clothing piece and its textures) are read by the
   // game one at a time, synchronously (`src/web.rs` `fetch`): `null` if the download fails.
@@ -978,20 +919,15 @@
   ]).then(x => {engineItem.done(); return x;});
   const coreItem = item("Characters, weapons, effects and sounds", index.core.bytes);
   const core = pack(index.core, coreItem);
-  Promise.all([engine, core]).then(() => note("Ready."), e => note(e.message, true));
-  note("Downloading the game in the background...");
-  $("start").disabled = $("dress").disabled = false;
 
   // Runs the engine once per page: a match (`map` set: its pack is downloaded too) or the
-  // game's own menu on its character page. The page reloads when either ends.
+  // game's main menu. The page reloads when either ends.
   async function launch(args, map) {
-   $("start").disabled = $("dress").disabled = true;
-   if (touch && map) fullscreen(true);
-   $("menu").style.display = "none";
-   $("loading").style.display = "grid";
+   // the page reloads for every match, which leaves fullscreen: a phone's first touch asks again
+   if (touch) addEventListener("pointerdown", () => fullscreen(true), {once: true});
    const entry = map && index.maps.find(m => m.name === map);
    const mapItem = entry && item(`Map: ${entry.name.replace(/\b\w/g, c => c.toUpperCase())}`, entry.bytes);
-   const startItem = item(map ? "Starting the match" : "Opening the character screen", 0);
+   const startItem = item(map ? "Starting the match" : "Opening the main menu", 0);
    refresh(items.find(i => !i.el.classList.contains("done")));
    try {
     const [[mod, wasm], c, m] = await Promise.all([engine, core, entry ? pack(entry, mapItem) : null]);
@@ -1001,8 +937,8 @@
      startItem.done(); $("loading").remove(); $("gunz").focus();
      if (map && touch) {$("touch").classList.remove("off"); playing = true;}
     };
-    // a match: 4 = play again, anything else = back to this menu (as the desktop build
-    // relaunches); the game's menu: its START left the match to play (`gunzPlay`)
+    // a match: 4 = play again, anything else = back to the main menu (as the desktop build
+    // relaunches); the main menu: its START left the match to play (`gunzPlay`)
     globalThis.gunzExit = code => {
      sessionStorage.setItem("gunzAgain", map && code === 4 ? "1" : "");
      location.reload();
@@ -1010,29 +946,23 @@
     globalThis.gunzPlay = (map, flags) => sessionStorage.setItem("gunzNext", JSON.stringify([map, ...flags]));
     if (map) sessionStorage.setItem("gunzLast", JSON.stringify(args));
     startItem.busy(map ? "reading data, building the map and the bots' paths (a few seconds)"
-     : "reading the clothes catalogue");
+     : "reading the item and clothes catalogues");
     // let the browser paint that before the start-up takes the page's thread
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
     await mod.default({module_or_path: wasm});
    } catch (e) {
     // winit hands control to the browser's event loop by throwing; that is not a failure
     if (!String(e).includes("Using exceptions for control flow")) {
-     $("now").textContent = String(e); $("now").classList.add("err"); throw e;
+     fail(String(e)); throw e;
     }
    }
   }
-  $("start").onclick = () => {
-   const pick = {map: $("map").value, mode: $("mode").value, bots: $("bots").value};
-   sessionStorage.setItem("gunz", JSON.stringify(pick));
-   // sex and clothes come from the profile the game keeps in this browser
-   launch([pick.map, "--mode", pick.mode, "--bots", String(pick.bots)], pick.map);
-  };
-  $("dress").onclick = () => launch(["--menu-page", "player", "--map", $("map").value]);
   const next = JSON.parse(sessionStorage.getItem("gunzNext") || "null");
   const last = JSON.parse(sessionStorage.getItem("gunzLast") || "null");
   sessionStorage.removeItem("gunzNext");
   if (next) launch(next, next[0]);
   else if (last && sessionStorage.getItem("gunzAgain")) {sessionStorage.removeItem("gunzAgain"); launch(last, last[0]);}
+  else launch([]);
  </script>
 </body>
 

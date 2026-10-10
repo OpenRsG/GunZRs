@@ -2147,7 +2147,9 @@ one run. A missing key keeps the ENHANCED value, so profiles saved before this e
   its own look, so changing a slider there shows in the next match. The camera is in HDR when tonemapping, bloom, exposure or
   saturation need it (the map material writes scene-linear colour either way; the lightmap `x4` and sRGB maths are unchanged).
 - **Render improvements**: bevy's `Bloom` (additive composite, threshold 0.4, so only bright texels glow: windows, candle
-  flames, additive muzzle flashes and effects), `Tonemapping`, `ColorGrading` (exposure, saturation), `Fxaa`, `Smaa`, `Msaa`,
+  flames, additive muzzle flashes and effects; left off on a WebGPU device without `rg11b10ufloat-renderable`, since its
+  `Rg11b10Ufloat` target then fails every frame: **observed** a black screen with that feature masked), `Tonemapping`,
+  `ColorGrading` (exposure, saturation), `Fxaa`, `Smaa`, `Msaa`,
   `ContrastAdaptiveSharpening`, `Vignette`, `ChromaticAberration` (strength = setting + a kick when hit), `DistanceFog` (exponential,
   density 0.035 x setting per metre, colour (0.1, 0.11, 0.14); `map.wgsl` calls `apply_fog` under `DISTANCE_FOG`, models get
   it from `StandardMaterial`), anisotropic filtering (the images the map and standard materials hold get `anisotropy_clamp`; only

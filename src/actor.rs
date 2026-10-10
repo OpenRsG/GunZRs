@@ -101,10 +101,6 @@ pub const EMOTES: [(&str, KeyCode); 5] = [
 const CLICK_BUFFER: f32 = 0.12;
 /// Seconds in the air beyond which touching ground makes the landing thud. **Inferred.**
 const LAND_AIR: f32 = 0.35;
-/// Fastest run-clip playback: the full run speed over the slowest stride (`stride`, gun and
-/// spycase clips 3.8 m/s: 10 / 3.8 = 2.63, **observed** strides and speed), so the feet stay
-/// planted at top speed. (A cap of 1.5 slid 10 % of the time.)
-const MAX_RUN_RATE: f32 = 2.7;
 /// Seconds without wall contact after which a wall run ends.
 pub const WALL_LOSE: f32 = 0.15;
 /// A wall run needs at least this much air under the feet (a step against a leaning stair
@@ -1081,23 +1077,6 @@ fn blend_for(name: &str) -> f32 {
     }
 }
 
-/// Toe speed of a run clip relative to the body in m/s (**observed**, foot forward
-/// kinematics of `man_*_run*.ani` contact frames, `.local/py/stride.py`, `docs/formats.md`):
-/// playing the clip at `speed / stride` keeps the feet from sliding. Guns and `spycase` 3.8
-/// (stable from 2.5 to 8 cm contact height), medikit 4.6 (low confidence, 3 contact frames),
-/// the melee weapons 5.2-6.0. The woman's clips are not measured separately (**inferred**
-/// equal; her contact frames are too noisy).
-fn stride(motion: u32, back: bool) -> f32 {
-    match (back, motion) {
-        (true, _) => 4.8,
-        (_, 12) => 5.18,
-        (_, 7 | 14) => 5.98,
-        (_, 1 | 13) => 5.64,
-        (_, 8) => 4.6,
-        _ => 3.8,
-    }
-}
-
 /// Climb speed (m/s) `t` seconds into an up-wall run: the vertical speed of the feet in
 /// `runW` (**observed**, 3.3 m over 0.6 s: slow start, 9-10 m/s mid-run, taper).
 pub fn climb(t: f32) -> f32 {
@@ -2003,11 +1982,13 @@ fn drive(
                     a.step = half;
                 }
             }
-            // Playback rate: run clips match the ground speed, actions their requested speed.
+            // Playback rate: run clips play as authored (20 frames, two steps, 0.667 s) at full
+            // run speed and slow down with the ground speed; the feet slide (the old foot-locked
+            // rate of about 2.4x looked far too quick, user report). Actions use their own speed.
             an.speed = match a.state {
                 State::Action { speed, .. } => speed,
                 State::Free | State::Reload { .. } if matches!(name, "run" | "runB") => {
-                    (hspeed / stride(g.motion, name == "runB")).clamp(0.6, MAX_RUN_RATE)
+                    (hspeed / RUN).clamp(0.6, 1.0)
                 }
                 _ => 1.0,
             };
@@ -2097,14 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn feet_stay_planted_at_full_speed() {
-        // every weapon's run clip can play fast enough for RUN without sliding
-        for motion in 1..=15 {
-            assert!(
-                RUN / stride(motion, false) <= MAX_RUN_RATE,
-                "motion {motion}"
-            );
-        }
+    fn script_emotes() {
         let s = Script::parse("wave:1;taunt+dance:1").unwrap();
         assert_eq!(s.steps[0].held.emote, Some("wave"));
         assert_eq!(s.steps[1].held.emote, Some("dance"));

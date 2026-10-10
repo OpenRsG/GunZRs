@@ -1345,10 +1345,10 @@ No new file format; how the retail character animations are used (**observed** =
   and `laugh` 2 s, `dance` 5.67 s); a jump, dash or step after 0.5 s (`TAUNT_CANCEL`,
   **inferred**) ends them. The log line `clip NAME (motion N) SECSs` names every action clip
   the player starts.
-- Run playback rate = ground speed / toe speed of the clip (`stride`): guns 3.8 m/s (rate 2.37
-  at the 9 m/s gun speed; the old cap 1.5 slid 10 %), katana 5.64, sword 5.18, dagger 5.98,
-  medikit 4.6, backwards 4.8 (**observed**, `.local/py/stride.py`; the cap is now 2.7 =
-  10 m/s / 3.8, since the real run speed is 10 m/s, see "Replays").
+- Run playback rate = ground speed / `RUN` (10 m/s), clamped to 0.6-1: the clip plays as authored
+  (3 steps/s) at full speed, 0.9 with a gun. The feet slide; the foot-locked rate (ground speed /
+  toe speed, 2.4x with guns, see "Animation-derived constants") looked far too quick next to the
+  original game (user report, **inferred** to be the original's fixed rate).
 - Clip coverage (`.local/py/coverage.py`: every quoted name in `src/` against the 71 distinct
   `<AddAnimation name>` of `man01.xml` + `woman01.xml`): **63 of 71** are referenced (was 55).
   Unreferenced: `login_intro`/`login_idle`/`login_walk` (`gm="0"`: the lobby/character-select

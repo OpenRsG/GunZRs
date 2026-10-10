@@ -242,7 +242,7 @@ fn spawn_bots(
         let woman = i % 2 == 1;
         let look = spawner.random_look(woman, i as u64);
         let bot = spawner.spawn(ActorSpec {
-            name: format!("Bot {}", i + 1),
+            name: gamer_name(spawner.seed(), i),
             pos,
             yaw,
             woman,
@@ -251,6 +251,91 @@ fn spawn_bots(
             look,
         });
         spawner.commands.entity(bot).insert(BotAi::new(i, yaw, pos));
+    }
+}
+
+/// Gamer tags for the bots (port design; the retail data has no bot names).
+const NAMES: [&str; 64] = [
+    "xXSlayerXx",
+    "N00bHunter",
+    "K1ngK0ng",
+    "HeadHuntr",
+    "Kodachi",
+    "ButterflyX",
+    "WallRunner",
+    "ShotgunSam",
+    "Mr.Flip",
+    "RS_Master",
+    "Ghostline",
+    "Zer0Cool",
+    "DarkAngel",
+    "SilentStep",
+    "Kstyler",
+    "RevolverOc",
+    "Blitz",
+    "Nightfall",
+    "Pyon",
+    "QuickSlash",
+    "Vortex",
+    "Ragnarok",
+    "Sn1per",
+    "BladeDancer",
+    "Juggler",
+    "Tumbleweed",
+    "Rocketman",
+    "FragQueen",
+    "Sakura",
+    "Hyperion",
+    "Lagswitch",
+    "Afterimage",
+    "Kamikaze",
+    "DoubleTap",
+    "Smurfy",
+    "Crimson",
+    "IronFist",
+    "Massive",
+    "GunZlinger",
+    "Shinobi",
+    "Nemesis",
+    "Raijin",
+    "ToxicAvenger",
+    "LowPing",
+    "Echo",
+    "Spectre",
+    "Wraith",
+    "Valkyrie",
+    "Phantom",
+    "Ronin",
+    "Tsunami",
+    "Frostbite",
+    "Inferno",
+    "Havoc",
+    "Maverick",
+    "Outlaw",
+    "Jinx",
+    "Viper",
+    "Kaiser",
+    "Onyx",
+    "Reaper",
+    "Specter",
+    "Glitch",
+    "Hitman",
+];
+
+/// Bot `i`'s name: a seeded shuffle of [`NAMES`] (distinct within a match), numbered past it.
+fn gamer_name(seed: u64, i: usize) -> String {
+    let mut order: Vec<usize> = (0..NAMES.len()).collect();
+    let mut s = seed | 1;
+    for k in (1..order.len()).rev() {
+        // xorshift64
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        order.swap(k, (s % (k as u64 + 1)) as usize);
+    }
+    match i / NAMES.len() {
+        0 => NAMES[order[i]].into(),
+        n => format!("{}{}", NAMES[order[i % NAMES.len()]], n + 1),
     }
 }
 

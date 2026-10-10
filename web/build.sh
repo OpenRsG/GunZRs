@@ -28,7 +28,12 @@ if command -v wasm-opt >/dev/null; then
   wasm-opt -O3 --enable-simd --enable-bulk-memory --enable-nontrapping-float-to-int \
     --enable-sign-ext --enable-mutable-globals "$wasm" -o "$wasm.opt" && mv "$wasm.opt" "$wasm"
 fi
-cp web/index.html web/serve.py "$dist/"
+# The page asks for the engine as `?v=HASH` of its files, so browsers cache it for good
+# (`serve.py`) and a new build is a new URL.
+build=$(cat "$wasm" "$dist/pkg/gunz-play.js" | sha256sum | cut -c1-16)
+html=$(<web/index.html)
+printf '%s\n' "${html//__BUILD__/$build}" > "$dist/index.html"
+cp web/serve.py "$dist/"
 # Precompressed copies; serve.py (or any server with precompressed-file support) sends them.
 for f in "$dist/pkg/"*.wasm "$dist/pkg/"*.js "$dist/index.html"; do
   gzip -9 -k -f "$f"

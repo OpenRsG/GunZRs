@@ -1766,6 +1766,19 @@ the executable is packed).
   A link a bot is stuck on twice is marked broken and replanned. Jump steps carry the simulated
   takeoff point (and, for a side run, the heading and the seconds to hold it); the bot runs to it,
   jumps, keeps that heading in the air and then walks on to the landing node.
+- **Nav file** (`<map>.rs.navcache`, ours, not a retail format; `Nav::save` / `Nav::load`): the browser
+  build is single-threaded and `Nav::new` takes seconds there (Mansion 4.2 s on one native core), so
+  `gunz-pack` builds each map's graph natively and puts the file into that map's pack;
+  `Nav::load_or_new` (bots and quest monsters) reads it from the `Vfs` and builds only when there is none
+  (the retail install has none) or it is stale or damaged (a `warn!` line). Layout, all 32-bit
+  little-endian words: magic `GZNV`, format, key (CRC-32 of the map's `.col` bytes and of the `f32`
+  map box), `min` x/z, node count; per node `x y z`, grid cell `cx cz`, link count, then its links:
+  `to - id`, a tag (`Kind` in bits 0-1; bit 2 the takeoff follows (else it is the node), bit 3
+  `turn` and `hold` follow, bit 4 a `Kick` of 4 words follows), `cost`, and what the tag announces.
+  Mansion: 18 858 nodes, 144 064 links, 2 150 kB (272 kB gzipped, +2 % on its pack); loading takes
+  3.6 ms. The reader refuses any file with another magic, format or key, a cut or padded file and
+  a link out of range. **Bump `FORMAT` in `nav.rs` whenever `Nav::new` finds something else** and rerun
+  `gunz-pack`: the key covers the data, not the algorithm.
 - **Searches** (`Nav::search` / `Nav::advance`): A* kept as a resumable `Search`; every frame one bot may
   start a replan and all running searches share a budget of 2500 node expansions (about 2 ms), so a
   long route spreads over a few frames while the bot keeps following its old path. Before: links were
@@ -2146,6 +2159,17 @@ one run. A missing key keeps the ENHANCED value, so profiles saved before this e
 - **Where it applies**: only in a match (`apply`, `drive` and `filtering` run when `game::Settings` exists); the main menu keeps
   its own look, so changing a slider there shows in the next match. The camera is in HDR when tonemapping, bloom, exposure or
   saturation need it (the map material writes scene-linear colour either way; the lightmap `x4` and sRGB maths are unchanged).
+- **GPU errors** (`gpu_failed`): bevy's default `RenderErrorHandler` quits on any WebGPU validation error. Here a match
+  turns off what the error names (`turn_off`: a pipeline label such as `bloom_*`, `tonemapping pipeline`,
+  `contrast_adaptive_sharpening`, `postprocessing`, `smaa`, `pbr_*`, or `Fx`'s, back to its ORIGINAL value), or takes all
+  of ORIGINAL for an error naming nothing known, saves that with a HUD notice and goes on; 30 more errors stop rendering
+  and leave the match (code 1; the browser's menu then names the error). Safari never calls wgpu's handler (it lacks the
+  `onuncapturederror` attribute; only `addEventListener` listeners hear the event) and reports a broken shader only as
+  "Fragment module is invalid", so the page wraps `createRenderPipeline` in an error scope to learn the pipeline's label,
+  counts the errors (`gunzGpuErrors`, `gunzGpuError`) and `web.rs` `gpu_errors` hands new ones to the same function.
+  **Observed**: an iPad (Safari 26.6) failed one ENHANCED-only fragment shader (which one is not known yet), switched to
+  ORIGINAL and reported no further error; on Chromium, an injected bloom texture error (its first message names no
+  pipeline) took ORIGINAL and the match went on, and an error in every frame went back to the menu.
 - **Render improvements**: bevy's `Bloom` (additive composite, threshold 0.4, so only bright texels glow: windows, candle
   flames, additive muzzle flashes and effects; left off on a WebGPU device without `rg11b10ufloat-renderable`, since its
   `Rg11b10Ufloat` target then fails every frame: **observed** a black screen with that feature masked), `Tonemapping`,

@@ -15,6 +15,9 @@ use crate::{
     },
     col::{MapCollision, STEP, WALKABLE},
     combat::yaw_of,
+    map::Map,
+    mrs::{Vfs, normalize},
+    view::{SCALE, to_bevy},
 };
 use bevy::prelude::*;
 use std::{
@@ -129,7 +132,7 @@ pub enum Kind {
     Kick,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Link {
     to: u32,
     kind: Kind,
@@ -157,7 +160,7 @@ pub struct Step {
     pub kick: Option<Kick>,
 }
 
-#[derive(Resource)]
+#[derive(Resource, PartialEq)]
 pub struct Nav {
     /// Feet positions.
     pub nodes: Vec<Vec3>,
@@ -1227,6 +1230,209 @@ impl Nav {
     }
 }
 
+/// Nav file magic and layout version. Bump `FORMAT` whenever the layout or what [`Nav::new`]
+/// finds changes: files made by an older build are then refused and the nav is built instead.
+const MAGIC: u32 = u32::from_le_bytes(*b"GZNV");
+const FORMAT: u32 = 1;
+
+/// The box of the map's vertices in Bevy metres: what the nav samples.
+fn bounds(map: &Map) -> (Vec3, Vec3) {
+    map.vertices
+        .iter()
+        .fold((Vec3::MAX, Vec3::MIN), |(min, max), v| {
+            let p = Vec3::from(to_bevy(v.pos)) * SCALE;
+            (min.min(p), max.max(p))
+        })
+}
+
+/// What a nav file is good for: the CRC-32 of the map's `.col` bytes and of the box `min..max`.
+fn key(vfs: &Vfs, map: &Map, min: Vec3, max: Vec3) -> std::io::Result<u32> {
+    let mut crc = flate2::Crc::new();
+    crc.update(&vfs.read(&format!("{}.col", map.rs))?);
+    for f in min.to_array().into_iter().chain(max.to_array()) {
+        crc.update(&f.to_le_bytes());
+    }
+    Ok(crc.sum())
+}
+
+/// Little-endian 32-bit words of a nav file.
+struct Words<'a>(std::slice::Iter<'a, [u8; 4]>);
+
+impl Words<'_> {
+    fn u32(&mut self) -> Option<u32> {
+        self.0.next().map(|w| u32::from_le_bytes(*w))
+    }
+    fn f32(&mut self) -> Option<f32> {
+        self.u32().map(f32::from_bits)
+    }
+    fn vec3(&mut self) -> Option<Vec3> {
+        Some(Vec3::new(self.f32()?, self.f32()?, self.f32()?))
+    }
+}
+
+impl Nav {
+    /// The map's generated nav file: next to its `.rs`, and named so that no retail file (the
+    /// quest maps' `.rs.nav`) can be it.
+    pub fn file(map: &Map) -> String {
+        normalize(&format!("{}.navcache", map.rs))
+    }
+
+    /// The map's [`Nav::new`], or the graph of its nav file ([`Nav::file`]) when it holds one
+    /// made for exactly this collision data and map box: `gunz-pack` puts it into the map's
+    /// browser pack, where [`Nav::new`] would freeze the single-threaded page for seconds. The
+    /// retail install has none, so the desktop builds.
+    pub fn load_or_new(vfs: &Vfs, map: &Map, col: &MapCollision) -> Self {
+        let t = bevy::platform::time::Instant::now();
+        let (min, max) = bounds(map);
+        let (nav, how) = Self::cached(vfs, map, min, max)
+            .map_or_else(|| (Self::new(col, min, max), "built"), |n| (n, "loaded"));
+        info!(
+            "nav: {} floor nodes {how} in {:.2}s (map box {min} .. {max})",
+            nav.nodes.len(),
+            t.elapsed().as_secs_f32()
+        );
+        nav
+    }
+
+    /// The map's nav file, if it has one that is valid for its data.
+    fn cached(vfs: &Vfs, map: &Map, min: Vec3, max: Vec3) -> Option<Self> {
+        let file = Self::file(map);
+        let bytes = vfs.read(&file).ok()?;
+        let nav = key(vfs, map, min, max)
+            .ok()
+            .and_then(|k| Self::load(&bytes, k));
+        if nav.is_none() {
+            warn!("{file}: stale or damaged, building the nav instead");
+        }
+        nav
+    }
+
+    /// The map's nav file: [`Nav::new`] (on all cores) saved under the key of the map's data.
+    pub fn build_file(vfs: &Vfs, map: &Map, col: &MapCollision) -> std::io::Result<Vec<u8>> {
+        let (min, max) = bounds(map);
+        let key = key(vfs, map, min, max)?;
+        Ok(Self::new(col, min, max).save(key))
+    }
+
+    /// The nav file of a fresh graph (the runtime [`Nav::mark_broken`] state is not saved), all
+    /// 32-bit little-endian words: the magic, `FORMAT`, `key`, `min` (x, z) and the node count;
+    /// then per node its position, grid cell and link count, each followed by its links: the
+    /// target as its distance in ids from the node, a tag (the [`Kind`] in bits 0-1, bit 2: the
+    /// takeoff follows (else it is the node), bit 3: the turn and hold follow, bit 4: the
+    /// [`Kick`] follows), the cost and what the tag announces.
+    fn save(&self, key: u32) -> Vec<u8> {
+        let mut cell = vec![(0, 0); self.nodes.len()];
+        for (&c, ids) in &self.cells {
+            for &i in ids {
+                cell[i as usize] = c;
+            }
+        }
+        let v3 = |v: Vec3| v.to_array().map(f32::to_bits);
+        let mut w = vec![
+            MAGIC,
+            FORMAT,
+            key,
+            self.min.x.to_bits(),
+            self.min.y.to_bits(),
+        ];
+        w.push(self.nodes.len() as u32);
+        for (i, (&p, links)) in self.nodes.iter().zip(&self.links).enumerate() {
+            w.extend(v3(p));
+            w.extend([cell[i].0 as u32, cell[i].1 as u32, links.len() as u32]);
+            for l in links {
+                let turns = l.turn != Vec3::ZERO || l.hold != 0.0;
+                // `Kind`'s declaration order is the tag
+                let tag = l.kind as u32
+                    | ((l.takeoff != p) as u32) << 2
+                    | (turns as u32) << 3
+                    | (l.kick.is_some() as u32) << 4;
+                w.extend([l.to.wrapping_sub(i as u32), tag, l.cost.to_bits()]);
+                if l.takeoff != p {
+                    w.extend(v3(l.takeoff));
+                }
+                if turns {
+                    w.extend(v3(l.turn));
+                    w.push(l.hold.to_bits());
+                }
+                if let Some(k) = l.kick {
+                    w.extend([k.run.to_bits(), k.wall.to_bits(), k.jump, k.kick]);
+                }
+            }
+        }
+        w.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// The graph of a nav file made for `key`; `None` for any other file (wrong magic, format or
+    /// key, truncated, trailing bytes, a link to a node that is not there).
+    fn load(bytes: &[u8], key: u32) -> Option<Self> {
+        let (words, rest) = bytes.as_chunks();
+        let mut r = Words(words.iter());
+        if !rest.is_empty() || [r.u32()?, r.u32()?, r.u32()?] != [MAGIC, FORMAT, key] {
+            return None;
+        }
+        let min = Vec2::new(r.f32()?, r.f32()?);
+        let n = r.u32()? as usize;
+        // a node is six words: the count cannot exceed what is left
+        if n > r.0.len() / 6 {
+            return None;
+        }
+        let mut nav = Nav {
+            nodes: Vec::with_capacity(n),
+            cells: HashMap::new(),
+            min,
+            links: Vec::with_capacity(n),
+            broken: HashSet::new(),
+            broken_from: vec![false; n],
+        };
+        for i in 0..n as u32 {
+            let p = r.vec3()?;
+            let cell = (r.u32()? as i32, r.u32()? as i32);
+            let count = r.u32()? as usize;
+            // a link is three words
+            if count > r.0.len() / 3 {
+                return None;
+            }
+            let mut links = Vec::with_capacity(count);
+            for _ in 0..count {
+                let (to, tag, cost) = (i.wrapping_add(r.u32()?), r.u32()?, r.f32()?);
+                let takeoff = if tag & 4 != 0 { r.vec3()? } else { p };
+                let (turn, hold) = if tag & 8 != 0 {
+                    (r.vec3()?, r.f32()?)
+                } else {
+                    (Vec3::ZERO, 0.0)
+                };
+                let kick = if tag & 16 != 0 {
+                    Some(Kick {
+                        run: r.f32()?,
+                        wall: r.f32()?,
+                        jump: r.u32()?,
+                        kick: r.u32()?,
+                    })
+                } else {
+                    None
+                };
+                if tag >= 32 || to as usize >= n {
+                    return None;
+                }
+                let kind = [Kind::Walk, Kind::Jump, Kind::Drop, Kind::Kick][(tag & 3) as usize];
+                links.push(Link {
+                    to,
+                    kind,
+                    cost,
+                    takeoff,
+                    turn,
+                    hold,
+                    kick,
+                });
+            }
+            nav.cells.entry(cell).or_default().push(i);
+            nav.nodes.push(p);
+            nav.links.push(links);
+        }
+        (r.0.len() == 0).then_some(nav)
+    }
+}
+
 fn threads() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get())
 }
@@ -1294,7 +1500,7 @@ mod tests {
     use crate::{
         level::Level,
         map,
-        mrs::Vfs,
+        mrs::{Packed, Vfs, pack},
         view::{SCALE, to_bevy},
     };
 
@@ -1449,5 +1655,127 @@ mod tests {
             }
         }
         assert!(links > 0, "Mansion has no wall kick link");
+    }
+
+    /// A three-node graph with every link shape (walk, jump with a turn, kick).
+    fn tiny() -> Nav {
+        let nodes = vec![
+            Vec3::new(0.25, 0.0, 0.25),
+            Vec3::new(0.75, 1.0, 0.25),
+            Vec3::new(0.25, 0.0, 0.75),
+        ];
+        let walk = |to, takeoff| Link {
+            to,
+            kind: Kind::Walk,
+            cost: 0.5,
+            takeoff,
+            turn: Vec3::ZERO,
+            hold: 0.0,
+            kick: None,
+        };
+        Nav {
+            cells: HashMap::from([((0, 0), vec![0]), ((1, 0), vec![1]), ((0, 1), vec![2])]),
+            min: Vec2::ZERO,
+            links: vec![
+                vec![
+                    walk(1, nodes[0]),
+                    Link {
+                        kind: Kind::Jump,
+                        turn: Vec3::Z,
+                        hold: 0.7,
+                        ..walk(2, Vec3::X)
+                    },
+                ],
+                vec![Link {
+                    kind: Kind::Kick,
+                    kick: Some(Kick {
+                        run: 1.0,
+                        wall: 2.0,
+                        jump: 3,
+                        kick: 4,
+                    }),
+                    ..walk(0, nodes[1])
+                }],
+                vec![],
+            ],
+            broken: HashSet::new(),
+            broken_from: vec![false; 3],
+            nodes,
+        }
+    }
+
+    /// The nav file reader takes what the writer wrote and nothing else: a file of other data, a
+    /// foreign or older one, a cut or padded one and a link out of the graph are all refused.
+    #[test]
+    fn nav_file_rejects_damage() {
+        let nav = tiny();
+        let bytes = nav.save(7);
+        assert!(Nav::load(&bytes, 7).unwrap() == nav);
+        assert!(Nav::load(&bytes, 8).is_none(), "other data");
+        for at in [0, 4] {
+            let mut b = bytes.clone();
+            b[at] ^= 1;
+            assert!(Nav::load(&b, 7).is_none(), "magic/format byte {at}");
+        }
+        for n in 0..bytes.len() {
+            assert!(Nav::load(&bytes[..n], 7).is_none(), "cut to {n} bytes");
+        }
+        assert!(Nav::load(&[&bytes[..], &[0; 4]].concat(), 7).is_none());
+        // the first link's target: word 12 (after the 6 header and 6 node words)
+        let mut b = bytes;
+        b[48..52].copy_from_slice(&99u32.to_le_bytes());
+        assert!(Nav::load(&b, 7).is_none(), "link to node 99");
+    }
+
+    /// The nav file round trip on Mansion (needs the retail install, `GUNZ_GAME=<dir>`): the
+    /// loaded graph equals the built one, from the bytes and from a pack as the browser has it
+    /// ([`Nav::cached`]), the install itself has no file, and the file is not taken for other
+    /// data. Prints the build, save and load times.
+    /// `GUNZ_GAME=<dir> cargo test --release nav_file_mansion -- --nocapture`.
+    #[test]
+    fn nav_file_mansion() {
+        let Ok(game) = std::env::var("GUNZ_GAME") else {
+            return;
+        };
+        let vfs = Vfs::mount(&game).unwrap();
+        let rs = map::find_rs(&vfs, "mansion").unwrap();
+        let col = MapCollision::load(&vfs, &rs).unwrap();
+        let map = map::load(&vfs, &rs).unwrap();
+        let (min, max) = bounds(&map);
+        let t = std::time::Instant::now();
+        let nav = Nav::new(&col, min, max);
+        let built = t.elapsed();
+        let key = key(&vfs, &map, min, max).unwrap();
+        let t = std::time::Instant::now();
+        let bytes = nav.save(key);
+        let saved = t.elapsed();
+        let t = std::time::Instant::now();
+        let loaded = Nav::load(&bytes, key).expect("nav file");
+        let load = t.elapsed();
+        assert!(loaded == nav, "the loaded graph differs");
+        assert!(Nav::load(&bytes, key ^ 1).is_none());
+        assert!(
+            Nav::cached(&vfs, &map, min, max).is_none(),
+            "the install has no nav file"
+        );
+        let col_path = format!("{rs}.col");
+        let web = pack(&[
+            (
+                col_path.clone(),
+                Packed::Bytes(vfs.read(&col_path).unwrap()),
+            ),
+            (Nav::file(&map), Packed::Bytes(bytes.clone())),
+        ]);
+        let web = Vfs::from_packs([&web[..]]).unwrap();
+        let t = std::time::Instant::now();
+        let packed = Nav::cached(&web, &map, min, max).expect("nav file in the pack");
+        let via_pack = t.elapsed();
+        assert!(packed == nav);
+        println!(
+            "mansion: {} nodes, {} links, file {} kB; build {built:.2?}, save {saved:.2?}, load {load:.2?}, from the pack {via_pack:.2?}",
+            nav.nodes.len(),
+            nav.links.iter().map(Vec::len).sum::<usize>(),
+            bytes.len() / 1024,
+        );
     }
 }

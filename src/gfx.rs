@@ -33,6 +33,7 @@ use bevy::{
     },
     prelude::*,
     render::{
+        error_handler::{RenderError, RenderErrorHandler, RenderErrorPolicy},
         extract_component::ExtractComponent,
         render_resource::{ShaderType, WgpuFeatures},
         renderer::RenderDevice,
@@ -467,6 +468,7 @@ impl Plugin for GfxPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "gfx.wgsl");
         app.add_message::<Damage>()
+            .insert_resource(RenderErrorHandler(render_error))
             .add_plugins(FullscreenMaterialPlugin::<Fx>::default())
             .init_resource::<Panel>()
             .add_systems(
@@ -490,6 +492,85 @@ impl Plugin for GfxPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Last, limit);
     }
+}
+
+/// A rendering error (a WebGPU device or browser that rejects something an effect needs) stops
+/// the game in bevy's default handler, and on a browser that can mean a frozen or flashing
+/// canvas. See [`gpu_failed`].
+fn render_error(e: &RenderError, main: &mut World, _: &mut World) -> RenderErrorPolicy {
+    if gpu_failed(main, &e.description) {
+        return RenderErrorPolicy::Ignore;
+    }
+    main.write_message(AppExit::error());
+    RenderErrorPolicy::StopRendering
+}
+
+/// The GPU rejected a frame: bevy's handler above, or in the browser the page, which sees the
+/// errors Safari never hands to wgpu (`web.rs`). In a match, the setting behind the pass the
+/// error names goes off (as in ORIGINAL; [`turn_off`]), or for an error naming nothing known
+/// the whole of ORIGINAL, which renders as the game always did (the menu does not use these
+/// settings); the match carries on. Errors that go on give up (`false`) and leave the match,
+/// back to the menu in the browser.
+pub fn gpu_failed(main: &mut World, what: &str) -> bool {
+    // frames already queued may still report the error after the switch
+    static LATER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let in_match = main.contains_resource::<Settings>();
+    if in_match && let Some(mut p) = main.get_resource_mut::<Profile>() {
+        let off = match turn_off(&mut p.graphics, what) {
+            Some((name, true)) => Some(name),
+            None if p.graphics.which() != Some(Preset::Original) => {
+                p.graphics.preset(Preset::Original);
+                Some("these graphics: switched to ORIGINAL")
+            }
+            _ => None,
+        };
+        if let Some(off) = off {
+            warn!("graphics: rendering failed ({what}), off: {off}");
+            main.write_message(crate::hud::Notice(format!("This device cannot show {off}")));
+            return true;
+        }
+    }
+    if LATER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
+        return true;
+    }
+    error!("graphics: rendering failed: {what}");
+    // (an app that stops never runs its own exit system, so the page is told here)
+    #[cfg(target_arch = "wasm32")]
+    if in_match {
+        crate::web::leave(1);
+    }
+    false
+}
+
+/// Sets, as in ORIGINAL, what draws with the pipeline an error names (bevy's pipeline labels
+/// and [`Fx`]'s): the name of it and whether anything changed; `None` for a name not known here.
+fn turn_off(g: &mut Graphics, what: &str) -> Option<(&'static str, bool)> {
+    use Knob::*;
+    let before = g.clone();
+    let (name, knobs): (_, &[Knob]) = if what.contains("bloom") {
+        ("bloom", &[Bloom])
+    } else if what.contains("tonemapping") {
+        g.tone = Tone::Off;
+        ("tonemapping", &[Exposure, Saturation])
+    } else if what.contains("contrast_adaptive_sharpening") {
+        ("sharpening", &[Sharpen])
+    } else if what.contains("gunz::gfx::Fx") {
+        let fx: &[Knob] = &[Contrast, Grain, MotionBlur, SpeedFx, LowHealth, HitFlash];
+        ("the screen effects", fx)
+    } else if what.contains("postprocessing") {
+        ("vignette and aberration", &[Vignette, Aberration, HitFlash])
+    } else if what.contains("smaa") || what.contains("fxaa") {
+        g.aa = Aa::Msaa4;
+        ("this anti-aliasing", &[])
+    } else if what.contains("pbr_") {
+        ("character lighting", &[ActorLight, DynLight, Shadow])
+    } else {
+        return None;
+    };
+    for &k in knobs {
+        g.knobs[k as usize] = KNOBS[k as usize].5[0];
+    }
+    Some((name, *g != before))
 }
 
 fn put<C: Component>(c: &mut EntityCommands, v: Option<C>) {

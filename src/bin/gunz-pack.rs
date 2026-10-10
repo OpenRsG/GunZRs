@@ -3,7 +3,8 @@
 //! `GUNZ_TRACE` set (`mrs.rs`), plus one match of every other mode the web menu offers and the
 //! game's own menu (its PLAYER page), then writes what they read:
 //! - `core.pack.gz`: every file not tied to a map (characters, weapons, effects, sounds, ...),
-//! - `maps/<map>.pack.gz`: the files under `maps/` and the music that map's match read,
+//! - `maps/<map>.pack.gz`: the files under `maps/` and the music that map's match read, plus the
+//!   map's nav file (`Nav::file`; built here on all cores, the browser has none to spare),
 //! - `files/<path>.gz`: every other file under `model/` on its own (the clothes and their
 //!   textures, gzip), downloaded by the page when the game reads one (`mrs::Packed::Fetch`),
 //! - `index.json`: the maps and the packs' sizes and CRCs (the page caches packs by CRC).
@@ -11,7 +12,12 @@
 //! A pack is `mrs::pack` compressed with gzip. Packs hold retail bytes: keep them on your
 //! machine (`web/dist/` is ignored by git).
 
-use gunz::mrs::{Packed, Vfs, pack};
+use gunz::{
+    col::MapCollision,
+    map,
+    mrs::{Packed, Vfs, pack},
+    nav::Nav,
+};
 use std::{
     collections::BTreeSet,
     fs,
@@ -125,7 +131,14 @@ fn run(game: &str, out: &Path, wanted: &[String]) -> io::Result<()> {
         .filter(|p| !core.contains(*p) && !fetch.contains(*p))
         .map(str::to_owned)
         .collect();
-    let (core_bytes, core_crc) = write(&vfs, &core, &names, &fetch, &out.join("core.pack.gz"))?;
+    let (core_bytes, core_crc) = write(
+        &vfs,
+        &core,
+        &names,
+        &fetch,
+        Vec::new(),
+        &out.join("core.pack.gz"),
+    )?;
     println!(
         "core: {} files ({} names, {} served on their own), {} kB",
         core.len(),
@@ -145,6 +158,7 @@ fn run(game: &str, out: &Path, wanted: &[String]) -> io::Result<()> {
             files,
             &BTreeSet::new(),
             &BTreeSet::new(),
+            vec![nav_file(&vfs, map)?],
             &out.join(&file),
         )?;
         println!("{map}: {} files, {} kB", files.len(), bytes / 1024);
@@ -190,13 +204,30 @@ fn trace(
         .map(|t| t.lines().map(str::to_owned).collect())
 }
 
-/// Packs the readable files of `paths`, the bare `names` and the `fetch` names (served on their
-/// own), gzips the pack to `to`; returns its size and CRC-32.
+/// The map's nav file ([`Nav::file`]): [`Nav::new`] on all cores, which the browser build (one
+/// thread) cannot afford at match start.
+fn nav_file(vfs: &Vfs, name: &str) -> io::Result<(String, Packed)> {
+    let t = std::time::Instant::now();
+    let rs =
+        map::find_rs(vfs, name).ok_or_else(|| io::Error::other(format!("no map named {name}")))?;
+    let (col, map) = (MapCollision::load(vfs, &rs)?, map::load(vfs, &rs)?);
+    let bytes = Nav::build_file(vfs, &map, &col)?;
+    println!(
+        "{name}: nav file {} kB in {:.1}s",
+        bytes.len() / 1024,
+        t.elapsed().as_secs_f32()
+    );
+    Ok((Nav::file(&map), Packed::Bytes(bytes)))
+}
+
+/// Packs the readable files of `paths`, the bare `names`, the `fetch` names (served on their
+/// own) and the `extra` files made here, gzips the pack to `to`; returns its size and CRC-32.
 fn write(
     vfs: &Vfs,
     paths: &BTreeSet<String>,
     names: &BTreeSet<String>,
     fetch: &BTreeSet<String>,
+    extra: Vec<(String, Packed)>,
     to: &Path,
 ) -> io::Result<(usize, u32)> {
     let files: Vec<(String, Packed)> = paths
@@ -204,6 +235,7 @@ fn write(
         .filter_map(|p| Some((p.clone(), Packed::Bytes(vfs.read(p).ok()?))))
         .chain(names.iter().map(|n| (n.clone(), Packed::NameOnly)))
         .chain(fetch.iter().map(|n| (n.clone(), Packed::Fetch)))
+        .chain(extra)
         .collect();
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
     gz.write_all(&pack(&files))?;

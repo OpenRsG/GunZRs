@@ -1,18 +1,19 @@
 //! `gunz-play [GAME_DIR] [MAP] [OPTIONS]`: play a retail map as a GunZ character. Without
 //! GAME_DIR the Steam install is found through `libraryfolders.vdf` (`src/steam.rs`). Without MAP the
-//! main menu opens (map, mode and limits, bots, character and clothes, loadout, sensitivity);
+//! main menu opens (map, mode and limits, bots, character and clothes, loadout, controls);
 //! Start re-executes this binary with the chosen options, and "Main menu" in the pause or
 //! match-end screen re-executes it back into the menu.
 //!
-//! Controls: WASD move, Space jump (in the air next to a wall: wall kick), double-tap a
-//! direction to tumble, mouse look, left mouse attack, right mouse guard (melee), R reload,
-//! 1..5 or the wheel switch
-//! weapon, Tab scoreboard, Esc pause menu (resume, mouse sensitivity, main menu, quit).
+//! Default controls: WASD move, Space jump (in the air next to a wall: wall kick), double-tap
+//! a direction or C to tumble, mouse look, left mouse (or left Ctrl) attack, right mouse (or
+//! left Shift) guard (melee), R reload, 1..5, Q/E or the wheel switch
+//! weapon, Tab scoreboard, Esc pause menu (resume, controls, main menu, quit). Every key and
+//! mouse button can be rebound (CONTROLS in the menus, saved in the profile: `src/controls.rs`).
 //!
 //! OPTIONS (the menu writes the same ones): `--char man|woman`, `--look LOOK` (clothes and
 //! dyes, the profile's `look` text: six 1-based parts `;` six tints), `--loadout ID,ID,..` (zitem ids), `--bots N`,
 //! `--bots-ahead M` (spawn them M metres in front of the player), `--skill 0..1` (bot
-//! difficulty), `--sens X` (mouse sensitivity, 1 = default), `--mode MODE`, `--time-limit
+//! difficulty), `--mode MODE`, `--time-limit
 //! SECONDS` and `--kill-limit N` (0 = none; the defaults are `gametypecfg.xml`'s, none in
 //! headless runs), `--map NAME` (with no MAP: preselect it in the menu).
 //! TOGGLES (also in the pause menu, saved in the profile as `opt_NAME=0|1`; a flag overrides the
@@ -67,7 +68,7 @@
 //! degrees (0 = -Z, positive turns left), `--hp`/`--ap` the starting health/armour,
 //! `--pause-at` opens the pause menu when the match clock reaches S seconds, `--die-at` kills
 //! the player then (the match clock starts with the first frame, 1.5 s before the script).
-//! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player|shop|inventory|clan` picks the
+//! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player|shop|inventory|clan|controls` picks the
 //! screen and the options above set what it shows.
 //! `--npc NAME[,NAME..]` spawns quest monsters (`system/npc.xml` ids such as `11`, `16`, or
 //! `npc2.xml` names such as `knifeman`, `tower`) in a row in front of the player, `--bots-ahead M`
@@ -179,11 +180,11 @@ fn main() -> AppExit {
     let usage = || {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--look LOOK] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--sens X] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
+             [--bots-ahead M] [--skill 0..1] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S] [--host | --join ADDR|lan]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
-             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory|clan] [--npc NAME[,NAME..]]\n\
+             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory|clan|controls] [--npc NAME[,NAME..]]\n\
              (see the doc comment of src/bin/gunz-play.rs)"
         );
         AppExit::from_code(2)
@@ -407,7 +408,6 @@ fn main() -> AppExit {
     }
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(gunz::web::WebPlugin);
-    let sensitivity = Settings::default().sensitivity * config.sens;
     let exit = app
         .add_plugins((
             LevelPlugin,
@@ -428,10 +428,7 @@ fn main() -> AppExit {
             },
         })
         .insert_resource({
-            let mut s = Settings {
-                sensitivity,
-                ..default()
-            };
+            let mut s = Settings::default();
             Profile::open(headless).apply(&mut s);
             for &(i, on) in &toggles {
                 *opt_mut(&mut s, i) = on;

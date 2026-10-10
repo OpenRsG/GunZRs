@@ -342,8 +342,6 @@ pub struct Config {
     pub bots: usize,
     /// Bot difficulty 0..=1.
     pub skill: f32,
-    /// Mouse sensitivity relative to the default (1.0).
-    pub sens: f32,
     pub mode: Mode,
     pub time_limit: Option<u32>,
     pub kill_limit: Option<u32>,
@@ -431,7 +429,6 @@ impl Config {
             loadout,
             bots: get(args, "--bots")?.unwrap_or(3),
             skill: get::<f32>(args, "--skill")?.unwrap_or(0.5).clamp(0.0, 1.0),
-            sens: get::<f32>(args, "--sens")?.unwrap_or(1.0).max(0.05),
             mode,
             time_limit: limit(time, lim.minutes_default * 60),
             kill_limit: limit(kills, lim.kills_default),
@@ -451,8 +448,6 @@ impl Config {
             &self.bots.to_string(),
             "--skill",
             &self.skill.to_string(),
-            "--sens",
-            &self.sens.to_string(),
             "--mode",
             self.mode.arg(),
             "--time-limit",
@@ -503,6 +498,7 @@ pub enum Page {
     Shop,
     Inventory,
     Clan,
+    Controls,
 }
 
 impl FromStr for Page {
@@ -514,6 +510,7 @@ impl FromStr for Page {
             "shop" => Ok(Page::Shop),
             "inventory" => Ok(Page::Inventory),
             "clan" => Ok(Page::Clan),
+            "controls" => Ok(Page::Controls),
             _ => Err(()),
         }
     }
@@ -722,7 +719,6 @@ enum Field {
     Blurb,
     Bots,
     Skill,
-    Sens,
     /// The piece / the dye of a body slot ([`Slot::ALL`] index).
     Piece(usize),
     Tint(usize),
@@ -813,7 +809,6 @@ fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32
         }
         Field::Bots => cfg.bots = (cfg.bots as i32 + d).clamp(0, MAX_BOTS) as usize,
         Field::Skill => cfg.skill = ((cfg.skill * 10.0).round() + d as f32).clamp(0.0, 10.0) / 10.0,
-        Field::Sens => cfg.sens = ((cfg.sens * 4.0).round() + d as f32).clamp(1.0, 16.0) / 4.0,
         Field::Piece(s) => {
             // the base piece, then every piece of the wardrobe
             let list = &cat.wardrobe(cfg.woman).slots[s];
@@ -884,7 +879,6 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
                 _ => "Hard",
             }
         ),
-        Field::Sens => format!("x{:.2}", cfg.sens),
         Field::Piece(s) => {
             let list = &cat.wardrobe(cfg.woman).slots[s];
             match cfg.look.parts[s].and_then(|p| list.iter().position(|q| q.part == p)) {
@@ -985,6 +979,7 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         })
         .add_plugins(shop::ShopPlugin)
         .add_plugins(clan::ClanMenuPlugin)
+        .add_plugins(crate::controls::ControlsPlugin)
         .add_systems(Startup, build)
         .add_systems(
             Update,
@@ -1127,6 +1122,7 @@ fn build(
                     ("SHOP", Page::Shop),
                     ("INVENTORY", Page::Inventory),
                     ("CLAN", Page::Clan),
+                    ("CONTROLS", Page::Controls),
                 ] {
                     t.spawn(button(&art, 130.0, 40.0, label, 18.0, Act::Page(page)));
                 }
@@ -1298,7 +1294,6 @@ fn build(
                                 ..default()
                             },
                         ));
-                        stepper(m, "Mouse sens.", Field::Sens, 110.0, false);
                     });
                 p.spawn(Node {
                     flex_grow: 1.0,
@@ -1331,6 +1326,8 @@ fn build(
             });
             root.spawn(page(Page::Clan))
                 .with_children(|p| clan::fill(p, &art, &clan_art));
+            root.spawn(page(Page::Controls))
+                .with_children(|p| crate::controls::fill(p, &art, false));
             for page_kind in [Page::Shop, Page::Inventory] {
                 root.spawn(page(page_kind))
                     .with_children(|p| shop::fill(p, &art, page_kind));
@@ -1698,8 +1695,6 @@ mod tests {
             "5",
             "--skill",
             "0.7",
-            "--sens",
-            "1.5",
             "--mode",
             "tdm",
             "--time-limit",

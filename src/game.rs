@@ -35,6 +35,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::bot::BotPlugin)
             .add_plugins(crate::pickup::PickupPlugin)
             .add_plugins(crate::session::SessionPlugin)
+            .add_plugins(crate::controls::ControlsPlugin)
             .add_plugins(crate::profile::ProfilePlugin)
             .add_plugins(crate::quest::QuestPlugin)
             .add_plugins(crate::clan::ClanPlugin)
@@ -248,11 +249,10 @@ pub fn friendly(a: (Option<Team>, bool), b: (Option<Team>, bool)) -> bool {
     }
 }
 
-/// Player preferences the menu writes (`gunz-play --sens`).
+/// Player preferences (the pause menu's toggles, `profile::OPTS`). Mouse and keys: the
+/// profile's `controls::Controls`.
 #[derive(Resource, Clone, Debug)]
 pub struct Settings {
-    /// Mouse look, radians per pixel.
-    pub sensitivity: f32,
     /// Background-music loudness, 0..=1 (`music.rs`; **inferred** default).
     pub music: f32,
     /// Ramping kill sounds on consecutive kills (iGunZ `/killsounds` idea).
@@ -274,7 +274,6 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            sensitivity: 0.0025,
             music: 0.5,
             kill_sounds: true,
             hit_sound: false,

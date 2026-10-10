@@ -46,21 +46,32 @@ builds Linux, Windows and macOS, but nobody has played it on Windows or macOS ye
 
 ## Controls
 
+Defaults follow the original game's `config.xml`; C, T and F5-F9 are this port's extras.
+
 | Key | Action |
 |---|---|
 | Mouse | Aim (cursor is grabbed) |
 | W A S D | Run; double-tap a direction to tumble |
+| C | Dash: tumble the held direction (forward if none) |
 | Space | Jump; near a wall in the air: wall kick; along a wall with W held: wall run |
-| Left mouse | Attack (hold for automatic guns, chain slashes into a combo) |
-| Right mouse | Guard (melee) |
+| Left mouse, left Ctrl | Attack (hold for automatic guns, chain slashes into a combo) |
+| Right mouse, left Shift | Guard (melee) |
 | R | Reload |
-| 1-5, wheel | Switch weapon |
+| 1-5, Q / E, wheel | Switch weapon (Q and wheel up: previous; E and wheel down: next) |
 | Tab | Scoreboard |
-| Esc | Pause menu (resume, sensitivity, option toggles, main menu, quit) |
-| T, F5-F9 | Taunt, emotes (bow, wave, cry, laugh, dance) |
+| Esc | Pause menu (resume, controls, option toggles, main menu, quit) |
+| Numpad 1-6, T, F5-F9 | Taunt, emotes (bow, wave, laugh, cry, dance) |
+| [ / ] | Mouse sensitivity down / up |
 | F | Blitzkrieg upgrade panel (Up/Down, Enter buys) |
 | M | Blitzkrieg minimap on / off |
 | 1-9, arrows, Enter | Blitzkrieg class screen at the start of the match (30 s; click works too) |
+
+CONTROLS (a main-menu tab, and in the Esc menu) rebinds every action above except Esc and the
+Blitzkrieg keys, two bindings each: keys, mouse buttons 1-5 or the wheel. A key taken from another action says so. The mouse side
+has sensitivity (shown as cm per 360 at 800 and 1600 DPI), vertical ratio, invert, acceleration
+with its limit and a live speed curve, and, in the browser, raw input (unaccelerated pointer lock
+in Chromium browsers; the desktop build always reads raw mouse motion). Everything is saved in
+the profile.
 
 Dead in a round mode? Space or click cycles the player you spectate.
 
@@ -153,7 +164,7 @@ cargo run --release --bin mrs -- extract "$GAME" .local/extract   # CRC-checked 
 <details>
 <summary>All <code>gunz-play</code> options</summary>
 
-`--char man|woman`, `--look LOOK` (the profile's `look` text), `--loadout ID,..`, `--bots N`, `--skill 0..1`, `--sens X`,
+`--char man|woman`, `--look LOOK` (the profile's `look` text), `--loadout ID,..`, `--bots N`, `--skill 0..1`,
 `--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|tournament|berserker|gunman|spy|blitzkrieg|clanwar|infected|gungame|dynduel|training`,
 `--mode quest --scenario NAME [--dice N] [--sacrifice A,B]` (e.g. `"Quest Mansion QL0"`, `"Goblin King"`,
 `"Challenge 101"`, `"Survival Prison"`; without `--dice` the die is rolled), `--time-limit S`, `--kill-limit N` (0 = none),

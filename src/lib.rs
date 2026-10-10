@@ -8,6 +8,7 @@ pub mod character;
 pub mod clan;
 pub mod col;
 pub mod combat;
+pub mod controls;
 pub mod effect;
 pub mod elu;
 pub mod game;

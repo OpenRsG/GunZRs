@@ -1407,9 +1407,12 @@ fn build(
                 ..default()
             })
             .with_children(|f| {
-                // the browser build's page has its own menu: this one goes back to it
-                let quit = if cfg!(target_arch = "wasm32") { "BACK" } else { "QUIT" };
-                f.spawn(button(160.0, 48.0, quit, 22.0, Act::Quit));
+                // the browser page is this menu: nothing to quit to (the node keeps START right)
+                if cfg!(target_arch = "wasm32") {
+                    f.spawn(Node::default());
+                } else {
+                    f.spawn(button(160.0, 48.0, "QUIT", 22.0, Act::Quit));
+                }
                 f.spawn(Node {
                     column_gap: px(16),
                     align_items: AlignItems::Center,

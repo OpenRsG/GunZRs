@@ -34,7 +34,8 @@ use bevy::{
     prelude::*,
     render::{
         extract_component::ExtractComponent,
-        render_resource::ShaderType,
+        render_resource::{ShaderType, WgpuFeatures},
+        renderer::RenderDevice,
         view::{ColorGrading, ColorGradingGlobal, ColorGradingSection, Msaa},
     },
     shader::ShaderRef,
@@ -501,6 +502,7 @@ fn put<C: Component>(c: &mut EntityCommands, v: Option<C>) {
 /// Puts the settings on the camera: render components, window present mode and field of view.
 fn apply(
     profile: Option<Res<Profile>>,
+    device: Option<Res<RenderDevice>>,
     mut commands: Commands,
     mut camera: Query<(Entity, &mut Projection), With<Camera3d>>,
     mut window: Query<&mut Window, With<PrimaryWindow>>,
@@ -564,9 +566,15 @@ fn apply(
             denoise: false,
         }),
     );
+    // bloom renders to Rg11b10Ufloat, which WebGPU only renders with an optional feature
+    // (without it every frame fails and the screen stays black)
+    let bloom = device.is_none_or(|d| {
+        d.features()
+            .contains(WgpuFeatures::RG11B10UFLOAT_RENDERABLE)
+    });
     put(
         &mut c,
-        (k(Knob::Bloom) > 0.0).then(|| Bloom {
+        (bloom && k(Knob::Bloom) > 0.0).then(|| Bloom {
             intensity: 0.45 * k(Knob::Bloom),
             composite_mode: BloomCompositeMode::Additive,
             prefilter: BloomPrefilter {

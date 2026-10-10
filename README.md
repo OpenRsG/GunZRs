@@ -170,13 +170,14 @@ install) plus one pack per map (3-14 MB). The page fetches the shared pack and t
 (7 MB brotli) right away and a map's pack only once you pick that map. Packs are cached for
 good by their CRC. Clothes are too many to pack (hundreds of MB): every other file under
 `model/` is served on its own from `data/files/` and downloaded when the game reads it (a bot's
-outfit at the start of a match, a piece you browse to). After START a loading screen shows each
-download (size and its own bar), an overall bar, the speed and time left, then the start-up step
-until the match is on screen. CHARACTER & CLOTHES opens the game's own PLAYER page; its SAVE
-keeps the character in the browser's local storage and its START plays the map and mode picked
-there. On a touch screen the match has on-screen controls (a stick, drag anywhere else to look,
-fire, jump, dash, guard, reload, weapon swap, scores, pause) and goes fullscreen; pinch and
-double-tap zoom are off. The gear button (or TOUCH CONTROLS in the page's menu) opens their
+outfit at the start of a match, a piece you browse to). The page opens on the game's own main
+menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS) behind a loading screen that
+shows each download (size and its own bar), an overall bar, the speed and time left, then the
+start-up step. The profile lives in the browser's local storage; START downloads the map's pack
+and plays it, and MAIN MENU in a match comes back here. On a touch screen the match has
+on-screen controls (a stick, drag anywhere else to look, fire, jump, dash, guard, reload, weapon
+swap, scores, pause) and the first touch goes fullscreen; pinch and double-tap zoom are off.
+The gear button opens their
 settings, kept in the browser: look sensitivity and invert, aim assist strength (it leans the
 aim towards the visible enemy nearest the crosshair while you turn, move or shoot, never on its
 own; 0 = off), a floating or fixed stick and its dead zone, button size and opacity,

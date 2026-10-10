@@ -519,7 +519,10 @@ fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
                     })
                     .with_children(|b| {
                         b.spawn(button(215.0, 40.0, "MAIN MENU", 17.0, Act::Menu));
-                        b.spawn(button(215.0, 40.0, "QUIT", 17.0, Act::Quit));
+                        // in the browser MAIN MENU is the page itself: nothing else to quit to
+                        if !cfg!(target_arch = "wasm32") {
+                            b.spawn(button(215.0, 40.0, "QUIT", 17.0, Act::Quit));
+                        }
                     });
                 });
         });
@@ -555,7 +558,9 @@ fn spawn_end(commands: &mut Commands, camera: Entity, headline: &str) {
         .with_children(|b| {
             b.spawn(primary(190.0, 46.0, "PLAY AGAIN", 18.0, Act::Again));
             b.spawn(button(170.0, 46.0, "MAIN MENU", 17.0, Act::Menu));
-            b.spawn(button(110.0, 46.0, "QUIT", 17.0, Act::Quit));
+            if !cfg!(target_arch = "wasm32") {
+                b.spawn(button(110.0, 46.0, "QUIT", 17.0, Act::Quit));
+            }
         });
     });
 }

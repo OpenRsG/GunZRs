@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 /// Retail lightmaps have a median of ~0.13; ×4 (D3D MODULATE4X-style) matches the game's look.
 /// Chosen by comparing ×2/×4 renders, not read from the packed executable.
-const LIGHTMAP_SCALE: f32 = 4.0;
+pub(crate) const LIGHTMAP_SCALE: f32 = 4.0;
 
 /// The mounted archives and the loaded map.
 #[derive(Resource)]
@@ -77,7 +77,7 @@ pub struct MapMaterial {
     params: Vec4,
     #[texture(1)]
     #[sampler(2)]
-    diffuse: Handle<Image>,
+    pub(crate) diffuse: Handle<Image>,
     #[texture(3)]
     #[sampler(4)]
     lightmap: Handle<Image>,

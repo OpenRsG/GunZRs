@@ -5,7 +5,7 @@
 //! keys: `docs/formats.md` "Controls".
 
 use crate::{
-    menu::{Art, button, heading, panel},
+    menu::{button, heading, panel, primary},
     profile::Profile,
 };
 use bevy::{
@@ -777,7 +777,7 @@ fn row() -> Node {
 
 /// The panel's contents: mouse settings, then the bindings with the status line, RESET (and
 /// DONE for the pause overlay) under them.
-pub fn fill(p: &mut ChildSpawnerCommands, art: &Art, done: bool) {
+pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
     p.spawn(Node {
         column_gap: px(16),
         align_items: AlignItems::Stretch,
@@ -785,7 +785,7 @@ pub fn fill(p: &mut ChildSpawnerCommands, art: &Art, done: bool) {
     })
     .with_children(|r| {
         r.spawn(panel(410.0, AlignItems::FlexStart))
-            .with_children(|m| mouse(m, art));
+            .with_children(mouse);
         r.spawn(panel(800.0, AlignItems::FlexStart))
             .with_children(|k| {
                 binds(k);
@@ -805,16 +805,16 @@ pub fn fill(p: &mut ChildSpawnerCommands, art: &Art, done: bool) {
                         },
                         children![(Show::Status, text(HINT, 14.0, DIM))],
                     ));
-                    f.spawn(button(art, 170.0, 34.0, "RESET DEFAULTS", 15.0, Ctl::Reset));
+                    f.spawn(button(170.0, 34.0, "RESET DEFAULTS", 15.0, Ctl::Reset));
                     if done {
-                        f.spawn(button(art, 130.0, 34.0, "DONE", 18.0, Ctl::Done));
+                        f.spawn(primary(130.0, 34.0, "DONE", 18.0, Ctl::Done));
                     }
                 });
             });
     });
 }
 
-fn mouse(m: &mut ChildSpawnerCommands, art: &Art) {
+fn mouse(m: &mut ChildSpawnerCommands) {
     m.spawn(heading("MOUSE"));
     let slider = |m: &mut ChildSpawnerCommands, name: &str, k: Knob| {
         m.spawn(row()).with_children(|r| {
@@ -848,15 +848,15 @@ fn mouse(m: &mut ChildSpawnerCommands, art: &Art) {
                     )],
                 ));
             });
-            r.spawn(button(art, 26.0, 24.0, "-", 16.0, Ctl::Step(k, -1)));
-            r.spawn(button(art, 26.0, 24.0, "+", 16.0, Ctl::Step(k, 1)));
+            r.spawn(button(26.0, 24.0, "-", 16.0, Ctl::Step(k, -1)));
+            r.spawn(button(26.0, 24.0, "+", 16.0, Ctl::Step(k, 1)));
             r.spawn((Show::Knob(k), text("", 15.0, GOLD)));
         });
     };
     let toggle = |m: &mut ChildSpawnerCommands, name: &str, f: Flag| {
         m.spawn(row()).with_children(|r| {
             r.spawn(boxed(name, 15.0, Color::WHITE, 296.0));
-            r.spawn(button(art, 64.0, 24.0, "", 14.0, Ctl::Toggle(f)));
+            r.spawn(button(64.0, 24.0, "", 14.0, Ctl::Toggle(f)));
         });
     };
     slider(m, "Sensitivity", Knob::Sens);
@@ -1017,7 +1017,6 @@ fn overlay(
     mut commands: Commands,
     open: Option<Res<Overlay>>,
     frozen: Option<Res<crate::game::Frozen>>,
-    art: Option<Res<Art>>,
     camera: Query<Entity, With<Camera3d>>,
     roots: Query<Entity, With<OverlayRoot>>,
     mut panel: ResMut<Panel>,
@@ -1031,7 +1030,7 @@ fn overlay(
             *panel = Panel::default();
         }
         (true, Err(_)) => {
-            let (Some(art), Ok(camera)) = (art, camera.single()) else {
+            let Ok(camera) = camera.single() else {
                 return;
             };
             *panel = Panel::default();
@@ -1051,7 +1050,7 @@ fn overlay(
                     // opaque enough that the HUD under it (death text, notices) does not read through
                     BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
                 ))
-                .with_children(|r| fill(r, &art, true));
+                .with_children(|r| fill(r, true));
         }
         _ => {}
     }

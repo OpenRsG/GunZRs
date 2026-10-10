@@ -36,6 +36,8 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::pickup::PickupPlugin)
             .add_plugins(crate::session::SessionPlugin)
             .add_plugins(crate::controls::ControlsPlugin)
+            .add_plugins(crate::gfx::GfxPlugin)
+            .add_plugins(crate::light::LightPlugin)
             .add_plugins(crate::profile::ProfilePlugin)
             .add_plugins(crate::quest::QuestPlugin)
             .add_plugins(crate::clan::ClanPlugin)
@@ -43,6 +45,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::blitz::BlitzPlugin)
             .add_plugins(crate::killcam::KillcamPlugin)
             .add_plugins(crate::net::NetPlugin)
+            .add_plugins(crate::gore::GorePlugin)
             .add_plugins(crate::perf::PerfPlugin);
     }
 }
@@ -267,6 +270,8 @@ pub struct Settings {
     pub screen_blood: bool,
     /// Orbitable kill camera on the killer after death.
     pub killcam: bool,
+    /// Simulated droplet gore (`gore.rs`) instead of the retail blood sprites and marks.
+    pub realistic_blood: bool,
     /// Touch-screen aim assist strength, 0 (off) ..= 1; the browser's touch controls set it.
     pub aim_assist: f32,
 }
@@ -281,6 +286,7 @@ impl Default for Settings {
             team_bars: true,
             screen_blood: true,
             killcam: true,
+            realistic_blood: true,
             aim_assist: 0.0,
         }
     }

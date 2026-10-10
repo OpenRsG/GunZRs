@@ -1,7 +1,7 @@
 //! `gunz-play` main menu (Bevy UI over a 3D character preview) and the run configuration it
 //! edits. The menu is its own `App`: [`run`] returns the chosen [`Config`], and the binary
 //! re-executes itself with the matching flags (see `src/bin/gunz-play.rs`). Art comes from
-//! `interface/default/` (lobby background, logo, button textures); retail fonts are not in the
+//! `interface/default/` (lobby background, logo); retail fonts are not in the
 //! archives, so text uses Bevy's built-in font. Notes: `docs/formats.md` (menu).
 
 use crate::{
@@ -499,6 +499,7 @@ pub enum Page {
     Inventory,
     Clan,
     Controls,
+    Graphics,
 }
 
 impl FromStr for Page {
@@ -511,59 +512,52 @@ impl FromStr for Page {
             "inventory" => Ok(Page::Inventory),
             "clan" => Ok(Page::Clan),
             "controls" => Ok(Page::Controls),
+            "graphics" => Ok(Page::Graphics),
             _ => Err(()),
         }
     }
 }
 
-/// Button textures shared by the main menu and the in-game pause menu.
-#[derive(Resource, Clone)]
-pub struct Art {
-    pub(crate) up: Handle<Image>,
-    pub(crate) over: Handle<Image>,
-}
+/// The UI's accent (amber, from the retail headings) and its dimmed text colour.
+pub const ACCENT: Color = Color::srgb(1.0, 0.78, 0.3);
+pub const DIM: Color = Color::srgb(0.66, 0.7, 0.78);
 
-impl Art {
-    pub fn load(vfs: &Vfs, images: &mut Assets<Image>) -> Self {
-        let mut get = |n: &str| {
-            try_image(vfs, images, n).unwrap_or_else(|| panic!("interface/default/{n} missing"))
-        };
-        Self {
-            up: get("defaultbutton_up.png"),
-            over: get("defaultbutton_over.png"),
-        }
-    }
-}
-
-/// Marks the selected button of a group (drawn like a hovered one).
+/// Marks the selected button of a group (drawn with the accent).
 #[derive(Component)]
 pub struct Chosen;
 
-/// A clickable retail-textured button; `act` is the system-specific action component.
-pub fn button<A: Component>(
-    art: &Art,
-    w: f32,
-    h: f32,
-    label: &str,
-    size: f32,
-    act: A,
-) -> impl Bundle {
+/// A button [`hover`] paints; the main call to action (START, RESUME) is [`Primary`].
+#[derive(Component)]
+pub struct Flat;
+
+#[derive(Component)]
+pub struct Primary;
+
+/// The look every flat button starts with (`hover` repaints it by state).
+pub fn flat(w: f32, h: f32) -> impl Bundle {
     (
         Button,
-        act,
+        Flat,
+        UiTransform::default(),
         Node {
             width: px(w),
             height: px(h),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(6)),
             ..default()
         },
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-        ImageNode {
-            image_mode: NodeImageMode::Stretch,
-            ..ImageNode::new(art.up.clone())
-        },
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.14)),
+    )
+}
+
+/// A clickable button; `act` is the system-specific action component.
+pub fn button<A: Component>(w: f32, h: f32, label: &str, size: f32, act: A) -> impl Bundle {
+    (
+        act,
+        flat(w, h),
         children![(
             Text::new(label),
             TextFont::from_font_size(size),
@@ -572,32 +566,78 @@ pub fn button<A: Component>(
     )
 }
 
-/// Hover/selection look of every [`button`].
+/// The main button of a screen: filled with the accent.
+pub fn primary<A: Component>(w: f32, h: f32, label: &str, size: f32, act: A) -> impl Bundle {
+    (
+        act,
+        Primary,
+        flat(w, h),
+        BoxShadow::new(
+            Color::srgba(1.0, 0.7, 0.2, 0.25),
+            px(0),
+            px(4),
+            px(0),
+            px(14),
+        ),
+        children![(
+            Text::new(label),
+            TextFont::from_font_size(size),
+            TextColor(Color::srgb(0.1, 0.07, 0.0))
+        )],
+    )
+}
+
+/// Hover, pressed and selected look of every [`Flat`] button.
+#[allow(clippy::type_complexity)]
 pub fn hover(
-    art: Res<Art>,
-    mut buttons: Query<(&Interaction, Has<Chosen>, &mut ImageNode, &mut BorderColor), With<Button>>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            Has<Chosen>,
+            Has<Primary>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &mut UiTransform,
+        ),
+        With<Flat>,
+    >,
 ) {
-    for (i, chosen, mut img, mut border) in &mut buttons {
-        let want = if chosen || *i != Interaction::None {
-            &art.over
-        } else {
-            &art.up
+    for (i, chosen, primary, mut bg, mut border, mut tf) in &mut buttons {
+        let (fill, edge) = match (primary, *i, chosen) {
+            (true, Interaction::Pressed, _) => (Color::srgb(0.85, 0.6, 0.15), ACCENT),
+            (true, Interaction::Hovered, _) => (Color::srgb(1.0, 0.86, 0.45), Color::WHITE),
+            (true, _, _) => (ACCENT, Color::srgba(1.0, 1.0, 1.0, 0.0)),
+            (_, Interaction::Pressed, _) => (ACCENT.with_alpha(0.32), ACCENT),
+            (_, Interaction::Hovered, true) => (ACCENT.with_alpha(0.3), ACCENT),
+            (_, _, true) => (ACCENT.with_alpha(0.18), ACCENT.with_alpha(0.85)),
+            (_, Interaction::Hovered, _) => (
+                Color::srgba(1.0, 1.0, 1.0, 0.16),
+                Color::srgba(1.0, 1.0, 1.0, 0.45),
+            ),
+            _ => (
+                Color::srgba(1.0, 1.0, 1.0, 0.07),
+                Color::srgba(1.0, 1.0, 1.0, 0.14),
+            ),
         };
-        if img.image != *want {
-            img.image = want.clone();
+        if bg.0 != fill {
+            bg.0 = fill;
         }
-        // The selected button of a group gets a gold frame.
-        let frame = BorderColor::all(if chosen {
-            Color::srgb(1.0, 0.8, 0.3)
+        let edge = BorderColor::all(edge);
+        if *border != edge {
+            *border = edge;
+        }
+        let scale = if *i == Interaction::Pressed {
+            0.97
         } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.3)
-        });
-        if *border != frame {
-            *border = frame;
+            1.0
+        };
+        if tf.scale != Vec2::splat(scale) {
+            tf.scale = Vec2::splat(scale);
         }
     }
 }
 
+/// A rounded dark card with a soft shadow.
 pub fn panel(width: f32, align: AlignItems) -> impl Bundle {
     (
         Node {
@@ -605,28 +645,45 @@ pub fn panel(width: f32, align: AlignItems) -> impl Bundle {
             align_items: align,
             flex_direction: FlexDirection::Column,
             row_gap: px(8),
-            padding: UiRect::all(px(14)),
+            padding: UiRect::all(px(16)),
             border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(12)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.62)),
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
+        BackgroundColor(Color::srgba(0.03, 0.04, 0.07, 0.8)),
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.09)),
+        BoxShadow::new(
+            Color::srgba(0.0, 0.0, 0.0, 0.5),
+            px(0),
+            px(8),
+            px(0),
+            px(24),
+        ),
     )
 }
 
+/// A card title: accent text over a hairline.
 pub fn heading(s: &str) -> impl Bundle {
     (
         Text::new(s),
-        TextFont::from_font_size(22.0),
-        TextColor(Color::srgb(0.95, 0.8, 0.45)),
+        TextFont::from_font_size(18.0),
+        TextColor(ACCENT),
+        Node {
+            width: percent(100),
+            padding: UiRect::bottom(px(6)),
+            margin: UiRect::bottom(px(4)),
+            border: UiRect::bottom(px(1)),
+            ..default()
+        },
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.1)),
     )
 }
 
 fn label(s: &str, w: f32) -> impl Bundle {
     (
         Text::new(s),
-        TextFont::from_font_size(18.0),
-        TextColor(Color::srgb(0.85, 0.85, 0.85)),
+        TextFont::from_font_size(17.0),
+        TextColor(DIM),
         Node {
             width: px(w),
             height: px(24),
@@ -980,19 +1037,9 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         .add_plugins(shop::ShopPlugin)
         .add_plugins(clan::ClanMenuPlugin)
         .add_plugins(crate::controls::ControlsPlugin)
+        .add_plugins(crate::gfx::GfxPlugin)
         .add_systems(Startup, build)
-        .add_systems(
-            Update,
-            (
-                act,
-                refresh,
-                hover.run_if(resource_exists::<Art>),
-                preview,
-                orbit,
-                fit,
-            )
-                .chain(),
-        );
+        .add_systems(Update, (act, refresh, hover, preview, orbit, fit).chain());
     // in the browser the page takes over when the menu ends (`web::play`, `gunzExit`)
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(crate::web::WebPlugin);
@@ -1012,7 +1059,6 @@ fn build(
     shot: Option<Res<Shot>>,
 ) {
     commands.insert_resource(shop::Icons::load(&cat.vfs, &data, &mut images));
-    let art = Art::load(&cat.vfs, &mut images);
     let clan_art =
         ClanArt::load(&cat.vfs, &mut images).unwrap_or_else(|e| panic!("clan data: {e}"));
     let img = |n: &str, images: &mut Assets<Image>| {
@@ -1060,9 +1106,9 @@ fn build(
                 _ => {}
             }
             if big {
-                r.spawn(button(&art, 40.0, 30.0, "<<", 16.0, Act::Step(f, -10)));
+                r.spawn(button(40.0, 30.0, "<<", 16.0, Act::Step(f, -10)));
             }
-            r.spawn(button(&art, 34.0, 30.0, "<", 16.0, Act::Step(f, -1)));
+            r.spawn(button(34.0, 30.0, "<", 16.0, Act::Step(f, -1)));
             r.spawn((
                 Value(f),
                 Text::new(value(cfg, &cat, &profile, f)),
@@ -1079,9 +1125,9 @@ fn build(
                     ..default()
                 },
             ));
-            r.spawn(button(&art, 34.0, 30.0, ">", 16.0, Act::Step(f, 1)));
+            r.spawn(button(34.0, 30.0, ">", 16.0, Act::Step(f, 1)));
             if big {
-                r.spawn(button(&art, 40.0, 30.0, ">>", 16.0, Act::Step(f, 10)));
+                r.spawn(button(40.0, 30.0, ">>", 16.0, Act::Step(f, 10)));
             }
         });
     };
@@ -1096,6 +1142,24 @@ fn build(
             },
         ))
         .with_children(|root| {
+            // dark bands behind the tabs and the buttons, fading into the lobby picture
+            for (top, stops) in [(true, [0.8, 0.0]), (false, [0.0, 0.85])] {
+                let c = |a| Color::srgba(0.0, 0.0, 0.0, a);
+                root.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: if top { px(0) } else { Val::Auto },
+                        bottom: if top { Val::Auto } else { px(0) },
+                        width: percent(100),
+                        height: px(110),
+                        ..default()
+                    },
+                    BackgroundGradient::from(LinearGradient::to_bottom(vec![
+                        ColorStop::new(c(stops[0]), percent(0)),
+                        ColorStop::new(c(stops[1]), percent(100)),
+                    ])),
+                ));
+            }
             root.spawn((
                 ImageNode::new(logo),
                 Node {
@@ -1110,7 +1174,7 @@ fn build(
             // Tabs.
             root.spawn(Node {
                 position_type: PositionType::Absolute,
-                left: px(300),
+                left: px(280),
                 top: px(40),
                 column_gap: px(8),
                 ..default()
@@ -1123,8 +1187,9 @@ fn build(
                     ("INVENTORY", Page::Inventory),
                     ("CLAN", Page::Clan),
                     ("CONTROLS", Page::Controls),
+                    ("GRAPHICS", Page::Graphics),
                 ] {
-                    t.spawn(button(&art, 130.0, 40.0, label, 18.0, Act::Page(page)));
+                    t.spawn(button(124.0, 40.0, label, 16.0, Act::Page(page)));
                 }
             });
             let page = |page| {
@@ -1153,7 +1218,7 @@ fn build(
                         })
                         .with_children(|g| {
                             for (i, name) in cat.maps.iter().enumerate() {
-                                g.spawn(button(&art, 206.0, 34.0, &title(name), 16.0, Act::Map(i)));
+                                g.spawn(button(206.0, 34.0, &title(name), 16.0, Act::Map(i)));
                             }
                         });
                     });
@@ -1174,9 +1239,7 @@ fn build(
                         })
                         .with_children(|g| {
                             for mode in Mode::ALL {
-                                g.spawn(button(
-                                    &art,
-                                    122.0,
+                                g.spawn(button(122.0,
                                     30.0,
                                     mode.name(),
                                     13.0,
@@ -1225,8 +1288,8 @@ fn build(
                         m.spawn(heading("CHARACTER"));
                         m.spawn(row()).with_children(|r| {
                             r.spawn(label("Sex", 100.0));
-                            r.spawn(button(&art, 110.0, 30.0, "Man", 16.0, Act::Sex(false)));
-                            r.spawn(button(&art, 110.0, 30.0, "Woman", 16.0, Act::Sex(true)));
+                            r.spawn(button(110.0, 30.0, "Man", 16.0, Act::Sex(false)));
+                            r.spawn(button(110.0, 30.0, "Woman", 16.0, Act::Sex(true)));
                         });
                         // per slot: `<< < piece > >>` then `< ■ dye >`
                         let text = |f: Field, w: f32| {
@@ -1251,17 +1314,17 @@ fn build(
                             m.spawn(row()).with_children(|r| {
                                 r.spawn(label(slot.label(), 100.0));
                                 let f = Field::Piece(s);
-                                r.spawn(button(&art, 34.0, 28.0, "<<", 14.0, Act::Step(f, -10)));
-                                r.spawn(button(&art, 30.0, 28.0, "<", 14.0, Act::Step(f, -1)));
+                                r.spawn(button(34.0, 28.0, "<<", 14.0, Act::Step(f, -10)));
+                                r.spawn(button(30.0, 28.0, "<", 14.0, Act::Step(f, -1)));
                                 r.spawn(text(f, 236.0));
-                                r.spawn(button(&art, 30.0, 28.0, ">", 14.0, Act::Step(f, 1)));
-                                r.spawn(button(&art, 34.0, 28.0, ">>", 14.0, Act::Step(f, 10)));
+                                r.spawn(button(30.0, 28.0, ">", 14.0, Act::Step(f, 1)));
+                                r.spawn(button(34.0, 28.0, ">>", 14.0, Act::Step(f, 10)));
                                 r.spawn(Node {
                                     width: px(8),
                                     ..default()
                                 });
                                 let f = Field::Tint(s);
-                                r.spawn(button(&art, 28.0, 28.0, "<", 14.0, Act::Step(f, -1)));
+                                r.spawn(button(28.0, 28.0, "<", 14.0, Act::Step(f, -1)));
                                 r.spawn((
                                     Swatch(s),
                                     Node {
@@ -1274,15 +1337,15 @@ fn build(
                                     BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
                                 ));
                                 r.spawn(text(f, 70.0));
-                                r.spawn(button(&art, 28.0, 28.0, ">", 14.0, Act::Step(f, 1)));
+                                r.spawn(button(28.0, 28.0, ">", 14.0, Act::Step(f, 1)));
                             });
                         }
                         m.spawn(row()).with_children(|r| {
                             r.spawn(label("", 100.0));
-                            r.spawn(button(&art, 130.0, 32.0, "RANDOM", 16.0, Act::Random(false)));
-                            r.spawn(button(&art, 130.0, 32.0, "RANDOM DYES", 15.0, Act::Random(true)));
-                            r.spawn(button(&art, 110.0, 32.0, "RESET", 16.0, Act::Reset));
-                            r.spawn(button(&art, 130.0, 32.0, "SAVE", 18.0, Act::Save));
+                            r.spawn(button(130.0, 32.0, "RANDOM", 16.0, Act::Random(false)));
+                            r.spawn(button(130.0, 32.0, "RANDOM DYES", 15.0, Act::Random(true)));
+                            r.spawn(button(110.0, 32.0, "RESET", 16.0, Act::Reset));
+                            r.spawn(button(130.0, 32.0, "SAVE", 18.0, Act::Save));
                         });
                         m.spawn((
                             Value(Field::Saved),
@@ -1310,7 +1373,7 @@ fn build(
                         })
                         .with_children(|g| {
                             for (i, f) in FOCUS.iter().enumerate() {
-                                g.spawn(button(&art, 84.0, 30.0, f.0, 15.0, Act::Focus(i)));
+                                g.spawn(button(84.0, 30.0, f.0, 15.0, Act::Focus(i)));
                             }
                         });
                         m.spawn((
@@ -1325,12 +1388,14 @@ fn build(
                     });
             });
             root.spawn(page(Page::Clan))
-                .with_children(|p| clan::fill(p, &art, &clan_art));
+                .with_children(|p| clan::fill(p, &clan_art));
             root.spawn(page(Page::Controls))
-                .with_children(|p| crate::controls::fill(p, &art, false));
+                .with_children(|p| crate::controls::fill(p, false));
+            root.spawn(page(Page::Graphics))
+                .with_children(|p| crate::gfx::fill(p, false));
             for page_kind in [Page::Shop, Page::Inventory] {
                 root.spawn(page(page_kind))
-                    .with_children(|p| shop::fill(p, &art, page_kind));
+                    .with_children(|p| shop::fill(p, page_kind));
             }
             root.spawn(shop::card());
             root.spawn(Node {
@@ -1344,7 +1409,7 @@ fn build(
             .with_children(|f| {
                 // the browser build's page has its own menu: this one goes back to it
                 let quit = if cfg!(target_arch = "wasm32") { "BACK" } else { "QUIT" };
-                f.spawn(button(&art, 160.0, 48.0, quit, 22.0, Act::Quit));
+                f.spawn(button(160.0, 48.0, quit, 22.0, Act::Quit));
                 f.spawn(Node {
                     column_gap: px(16),
                     align_items: AlignItems::Center,
@@ -1353,14 +1418,13 @@ fn build(
                 .with_children(|r| {
                     // no LAN in the browser
                     if !cfg!(target_arch = "wasm32") {
-                        r.spawn(button(&art, 180.0, 48.0, "JOIN LAN", 22.0, Act::Lan(false)));
-                        r.spawn(button(&art, 180.0, 48.0, "HOST LAN", 22.0, Act::Lan(true)));
+                        r.spawn(button(180.0, 48.0, "JOIN LAN", 22.0, Act::Lan(false)));
+                        r.spawn(button(180.0, 48.0, "HOST LAN", 22.0, Act::Lan(true)));
                     }
-                    r.spawn(button(&art, 260.0, 56.0, "START", 28.0, Act::Start));
+                    r.spawn(primary(260.0, 56.0, "START", 26.0, Act::Start));
                 });
             });
         });
-    commands.insert_resource(art);
     commands.insert_resource(clan_art);
 }
 
@@ -1612,11 +1676,34 @@ fn preview(
     commands.entity(parent).add_child(model.root);
 }
 
-/// Shrinks the menu and the match HUD to fit windows smaller than their 1280 x 720 layout
-/// (phones, small browser windows). UI placed at a projected 3D point divides by the scale.
-pub fn fit(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>) {
-    let Ok(w) = windows.single() else { return };
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).min(1.0);
+/// Shrinks the menu to fit windows smaller than its 1280 x 720 layout (phones, small browser
+/// windows). UI placed at a projected 3D point divides by the scale.
+pub fn fit(windows: Query<&Window, With<PrimaryWindow>>, scale: ResMut<UiScale>) {
+    fit_by(windows, scale, 1.0);
+}
+
+/// [`fit`] for the match HUD: it is anchored to the screen edges, so it may overflow the height
+/// a little (`tall` = 1.25 shrinks it 20% less than the menu on a wide, short phone screen);
+/// while paused or over it is the menu's scale.
+pub fn fit_hud(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    scale: ResMut<UiScale>,
+    frozen: Option<Res<crate::game::Frozen>>,
+) {
+    // the pause and end screens and the settings overlays are as tall as the menus
+    fit_by(windows, scale, if frozen.is_some() { 1.0 } else { 1.25 });
+}
+
+fn fit_by(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>, tall: f32) {
+    // headless `--shot` runs have no window: the image size stands in
+    let (w, h) = windows.single().map_or_else(
+        |_| {
+            let (w, h) = view::shot_size();
+            (w as f32, h as f32)
+        },
+        |w| (w.width(), w.height()),
+    );
+    let s = (w / 1280.0).min(h / 720.0 * tall).min(1.0);
     if s > 0.0 && scale.0 != s {
         scale.0 = s;
     }

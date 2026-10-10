@@ -6,7 +6,7 @@
 use crate::{
     hud::try_image,
     item::{Item, Items},
-    menu::{Art, Chosen, Page, State, button, heading, panel},
+    menu::{Chosen, Flat, Page, State, button, heading, panel},
     mrs::Vfs,
     profile::{self, Profile, Ranks, SLOTS, progress},
     quest::QItems,
@@ -490,10 +490,12 @@ fn selected(
         .copied()
 }
 
-/// A selectable retail-textured row; the caller adds the content.
-fn tile(art: &Art, w: f32, h: f32, act: ShopAct) -> impl Bundle {
+/// A selectable row; the caller adds the content.
+fn tile(w: f32, h: f32, act: ShopAct) -> impl Bundle {
     (
         Button,
+        Flat,
+        UiTransform::default(),
         act,
         Node {
             width: px(w),
@@ -501,13 +503,11 @@ fn tile(art: &Art, w: f32, h: f32, act: ShopAct) -> impl Bundle {
             align_items: AlignItems::Center,
             padding: UiRect::horizontal(px(6)),
             border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(6)),
             ..default()
         },
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-        ImageNode {
-            image_mode: NodeImageMode::Stretch,
-            ..ImageNode::new(art.up.clone())
-        },
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.14)),
     )
 }
 
@@ -537,25 +537,18 @@ fn pic(p: Pic, size: f32) -> impl Bundle {
 }
 
 /// The contents of the shop or inventory page: categories, a list of 8 rows and a detail panel.
-pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
+pub(crate) fn fill(p: &mut ChildSpawnerCommands, page: Page) {
     let shop = page == Page::Shop;
     p.spawn(panel(250.0, AlignItems::FlexStart))
         .with_children(|m| {
             m.spawn(heading(if shop { "CATEGORY" } else { "EQUIPPED" }));
             if shop {
                 for (slot, name) in CATS {
-                    m.spawn(button(
-                        art,
-                        220.0,
-                        34.0,
-                        name,
-                        16.0,
-                        ShopAct::Cat(page, slot),
-                    ));
+                    m.spawn(button(220.0, 34.0, name, 16.0, ShopAct::Cat(page, slot)));
                 }
             } else {
                 for slot in 0..=QUEST_SLOT {
-                    m.spawn(tile(art, 220.0, 34.0, ShopAct::Cat(page, slot)))
+                    m.spawn(tile(220.0, 34.0, ShopAct::Cat(page, slot)))
                         .with_children(|t| drop(t.spawn(text(Txt::Cat(slot), 14.0))));
                 }
             }
@@ -564,9 +557,9 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
         .with_children(|m| {
             m.spawn(heading(if shop { "SHOP" } else { "INVENTORY" }));
             for r in 0..ROWS {
-                m.spawn(tile(art, 530.0, 48.0, ShopAct::Row(page, r)))
+                m.spawn(tile(530.0, 40.0, ShopAct::Row(page, r)))
                     .with_children(|t| {
-                        t.spawn(pic(Pic::Row(page, r), 40.0));
+                        t.spawn(pic(Pic::Row(page, r), 32.0));
                         t.spawn(text(Txt::Row(page, r), 16.0));
                     });
             }
@@ -576,7 +569,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
                 ..default()
             })
             .with_children(|n| {
-                n.spawn(button(art, 34.0, 30.0, "<", 16.0, ShopAct::Prev(page)));
+                n.spawn(button(34.0, 30.0, "<", 16.0, ShopAct::Prev(page)));
                 n.spawn((
                     text(Txt::PageNo(page), 16.0),
                     TextLayout {
@@ -588,7 +581,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
                         ..default()
                     },
                 ));
-                n.spawn(button(art, 34.0, 30.0, ">", 16.0, ShopAct::Next(page)));
+                n.spawn(button(34.0, 30.0, ">", 16.0, ShopAct::Next(page)));
             });
         });
     p.spawn(panel(380.0, AlignItems::FlexStart))
@@ -609,9 +602,9 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, page: Page) {
             })
             .with_children(|b| {
                 if shop {
-                    b.spawn(button(art, 160.0, 40.0, "BUY", 20.0, ShopAct::Buy));
+                    b.spawn(button(160.0, 40.0, "BUY", 20.0, ShopAct::Buy));
                 }
-                b.spawn(button(art, 160.0, 40.0, "SELL", 20.0, ShopAct::Sell));
+                b.spawn(button(160.0, 40.0, "SELL", 20.0, ShopAct::Sell));
             });
             m.spawn((
                 Txt::Msg,

@@ -1934,6 +1934,7 @@ fn hurt(
         out.vfx.write(Vfx::Blood {
             point: f.chest(),
             dir,
+            amount,
         });
     }
     if push != Vec3::ZERO {

@@ -570,37 +570,46 @@ auras and lightning (`grid1.png`).
 
 ## HUD and sound (`src/hud.rs`)
 
-### Interface textures (**observed**; which one the retail HUD uses is **inferred**)
+### Match HUD (`src/hud/panels.rs`; own design, retail data only where noted)
 
-`interface/default/*.png` are real PNGs (RGBA). Used: `crosshair02.png` (32x32 white cross;
-`crosshair02_pick.png` is the red variant, `crosshair01/03/04/05` are other styles),
-`hit_marker.png` (75x71, four diagonal ticks), `kill_marker.png` (29x29 red X),
-`ingame_hpbar.png` (366x26 translucent gauge frame), `ingame_timebackground.png` (460x40 clock
-strip), `ingame_reload.png` / `ingame_empty.png` (112x34 RELOAD / EMPTY badges),
-`scoreboard_background_solo.png` (1060x760 plain dark gradient, alpha 134..255; used stretched).
-`ingame_00.png` is an atlas (digits, "HEAD SHOT"/combo words) and `combat/hp.tga` the 2010-era HP
-frame; neither is used. `combat/redbar.png` / `bluebar.png` (156x8 flat fills) are not the retail
-bars any more: they read as dark brown/blue at low values.
+The retail frame art is no longer drawn: `interface/default/combatinterface.xml` and the old HUD
+textures (`crosshair02`, `hit_marker`, `kill_marker`, `ingame_hpbar`, `ingame_timebackground`,
+`ingame_reload` / `ingame_empty`, `scoreboard_background_solo`) are unused. What stays from the data:
 
-### HP/AP bars (**observed** layout, **inferred** colour rule)
+- **HP colours** (**observed**, `combatinterface.xml` `CombatHPProgressBar`): four `FILLCOLOR` begin/end
+  gradients, 0 (212,212,212)->(230,230,230), 1 (232,190,58)->(255,235,60), 2 (232,128,58)->(255,179,60),
+  3 (207,60,56)->(216,81,29); which one applies when is not in the data, so the port uses index
+  0..3 for >=75% / >=50% / >=25% / below (**inferred**). The armour bar uses the blue of the retail
+  segments (40,111,162)->(64,150,220) as one bar.
+- **Weapon icons**: the shop's item icons (`itemicon.xml` cells of `interface/loadable/*`, loaded
+  through `shop::Icons`) for the weapon strip; the kill feed still uses the kill-log atlas.
+- **Fonts**: none in the archives, so all text is Bevy's built-in font.
 
-`interface/default/combatinterface.xml` (`HPAPFrame`): `CombatHPBG` = `Ingame_HPBar.png` at (87,10)
-366x26; `CombatHPProgressBar` (`GRADIENTLINEARPROGRESSBAR`) inset 3 px at (90,13) 360x20 with four
-`FILLCOLOR` entries, each a begin/end RGB gradient: 0 (212,212,212)->(230,230,230), 1 (232,190,58)->
-(255,235,60), 2 (232,128,58)->(255,179,60), 3 (207,60,56)->(216,81,29); `EMPTYCOLOR` alpha 0.
-Armour is three bars `CombatAPProgressBar1..3` at x 90/211/332, 118x20 each, blue gradients
-(23,87,125)->(29,95,139), (30,97,141)->(39,109,159), (40,111,162)->(47,119,175). The data does not say
-which HP colour index applies when; `gunz-play` uses index 0..3 for >=75% / >=50% / >=25% / below
-(**inferred**) and fills the armour segments one after another (each a third of `max_ap`). The
-fill is drawn left to right with a Bevy `BackgroundGradient`; the numbers sit next to the frame
-(the retail label is white outlined text, unreadable on the white gradient without an outline).
-Checked with `gunz-play ... --hp N --ap N --shot`: 100/100 (white + three full blue segments),
-60/40, 30/0 (orange third, empty armour frame), 10/100 (red sliver) all show the filled share.
+Layout (logical px at 1280 x 720, scaled down below that by `menu::fit`): health and armour card
+bottom left (rounded bars, a pale trail behind the bar that waits 0.5 s after damage then drains,
+the number pops on a hit and pulses red under 30%); weapon strip (up to six item-icon tiles with their
+key numbers, the selected one raised and gold-framed) over the ammo card (weapon name, magazine,
+reserve; the magazine turns red and pulses at or below a quarter of its size, RELOAD or NO AMMO
+shows when it is empty) bottom right, bottom centre on touch screens; the match header (460 px bar
+fading at both ends; the clan emblems of `clan.rs` hang off it) and a kills / deaths chip top
+left; the notice below the crosshair pops in and fades. The header stacks the timer (24 px) over the
+mode line (score, round, leader; hidden when the mode has none): `session::Clock.timer` and `.header`.
+Damage direction is a thin arc of nine glowing segments on a 140 px ring around the crosshair,
+turned towards the attacker and fading over the last 0.75 s. The HUD draws no full-screen red wash
+(the graphics page's hit flash and low-health effect and the screen blood already tint the frame);
+only when both of those are off a faint edge vignette shows under 30% HP. The crosshair is four ticks plus a
+shadow: its gap opens with running speed (+7 px at 10 m/s), jumping (+4 px) and each gun shot
+(+5 px, decaying 40 px/s) and is fixed with "Fixed spread" (the numbers are cosmetic, **inferred**,
+not the combat cone); hit markers (white) and kill markers (red) are the same ticks turned 45 degrees.
+The scoreboard is a 720 px card with one row per actor sorted by kills (team stripe, `you`
+highlighted, K/D ratio); the clan strip and the "earned" line sit on it.
 
 ### Main menu and match flow (`src/menu.rs`, `src/session.rs`)
 
 Retail art used: `bg_play.png` (1920x1080 lobby backdrop, drawn on a quad behind the 3D preview),
-`gunz_logo_hq.png` (231x96), `defaultbutton_up/over.png` (140x35 dark metal buttons, stretched).
+`gunz_logo_hq.png` (231x96). Buttons, tabs and cards are flat rounded Bevy UI nodes (accent amber
+`menu::ACCENT`, hover / pressed / selected states in `menu::hover`); the retail `defaultbutton_*` textures are
+unused.
 The `banner_<map>.tga` strips (360x32, a map picture with its name) exist for only 21 of the 30
 maps, so the map list is plain buttons. No font file exists in the archives (`*.ttf` absent; the
 retail UI uses system fonts such as the `FONTb20b` of `combatinterface.xml`), so all text uses
@@ -1260,12 +1269,54 @@ iGunZ-patch-note ideas, own implementation (labels: **observed** = retail file, 
   of the point 0.25 m over the capsule top: 64 px HP bar (the retail HP tier colours), 4 px AP bar, the
   current weapon's magazine under them (blank for melee). Hidden when dead, off screen, beyond 120 m or when
   `MapCollision::raycast` from the camera to that point hits a wall.
-- **Screen blood** (`screen_blood`). A hit that cost HP drops one splatter (one more per 25 HP) from a
+- **Screen blood** (`screen_blood`). With `realistic_blood` off (retail look): a hit that cost HP drops one
+  splatter (one more per 25 HP) from a
   pool of 12 UI images, textured with the retail `sfx/blood-mark01..05.tga` decals, on a random screen edge
   (up to a quarter in), rotated randomly. Size `200 + 5*HP` px (max 460), peak opacity `0.6 + HP/60`
   (max 1), fade-in 0.08 s then linear fade-out over 1.8 s (all **inferred**). Below 30% HP four corner images
   (`blood-mark04/05`, 340 px) show with opacity `0.4 + 0.5*level` and a pulse, on top of the existing red
-  vignette.
+  vignette. With `realistic_blood` on, a pool of 40 UI nodes ("lens blood") replaces both: a hit throws a
+  cluster of `3 + HP/6` drops (max 12; 22-92 px glass drops: a noise-perturbed outline, a thick dark rim, a thin
+  see-through middle, two highlights, an inner caustic arc, satellite droplets; the ones over 30 px are teardrops with a wobbly tail) near a random edge (within 22% of it), plus spatters (`gore::splat_image`, `180 + 4*HP` px, max 460, `1 + HP/30` of
+  them, only for hits of 8 HP or more). Drops over 30 px start to slide 0.5-2.5 s later, covering `(40..180) * size/40` px
+  at 30% of the remaining distance per second (at most 170 px) and leaving a thin tapering wobbly streak above them; drops last 6-9 s,
+  spatters 4-7 s, the last 1.5 s fading, and go from bright red to dark rusty over 6 s (a tint). Everything fades out within 0.12-0.3 screen heights of the centre. A dark-red vignette texture (behind the drops, `NodeImageMode::Stretch`)
+  shows at `0.8 * (1 - HP/50%)` below half health plus a hit flash (`HP/30`, max 0.8, gone in 1 s), pulsing with
+  the heartbeat (all **inferred**).
+
+### Simulated blood (`src/gore.rs`, `Settings::realistic_blood`; **inferred**)
+
+Replaces the retail blood sprites (`combat.rs`, `sfx/blood01..05.tga` x 6, 0.7 s) and blood marks (`hud.rs`,
+`sfx/blood-mark01..05.tga` on the wall behind a hit actor) when on (default; `--no-realistic-blood` or the pause
+menu restores them, the retail path is untouched). Everything is generated at startup: no data files.
+
+- **Spray.** `Vfx::Blood {point, dir, amount}` (`amount` = damage; a headshot counts 1.5x; the killcam burst
+  writes ten of 30) makes `8 + 10 * k` droplets, `k = clamp(amount / 25, 0.3, 3)` (a shotgun's pellets are
+  summed per target), and `2 + 2 * k` mist puffs. 78% fly along `dir`, 22% spatter back at half speed, each scattered by
+  up to 0.7 and lifted by 0.25; speed `(1.5 + 7.5 * r * max(r, 0.3)) * (0.6 + 0.4 * min(k, 2))` m/s, radius
+  6-20 mm. Melee has no separate swing vector: `dir` is attacker to victim, which is along the blow.
+- **Flight.** Gravity 9.8 m/s², drag 0.35/s, at most 4 s. One `MapCollision::raycast` per droplet per frame
+  over its step. Drawn as camera-facing quads with the long axis on the velocity and a length of
+  `2 * radius + one step` (a motion-blur streak); the mist as soft round quads that grow and shrink in
+  0.4-0.7 s.
+- **Stains.** A droplet hit leaves a splatter quad of `radius * (3 + 0.6 * speed) * (0.7..1.3)` m (specks
+  under 9 mm only 40% of the time) with a procedural spiked, glossy texture (4 round, 3 "forward" variants).
+  Oblique hits stretch along the surface component of the velocity by `1 / max(cos, 0.4)` (max 2.5) and use
+  the forward variants beyond 1.45. A body hit of 12 damage or more also puts one large forward splatter on
+  the surface up to 2.5 m behind it. Stains float 4-10 mm off the surface (cycled, so overlapping ones keep
+  their order) and use a depth bias.
+- **Drips.** A stain over 7 cm on a surface steeper than 66 deg from flat starts a drip with 50%
+  probability (at most 24 at once): a texture-stretched line with a bead at the bottom, running
+  `0.12-0.62 m` down the wall, slowing as it nears its length.
+- **Pools.** `Added<Dead>` on a non-NPC actor: a ray 3 m down from the feet picks the floor, a pool of
+  radius 0.5-0.75 m (lumpy edge with tongues and satellite drops, dark glossy middle) spreads there after 0.4 s as `1 - exp(-t / 0.6 s)`, 95% grown in 1.8 s.
+- **Ageing.** Every stain, drip and pool is three materials of one texture, tinted bright red, darker (after 15 s)
+  and dark rusty (after 60 s); a system swaps them twice a second. Droplets and mist do not age.
+- **Bleeding.** Non-player actors below 50% HP shed a drop at `4 * (0.5 - hp%) / 0.5` per second from chest
+  height; it falls where the actor walked and leaves a small stain. The player does not (the screen shows it).
+- **Budget.** 320 droplets, 40 mist puffs, 480 stains (drips and pools included, oldest recycled first) and
+  24 new stains per frame. Stains, droplets and mist share five materials (unlit, alpha-blended), so they
+  batch; nothing is lit or shadowed.
 
 ### Kill camera (`src/killcam.rs`, `Settings::killcam`; **inferred**)
 
@@ -1502,6 +1553,79 @@ of this section does not continue past the header). The jump apex was not checke
 Cross-check with the clips (`.local/py/rootmo.py`, **observed**): `runLW` 2.0 s and `runW` 0.6 s match the longest
 side wall run (2.1 s) and the up-wall apex (0.68 s); `jumpwall*` 1.33 s matches a kick's flight (1.12 s up and
 down); `jumpU` 0.33 s is only the take-off pose (a jump lasts 0.72 s), so clips do not pin v0 themselves.
+
+## K-style techniques (`src/actor.rs`, `src/melee.rs`, `src/bot.rs`; **inferred**)
+
+The original's bug-born movement tech (public player guides, gameplay descriptions only; no client code) as ordinary
+rules of the actor controller, always on, for the player and the bots. No timing is documented anywhere: **every
+number below is inferred** (constants at the top of `actor.rs` / `melee.rs`); the guides' technique names are kept in
+the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=debug`).
+
+| Technique (guide name) | Rule in the port | Log line |
+|---|---|---|
+| Air dash, jump dash | A double tap (or the Dash action) in the air starts a tumble (9 m/s, 0.33 s, gravity x 0.25, vertical speed held at >= 0); one per jump (`Tech::dashed`, reset on landing and on a wall kick) | `tech: air dash` |
+| Jump cancel (dash cooldown) | A jump from a ground tumble ends it (jump no longer waits for the tumble); the air dash is still unspent | `tech: jump cancel` |
+| Dash cancel (slash) | A slash out of a tumble gives the air dash back (`melee.rs`: slashes start from a tumble after 0.1 s) | `tech: dash cancel` |
+| Super dash | The air dash is always available after `SUPER_FALL` 1.5 s of falling | `tech: super dash` |
+| Wall slash cancel, flying | A slash during a wall kick, wall run or hang cancels it (full control, switch, guard); the actor stays at the wall (0.5 m/s into it) and a jump within `FLY_WINDOW` 0.5 s kicks off it again; a kick restores wall run, air dash and gravity cancel | `tech: wall slash cancel`, `tech: wall flying` |
+| Flash climb | After a switch cancel (below) a wall jump inside `TECH_SHOT` 1.5 s | `tech: flash climb` |
+| Switch cancel (slash shot, quick slash / flash step) | While an air slash plays, a weapon switch is accepted and cancels the slash. Switching back to the blade within `FLASH_WINDOW` 1.5 s has no draw delay and no blade delay | `tech: switch cancel`, `tech: slash shot`, `tech: flash step` |
+| Reload shot | A reload started within `RS_WINDOW` 0.5 s of a shot, cancelled by a switch, skips the `SWITCH_DELAY` 0.3 s of the next weapon (the magazine stays as it was) | `tech: reload cancel`, `tech: reload shot` |
+| Swapshot | Every loadout slot has its own fire delay (`Actor::ready`); a shot from another gun within 0.6 s of the last shot | `tech: swapshot` |
+| Gravity cancel | A slash started in the air at a rising speed <= 4 m/s (near the top of a jump, or falling) zeroes the vertical speed and the gravity for 0.25 s, once per jump | `tech: gravity cancel` |
+| Wall hang | A melee weapon, guard held in the air, a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, pressed into the wall, faces it; plays `runW_downF`). Forward + jump held climbs at 4 m/s (plays `runW`). Releasing the guard, losing the wall or landing ends it; it also ends a wall run / kick flight | `tech: wall hang` |
+| Multi wall run, aerial wall run | A wall run may start from a tumble or a cancelled action, and a kick restores the once-per-jump wall run (`wall_spent`) | `tech: multi wall run` |
+| Butterfly, slide | The guard that cancels a blow's recovery (`melee.rs`, from `Phase::Blow` after the hit frame or `Phase::Recover`) is movable: the guard clips play as an `ActionMove::Control(1.0)` action (run speed, no walk animation); an emote key plays the emote clip while sliding (no cancel by walking); dash and jump leave it as before (the guard action is cancellable at once) | `tech: butterfly`, `tech: slide`, `tech: slide emote` |
+| Air butterfly, double / triple BF | The same guard also cancels an air slash (`attack_Jump`, `jump_slash1`) in the air once its hit frame is past (`air_bf`): the guard clips play as a movable action in the air, the actor keeps its momentum and may air-dash (the slash gave the dash back), kick a wall or slash again (a click with the air guard up is another air slash, not an uppercut); the guard goes on as the normal slide guard after landing while the button is held. JUMP, DASH, SLASH, BLOCK and JUMP, SLASH, BLOCK, DASH, SLASH, BLOCK repeat as long as the slash delay allows | `tech: air butterfly` |
+| Quick launch | The same guard cancel after an uppercut | `tech: quick launch` |
+| Insta-kill | After the hit frame of an uppercut (`Acting::cancel_from`) a weapon switch is accepted on the ground as well and cancels the launch recovery (the gun still has the 0.3 s draw delay: the launched actor is airborne for about 0.5 s) | `tech: insta-kill`, `tech: insta-kill shot` |
+| Light step / silent jump | A dash that comes out of a slash (the actor is in a blow action) starts its tumble clip without the clip's `fx_dash` cue (`Tech::silent`) | `tech: light step` |
+| Juggle | A hit on a launched actor that is still in the air lifts it again (`JUGGLE_UP` 5.5 m/s; an uppercut `UPPERCUT_UP` 7), at most `MAX_JUGGLE` 3 times per landing; a lying actor is left alone | `tech: juggle` |
+
+Not done: Wall Spring (a wall run cancelled early is already a slash cancel).
+
+Network (`src/net.rs`): nothing new is replicated. Every state is derived from the `Intent` the host already gets
+every frame (`walk` taps for the dash, `jump`, `guard`, `slot` through `current`, `reload`, `attack`), so a remote
+actor plays the techniques through the same controller; its position is the client's.
+
+Bots (`bot.rs`, all rolled per opportunity and scaled with `--skill`; **inferred** odds): *jump dash* (skill - 0.2
+of the forward dashes of a blade: jump, then dash in the air, slash from it), *dash break* (60 % x skill: dash
+sideways after an air slash), *air butterfly* (the butterfly roll below, now also after `attack_Jump` / `jump_slash1`),
+*slash shot* (10 % + 60 % x skill after an air slash lands: switch to a gun with ammo, click), *insta-kill* (the same
+roll after an uppercut that hit while the enemy is in the air), *reload shot* and *swapshot* (the same odds, with
+two guns at 3-30 m: reload shots above skill 0.5),
+*launch* (10 % + 50 % x skill while next to a standing enemy, guard + click) and *juggle* (20 % + 70 % x skill:
+uppercut again on an enemy in the air; `Intent` guard + attack, quick launch through the butterfly roll that now also
+covers `uppercut`), and *hang climb* (skill >= 0.3, an enemy 2-7 m above within 7 m and no walkable way, a wall within
+1.4 m towards it: jump, guard in the air, forward + jump until the feet pass the enemy's; gives up after 4 s). Wall
+kick scripts of the route stay untouched (a bot in a kick script never slashes).
+
+Verification (headless, `gunz-play Mansion --bots 0 --script S`, `GUNZ_PROFILE` a throwaway; `--at 1391,1460,2 --yaw 270`
+faces a wall 7 m ahead). Observed lines:
+- `wait:0.3;jump:0.15;w+dash:0.15;w+attack:0.05;wait:0.3;w+dash:0.3` -> `t=2.00 tech: air dash`, `t=2.12 melee: air slash ... from a dash`,
+  `tech: dash cancel`, `tech: gravity cancel`, `t=2.50 tech: air dash` (two air dashes in one jump).
+- `...;w+dash:0.15;w+attack:0.05;wait:0.1;2:0.1;wait:0.3;attack:0.1;wait:0.2;1:0.1` -> `tech: switch cancel`, `tech: slash shot`,
+  `tech: flash step`.
+- `2:0.1;wait:0.5;attack:0.1;reload:0.1;3:0.1;attack:0.5` -> `reload: ... (mag 6+24)`, `tech: reload cancel`, `tech: reload shot` 0.1 s later.
+- `wait:0.2;w:0.5;w+jump:0.25;w+guard:0.4;w+guard+jump:0.8` (at the wall) -> `tech: wall hang`, then `runW` climbing to the
+  ceiling (`.local/moves/hang1.png`, `hang2.png`).
+- `wait:0.2;w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.1;wait:0.25;jump:0.1` -> `jumpwallF`, `tech: wall slash cancel`,
+  `tech: wall flying` (a second kick off the same wall).
+- `--at 1391,1460,6000` (60 m up) with `w+dash:0.15` taps -> `tech: air dash` at 1.62 s, `tech: super dash` at 2.08 s.
+- `wait:0.3;jump:0.15;w+dash:0.15;w+attack:0.05;wait:0.2;guard:0.35` -> `tech: air dash`, `tech: dash cancel`, then
+  `melee: tech: air butterfly (guard cancels the recovery, may move)`, `guard Hold` in the air, `guard Release`.
+- `wait:0.3;jump:0.1;attack:0.05;wait:0.2;guard:0.1;w+dash:0.12;w+attack:0.05;wait:0.2;guard:0.1;w+dash:0.12;
+  w+attack:0.05;wait:0.2;guard:0.3` (jump slash, block, dash, slash, block, dash, slash, block) -> `air butterfly` at 2.15 s,
+  `air dash` + `dash cancel` + `gravity cancel`, `light step` (a dash right after a slash), `air butterfly` again at 3.22 s.
+- `wait:0.2;guard:0.2;guard+attack:0.05;wait:0.4;2:0.1;wait:0.2;attack:0.3` with `--bots 1 --bots-ahead 1.8 --skill 0` ->
+  `uppercut hits Pyon` at 2.18 s, `t=2.37 tech: insta-kill`, `t=2.67 tech: insta-kill shot` (the target is still in the air).
+- `attack:0.05;wait:0.2;guard+w:0.5;guard+w+wave:0.6` -> `tech: butterfly`, then `tech: slide emote (wave)`.
+- `guard:0.2;guard+attack:0.1;guard:0.3;...` with `--bots 1 --bots-ahead 1.8 --skill 0` -> `tech: quick launch`.
+- `gunz-play Mansion --mode tdm --bots 8 --skill 1 --script wait:60 --time 60` (bots only fight each other): `bot X: reload shot`,
+  `swapshot`, `slash shot` (+ `tech: slash shot`), `insta-kill (switch to slot 1)` (+ `tech: insta-kill`, `tech: insta-kill shot`),
+  `jump dash` + `air dash`, `dash break`, `launch`, `juggle` (+ `melee: tech: juggle Nightfall x2/x3`),
+  `butterfly after uppercut` / `after jump_slash1` / `after attack_Jump` (+ `melee: tech: air butterfly`).
+
 
 ## World items (`src/pickup.rs`)
 
@@ -1997,6 +2121,79 @@ melee primary secondary item1 item2 score taunt bow wave laugh cry dance sens_do
 `KeyCode` name (`KeyW`, `ShiftLeft`, `Numpad1`, ...), `MouseLeft|MouseRight|MouseMiddle|MouseBack|MouseForward`,
 `WheelUp|WheelDown` or `-`. Binding an input takes it off any other action. The browser's touch controls hold
 actions directly (`controls::Pad`), so they work whatever the keys are bound to.
+
+### Graphics (`src/gfx.rs`, `src/gfx.wgsl`)
+
+No retail file: the retail `config.xml` has no graphics options we use. Everything here is ours (**inferred** values are
+chosen by eye). Saved in the profile as `gfx_*` lines (`Graphics::to_text`), edited live from the main menu's GRAPHICS tab
+and the pause menu's GRAPHICS overlay (same panel, `gfx::fill`), `--gfx original|enhanced|ultra` overrides the preset for
+one run. A missing key keeps the ENHANCED value, so profiles saved before this existed start ENHANCED.
+
+- **Keys**: `gfx_tonemap` (`none reinhard aces agx tony filmic neutral`), `gfx_aa` (`off fxaa smaa msaa2 msaa4`),
+  `gfx_aniso` (`1 2 4 8 16`), `gfx_vsync` (`0|1`), `gfx_fps` (`0 30 60 90 120 144 240`, 0 = no limit), and sliders
+  `gfx_exposure` (EV -2..2), `contrast` (0.7..1.5), `saturation` (0..2), `bloom`, `sharpen`, `fog`, `vignette`, `grain`,
+  `aberration`, `motion_blur`, `speed_fx`, `low_health`, `hit_flash`, `light_actors`, `light_dynamic`, `light_shadow` (0..1,
+  0 = off) and `fov` (70..120, horizontal at 16:9, default 90 = the original `2 atan(9/16)` vertical). Bad keys or values are
+  profile errors, like `controls.rs`.
+- **Presets** (`Graphics::preset`; they leave vsync, the frame limit and the field of view alone): ORIGINAL = tonemapping none,
+  4x MSAA, nothing else: the camera has exactly the components it had before this module, so the image is the one
+  `Tonemapping::None` rendering always gave (**observed**: a Mansion shot differs from one taken before the module in 0 of
+  631 050 pixels outside the HUD boxes). ENHANCED = HDR, TonyMcMapface, +0.2 EV, 105 % contrast, 110 % saturation,
+  bloom 30 %, sharpening 30 %, vignette 30 %, 8x filtering, speed/low-health/hit effects, character lighting 80 %, dynamic
+  lights 80 %, contact shadows 60 % (new profiles start here). ULTRA = SMAA, 16x filtering, +0.3 EV, bloom 50 %, sharpening
+  50 %, fog 25 %, vignette 40 %, grain 20 %, aberration 20 %, motion blur 40 %, lighting 100 %/100 %/80 %. The panel marks
+  the preset the settings equal, else CUSTOM.
+- **Where it applies**: only in a match (`apply`, `drive` and `filtering` run when `game::Settings` exists); the main menu keeps
+  its own look, so changing a slider there shows in the next match. The camera is in HDR when tonemapping, bloom, exposure or
+  saturation need it (the map material writes scene-linear colour either way; the lightmap `x4` and sRGB maths are unchanged).
+- **Render improvements**: bevy's `Bloom` (additive composite, threshold 0.4, so only bright texels glow: windows, candle
+  flames, additive muzzle flashes and effects), `Tonemapping`, `ColorGrading` (exposure, saturation), `Fxaa`, `Smaa`, `Msaa`,
+  `ContrastAdaptiveSharpening`, `Vignette`, `ChromaticAberration` (strength = setting + a kick when hit), `DistanceFog` (exponential,
+  density 0.035 x setting per metre, colour (0.1, 0.11, 0.14); `map.wgsl` calls `apply_fog` under `DISTANCE_FOG`, models get
+  it from `StandardMaterial`), anisotropic filtering (the images the map and standard materials hold get `anisotropy_clamp`; only
+  linear-filtered descriptor samplers, re-applied when materials are added), window `PresentMode` (vsync; `GUNZ_NOVSYNC` wins),
+  and a sleep-based frame limiter (`Last` schedule; native windowed runs only).
+- **Custom pass** (`gfx.wgsl`, a `FullscreenMaterial` on the camera while any custom effect is active, so idle effects cost
+  nothing): contrast around the display mid grey (bevy's own grading contrast works on linear light and crushes the darks),
+  camera-turn motion blur (8 taps along the screen shift of last frame's view centre, scaled to a quarter-frame shutter at
+  full strength, capped at 0.03 of the screen), radial blur and streaks while tumbling or falling faster than 14 m/s
+  (`Motor::tumble`, `Motor::vel`), a red wash on damage to the player (`Damage` messages), colour drain and a heartbeat
+  throb under 35 % health (all at 8 % and below, and while dead), film grain. It runs `before(bloom)`: bevy's passes in that
+  stage are chained, and two unordered passes both swap the main texture while their command buffers are submitted in the
+  other order (**observed**: vignette plus grain gave a black screen, bloom plus grain no bloom, until the order was fixed).
+  UI is drawn after the post-processing, so no effect touches the HUD or menus.
+- **Lighting** (`src/light.rs`, `map.wgsl`; all 0 in ORIGINAL, where nothing of it exists: **observed** same 0 differing
+  pixels, and the `map.wgsl` loop adds nothing without lights). Bevy's clustered point lights are the one mechanism:
+  - *Dynamic lights*: a `PointLight` (no shadow maps, so a flash also lights the far side of a wall within its range) per
+    `Vfx::Muzzle` (3e5 lm, 8 m, 0.08 s, warm), `Blast` (4e6 lm, 16 m, 0.6 s, orange), `Vfx::Spark` (6e4 lm, 3 m) and `Vfx`
+    effects named `*flash*`, at most 14 at a time, intensity falling with the square of the remaining life. `map.wgsl`
+    (`dynamic_light`) reads them through the cluster tables the way `pbr_functions` does and adds `albedo/pi * colour *
+    falloff * N.L * exposure` (the polygon normal, bevy's range window) on top of the lightmap. Importing
+    `bevy_pbr::pbr_lighting` into that shader made the whole map render black without any error, so the range window is
+    copied instead. Lit actors take the same lights through the standard shader.
+  - *Character lighting*: the materials under every `Motor` entity (models and their weapons, shared per handle) switch
+    from `unlit` to lit (roughness 0.85, reflectance 0.12, additive ones stay), and back. Each actor gets a fill
+    `PointLight` (150 000 lm, 4.5 m) 1.2 m towards the camera and 1.9 m up, coloured by the lightmap around its feet
+    and eased over about 0.25 s, with `affects_lightmapped_mesh_diffuse` off so `map.wgsl` ignores it; the camera gets an
+    `AmbientLight` of 220 cd/m2 and a cool `DirectionalLight` (3500 lux) that travels towards the camera, so only edges that
+    turn away catch it (a rim). The lightmap colour is `Probes`: at start every map polygon's lightmap colour (average of the
+    texels at its centre and first three vertices, times the x4 scale, clamped, to linear) goes into a 3 m grid; an actor takes
+    the closeness-weighted (within 4 m) average, raised to 0.6 because the lightmap is meant to be read x4 in gamma.
+    **Limits** (**inferred** values, chosen by eye): no shadows from the lights, the fill is a point light so it also lights
+    a neighbouring actor within 4.5 m, units assume bevy's default exposure.
+  - *Contact shadows*: one quad per actor (a soft black disc texture, 5 darkness steps as shared materials, no per-actor
+    material) laid on the floor `MapCollision::raycast` finds 4 m below the chest, 1.15 m wide, growing and fading to nothing
+    over 2.5 m of height, 1.6 m and weaker under a corpse. Hidden with the actor.
+  - Not done: a specular sheen on the map (nothing in the data marks polished surfaces and a view-only fresnel term has no
+    light direction; not tried); lights at map flames and torches (`props.rs` does not name them).
+- **Not offered** (checked in the code): SSAO (the map is unlit, nothing reads the occlusion), TAA, bevy's motion blur
+  and depth of field (they need depth/motion-vector prepasses and `MapMaterial::enable_prepass` is false: the map has no depth
+  there), render scale (`MainPassResolutionOverride` draws into a sub-rectangle while the post passes read the whole texture).
+- **Cost** (Mansion, `--mode tdm --bots 8 --script wait:20`, `GUNZ_NOVSYNC=1 GUNZ_FRAMETIMES=1 GUNZ_GPUTIME=1`, headless 1280x720,
+  other builds were running, no shots fired so the flash lights are not in it): render-thread `Render` schedule p50 ORIGINAL
+  1.05 ms, ENHANCED 1.43, ULTRA 1.7-2.2 (p99 1.5 / 2.2 / up to 15); frame p50 1.3 / 1.5 / 1.7 ms; GPU passes (sum of the
+  top-level timestamps) 0.13 / 0.32 / 0.46 ms (bloom 0.10-0.11, SMAA 0.09, sharpening 0.03-0.04, tonemapping 0.02, the
+  opaque pass 0.06 -> 0.08 with the lit actors). Not measured in the browser.
 
 ## Clans (`src/clan.rs`)
 

@@ -3,8 +3,8 @@
 //! while a world-anchored "<killer> killed YOU" tag floats over the killer's head on a
 //! procedural blood splat, and a blood burst sprays from the corpse. It ends at the respawn,
 //! or once spectating (round modes) has been up for [`KILLCAM_SECS`]. Everything is *inferred*
-//! port design (`docs/formats.md`, "Kill camera"); the splat is drawn here, the blood is the
-//! retail `sfx/blood0N.tga` sprites of `Vfx::Blood`.
+//! port design (`docs/formats.md`, "Kill camera"); the splat is drawn here, the blood is
+//! `Vfx::Blood` (`gore.rs`, or the retail `sfx/blood0N.tga` sprites with realistic blood off).
 
 use crate::{
     actor::{ActorSet, CAM_RADIUS},
@@ -38,6 +38,8 @@ const PITCH: f32 = -0.25;
 /// Size of the tag on screen (pixels) and blood puffs of the burst.
 const TAG: Vec2 = Vec2::new(260.0, 130.0);
 const BURST: usize = 10;
+/// Damage each puff of the burst stands for in the simulated blood (`gore.rs`).
+const BURST_BLOOD: f32 = 30.0;
 
 #[derive(Resource)]
 struct Splat(Handle<Image>);
@@ -166,6 +168,7 @@ fn killcam(
             vfx.write(Vfx::Blood {
                 point: chest,
                 dir: dir.normalize() * 1.5,
+                amount: BURST_BLOOD,
             });
         }
         let away = (v.translation() - g.translation()).with_y(0.0);

@@ -204,12 +204,18 @@ fn add(
                     align_items: AlignItems::Center,
                     column_gap: px(8),
                     height: px(ROW_H),
-                    padding: UiRect::axes(px(10), px(0)),
+                    padding: UiRect::axes(px(12), px(0)),
                     border: UiRect::left(px(3)),
+                    border_radius: BorderRadius::all(px(8)),
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, if you { 0.7 } else { 0.5 })),
+                BackgroundColor(Color::srgba(
+                    0.03,
+                    0.04,
+                    0.07,
+                    if you { 0.82 } else { 0.62 },
+                )),
                 BorderColor::all(edge),
             ))
             .id();

@@ -6,24 +6,18 @@
 use crate::{
     actor::ActorData,
     col::MapCollision,
-    game::{
-        Blast, CameraShake, Damage, Dead, Impact, Killed, Loadout, Player, Score, Status, Team,
-        Vitals,
-    },
+    game::{Blast, CameraShake, Damage, Impact, Killed, Player},
     level::Level,
-    menu::Art,
     mrs::Vfs,
-    profile::{MatchGain, Profile, Ranks},
-    session::{Clock, HOLD},
+    shop::{Icons, ShopData},
     view::decode,
 };
-use bevy::{
-    image::ImageSampler, prelude::*, text::Justify, transform::TransformSystems, ui::UiTargetCamera,
-};
+use bevy::{image::ImageSampler, prelude::*, transform::TransformSystems};
 use std::collections::VecDeque;
 
 mod feed;
 mod fx;
+mod panels;
 
 pub struct HudPlugin;
 
@@ -40,12 +34,16 @@ impl Plugin for HudPlugin {
                     load.run_if(resource_exists::<Level>.and_then(resource_exists::<ActorData>))
                         .run_if(not(resource_exists::<Hud>)),
                     (
-                        spawn_ui.run_if(not(any_with_component::<Root>)),
+                        panels::spawn_ui.run_if(not(any_with_component::<Root>)),
                         track,
-                        update,
-                        crate::menu::fit,
-                        touch_layout.run_if(resource_exists::<crate::game::TouchScreen>),
-                        earned,
+                        panels::vitals,
+                        panels::reticle,
+                        panels::weapon,
+                        panels::scores,
+                        panels::banner,
+                        crate::menu::fit_hud,
+                        panels::touch_layout.run_if(resource_exists::<crate::game::TouchScreen>),
+                        panels::earned,
                         indicators,
                     )
                         .chain()
@@ -61,17 +59,12 @@ impl Plugin for HudPlugin {
     }
 }
 
-/// Immutable HUD data, loaded once the `Level` and `ActorData` (items) exist.
+/// Immutable HUD data, loaded once the `Level` and `ActorData` (items) exist: the item icons of
+/// the weapon strip.
 #[derive(Resource)]
 struct Hud {
-    cross: Handle<Image>,
-    hit: Handle<Image>,
-    kill: Handle<Image>,
-    bars: Handle<Image>,
-    clock: Handle<Image>,
-    reload: Handle<Image>,
-    empty: Handle<Image>,
-    board: Handle<Image>,
+    shop: ShopData,
+    icons: Icons,
 }
 
 /// Seconds left of the transient overlays.
@@ -107,7 +100,6 @@ struct Decals {
     seed: u32,
 }
 
-const BOARD_ROWS: usize = 12;
 const MAX_DECALS: usize = 128;
 /// Bullet hole size (m) and blood-mark size range (m) (**inferred**).
 const HOLE_SIZE: f32 = 0.22;
@@ -141,11 +133,6 @@ pub fn try_image(vfs: &Vfs, images: &mut Assets<Image>, name: &str) -> Option<Ha
     Some(images.add(img))
 }
 
-fn image(vfs: &Vfs, images: &mut Assets<Image>, name: &str) -> Handle<Image> {
-    try_image(vfs, images, &format!("{name}.png"))
-        .unwrap_or_else(|| panic!("interface/default/{name}.png missing or undecodable"))
-}
-
 /// `sfx/<name>` (tga/bmp) as sRGB art; the bullet-hole and blood-mark decal textures.
 fn sfx_image(vfs: &Vfs, images: &mut Assets<Image>, name: &str) -> Option<Handle<Image>> {
     let bytes = vfs.read(&format!("sfx/{name}")).ok()?;
@@ -161,6 +148,7 @@ fn sfx_image(vfs: &Vfs, images: &mut Assets<Image>, name: &str) -> Option<Handle
 fn load(
     mut commands: Commands,
     level: Res<Level>,
+    data: Res<ActorData>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -194,174 +182,21 @@ fn load(
         spawned: VecDeque::new(),
         seed: 0x2545_F491,
     });
-    commands.insert_resource(Hud {
-        cross: image(vfs, &mut images, "crosshair02"),
-        hit: image(vfs, &mut images, "hit_marker"),
-        kill: image(vfs, &mut images, "kill_marker"),
-        bars: image(vfs, &mut images, "ingame_hpbar"),
-        clock: image(vfs, &mut images, "ingame_timebackground"),
-        reload: image(vfs, &mut images, "ingame_reload"),
-        empty: image(vfs, &mut images, "ingame_empty"),
-        board: image(vfs, &mut images, "scoreboard_background_solo"),
-    });
-    commands.insert_resource(Art::load(vfs, &mut images));
+    let shop = ShopData::load(vfs, &data.items).unwrap_or_else(|e| panic!("hud: shop data: {e}"));
+    let icons = Icons::load(vfs, &shop, &mut images);
+    commands.insert_resource(Hud { shop, icons });
 }
 
 #[derive(Component)]
 struct Root;
 
-#[derive(Component)]
-struct Flash;
-
 /// Red screen-edge vignette shown at low health.
 #[derive(Component)]
 struct LowHp;
 
-/// The weapon name and ammo panel (bottom right; bottom centre on a touch screen).
-#[derive(Component)]
-struct WeaponBox;
-
-/// On a touch screen the fire button covers the bottom right corner: the weapon panel moves to
-/// the bottom centre.
-fn touch_layout(mut panel: Query<(&mut Node, &mut UiTransform), With<WeaponBox>>) {
-    for (mut node, mut tf) in &mut panel {
-        if node.right != Val::Auto {
-            (node.right, node.left, node.bottom) = (Val::Auto, percent(50), px(8));
-            tf.translation = Val2::new(percent(-50), px(0));
-        }
-    }
-}
-
 /// Damage-direction arc `i` (index into [`Hurt`]).
 #[derive(Component)]
 struct Indicator(usize);
-
-/// Text slots rewritten every frame.
-#[derive(Component, Clone, Copy)]
-enum Label {
-    Hp,
-    Ap,
-    Ammo,
-    Weapon,
-    Death,
-    Score,
-    Names,
-    Kills,
-    Deaths,
-    Clock,
-    /// Centre-screen kill notice.
-    Notice,
-    /// Slow / stun / root / burn timers of the player (`Status`).
-    Status,
-}
-
-/// Bars whose width is a percentage.
-#[derive(Component, Clone, Copy)]
-enum Fill {
-    Hp,
-    /// Segment 0..3 of the armour bar.
-    Ap(usize),
-}
-
-/// Elements shown only in some states.
-#[derive(Component, Clone, Copy)]
-enum Show {
-    Cross,
-    Hit,
-    Kill,
-    Reload,
-    Empty,
-    Death,
-    Board,
-}
-
-const WHITE: Color = Color::WHITE;
-
-fn label(slot: Label, size: f32, color: Color) -> impl Bundle {
-    (
-        slot,
-        Text::new(""),
-        TextFont::from_font_size(size),
-        TextColor(color),
-    )
-}
-
-fn centered(w: f32, h: f32) -> Node {
-    Node {
-        position_type: PositionType::Absolute,
-        left: percent(50),
-        top: percent(50),
-        margin: UiRect {
-            left: px(-w / 2.0),
-            top: px(-h / 2.0),
-            ..default()
-        },
-        width: px(w),
-        height: px(h),
-        ..default()
-    }
-}
-
-fn overlay(color: Color) -> impl Bundle {
-    (
-        Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            height: percent(100),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(color),
-    )
-}
-
-/// Retail HP/AP bars (`combatinterface.xml`: `CombatHPBG`/`CombatHPProgressBar`): the
-/// 366x26 `ingame_hpbar.png` frame with the fill inset 3 px (360x20); armour is three 118 px
-/// segments. Fill colours are the retail gradients.
-fn seg(fill: Fill, x: f32, w: f32, g: ([u8; 3], [u8; 3])) -> impl Bundle {
-    (
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(x),
-            top: px(3),
-            width: px(w),
-            height: px(20),
-            ..default()
-        },
-        children![(
-            fill,
-            Node {
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            },
-            gradient(g),
-        )],
-    )
-}
-
-fn gradient((a, b): ([u8; 3], [u8; 3])) -> BackgroundGradient {
-    let c = |[r, g, b]: [u8; 3]| Color::srgb_u8(r, g, b);
-    LinearGradient::to_right(vec![
-        ColorStop::new(c(a), percent(0)),
-        ColorStop::new(c(b), percent(100)),
-    ])
-    .into()
-}
-
-/// Transparent centre fading to red at the screen edge (`alpha` there).
-fn vignette(alpha: f32) -> BackgroundGradient {
-    RadialGradient::new(
-        UiPosition::CENTER,
-        RadialGradientShape::default(),
-        vec![
-            ColorStop::new(Color::srgba(0.75, 0.0, 0.0, 0.0), percent(45)),
-            ColorStop::new(Color::srgba(0.75, 0.0, 0.0, alpha), percent(100)),
-        ],
-    )
-    .into()
-}
 
 /// HP fill colours by remaining fraction; the tier thresholds are inferred (retail lists four
 /// colours `INDEX 0..3` white, yellow, orange, red without the rule that picks one).
@@ -371,11 +206,6 @@ const HP_TIERS: [([u8; 3], [u8; 3]); 4] = [
     ([232, 128, 58], [255, 179, 60]),
     ([207, 60, 56], [216, 81, 29]),
 ];
-const AP_SEGS: [([u8; 3], [u8; 3]); 3] = [
-    ([23, 87, 125], [29, 95, 139]),
-    ([30, 97, 141], [39, 109, 159]),
-    ([40, 111, 162], [47, 119, 175]),
-];
 
 fn tier(frac: f32) -> usize {
     match frac {
@@ -383,322 +213,6 @@ fn tier(frac: f32) -> usize {
         f if f >= 0.5 => 1,
         f if f >= 0.25 => 2,
         _ => 3,
-    }
-}
-
-/// UI art drawn stretched over its node (the default mode keeps the image's own size).
-fn stretch(image: &Handle<Image>) -> ImageNode {
-    ImageNode {
-        image_mode: NodeImageMode::Stretch,
-        ..ImageNode::new(image.clone())
-    }
-}
-
-fn bar(name: &str, frame: &Handle<Image>, value: Label, fills: impl Bundle) -> impl Bundle {
-    (
-        Node {
-            align_items: AlignItems::Center,
-            column_gap: px(8),
-            ..default()
-        },
-        children![
-            (
-                Text::new(name),
-                TextFont::from_font_size(18.0),
-                TextColor(WHITE),
-                Node {
-                    width: px(30),
-                    ..default()
-                }
-            ),
-            (
-                Node {
-                    width: px(366),
-                    height: px(26),
-                    ..default()
-                },
-                stretch(frame),
-                fills,
-            ),
-            (
-                label(value, 20.0, WHITE),
-                Node {
-                    width: px(44),
-                    ..default()
-                }
-            ),
-        ],
-    )
-}
-
-fn spawn_ui(mut commands: Commands, hud: Res<Hud>, cameras: Query<Entity, With<Camera3d>>) {
-    let Ok(camera) = cameras.single() else {
-        return;
-    };
-    // Sounds of other actors are positioned relative to the view.
-    commands.entity(camera).insert(SpatialListener::new(0.2));
-    let panel = Color::srgba(0.0, 0.0, 0.0, 0.45);
-    let root = commands
-        .spawn((
-            Root,
-            UiTargetCamera(camera),
-            Node {
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            },
-            children![
-                (
-                    Show::Cross,
-                    centered(32.0, 32.0),
-                    ImageNode::new(hud.cross.clone())
-                ),
-                (
-                    Show::Hit,
-                    Visibility::Hidden,
-                    centered(75.0, 71.0),
-                    ImageNode::new(hud.hit.clone())
-                ),
-                (
-                    Show::Kill,
-                    Visibility::Hidden,
-                    centered(29.0, 29.0),
-                    ImageNode::new(hud.kill.clone())
-                ),
-                (Flash, overlay(Color::srgba(0.8, 0.0, 0.0, 0.0))),
-                (
-                    LowHp,
-                    Visibility::Hidden,
-                    overlay(Color::NONE),
-                    vignette(0.0)
-                ),
-                (
-                    Node {
-                        top: percent(62),
-                        justify_content: JustifyContent::Center,
-                        ..centered(400.0, 30.0)
-                    },
-                    children![label(Label::Notice, 24.0, Color::srgb(1.0, 0.85, 0.3))],
-                ),
-                (
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(24),
-                        bottom: px(110),
-                        ..default()
-                    },
-                    children![label(Label::Status, 22.0, Color::srgb(0.45, 0.8, 1.0))],
-                ),
-                (
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(24),
-                        bottom: px(24),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(6),
-                        padding: UiRect::all(px(8)),
-                        ..default()
-                    },
-                    BackgroundColor(panel),
-                    children![
-                        bar(
-                            "HP",
-                            &hud.bars,
-                            Label::Hp,
-                            children![seg(Fill::Hp, 3.0, 360.0, HP_TIERS[0])]
-                        ),
-                        bar(
-                            "AP",
-                            &hud.bars,
-                            Label::Ap,
-                            children![
-                                seg(Fill::Ap(0), 3.0, 118.0, AP_SEGS[0]),
-                                seg(Fill::Ap(1), 124.0, 118.0, AP_SEGS[1]),
-                                seg(Fill::Ap(2), 245.0, 118.0, AP_SEGS[2]),
-                            ]
-                        ),
-                    ],
-                ),
-                (
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: percent(50),
-                        margin: UiRect::left(px(-230)),
-                        top: px(8),
-                        width: px(460),
-                        height: px(40),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    stretch(&hud.clock),
-                    children![label(Label::Clock, 22.0, WHITE)],
-                ),
-                (
-                    WeaponBox,
-                    UiTransform::default(),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        right: px(24),
-                        bottom: px(24),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::End,
-                        padding: UiRect::all(px(8)),
-                        ..default()
-                    },
-                    BackgroundColor(panel),
-                    children![
-                        label(Label::Weapon, 22.0, WHITE),
-                        (
-                            Node {
-                                align_items: AlignItems::Center,
-                                column_gap: px(12),
-                                ..default()
-                            },
-                            children![
-                                (
-                                    Show::Reload,
-                                    Visibility::Hidden,
-                                    ImageNode::new(hud.reload.clone())
-                                ),
-                                (
-                                    Show::Empty,
-                                    Visibility::Hidden,
-                                    ImageNode::new(hud.empty.clone())
-                                ),
-                                label(Label::Ammo, 44.0, WHITE),
-                            ],
-                        ),
-                    ],
-                ),
-                (
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(16),
-                        top: px(16),
-                        ..default()
-                    },
-                    children![label(Label::Score, 20.0, WHITE)],
-                ),
-                (
-                    Show::Death,
-                    Visibility::Hidden,
-                    overlay(Color::srgba(0.3, 0.0, 0.0, 0.55)),
-                    children![(
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            align_items: AlignItems::Center,
-                            row_gap: px(14),
-                            ..default()
-                        },
-                        children![
-                            label(Label::Death, 40.0, WHITE),
-                            (
-                                fx::ReportText,
-                                Text::new(""),
-                                TextFont::from_font_size(20.0),
-                                TextColor(Color::srgb(1.0, 0.8, 0.8)),
-                                TextLayout {
-                                    justify: Justify::Center,
-                                    ..default()
-                                },
-                            ),
-                        ],
-                    )]
-                ),
-                (
-                    Show::Board,
-                    Visibility::Hidden,
-                    Node {
-                        padding: UiRect::all(px(24)),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(8),
-                        ..centered(720.0, 440.0)
-                    },
-                    children![
-                        (
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(0),
-                                top: px(0),
-                                width: percent(100),
-                                height: percent(100),
-                                ..default()
-                            },
-                            stretch(&hud.board),
-                        ),
-                        (
-                            Text::new("SCOREBOARD"),
-                            TextFont::from_font_size(26.0),
-                            TextColor(WHITE)
-                        ),
-                        (
-                            Node {
-                                column_gap: px(8),
-                                ..default()
-                            },
-                            children![
-                                (
-                                    label(Label::Names, 20.0, WHITE),
-                                    Node {
-                                        width: px(360),
-                                        ..default()
-                                    }
-                                ),
-                                (
-                                    label(Label::Kills, 20.0, WHITE),
-                                    Node {
-                                        width: px(100),
-                                        ..default()
-                                    }
-                                ),
-                                (
-                                    label(Label::Deaths, 20.0, WHITE),
-                                    Node {
-                                        width: px(100),
-                                        ..default()
-                                    }
-                                ),
-                            ],
-                        ),
-                        (
-                            Earned,
-                            Text::new(""),
-                            TextFont::from_font_size(20.0),
-                            TextColor(Color::srgb(1.0, 0.85, 0.3)),
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(24),
-                                bottom: px(16),
-                                ..default()
-                            }
-                        ),
-                    ],
-                ),
-            ],
-        ))
-        .id();
-    for i in 0..HURT_SLOTS {
-        commands.spawn((
-            Indicator(i),
-            Visibility::Hidden,
-            UiTransform::default(),
-            ChildOf(root),
-            centered(300.0, 300.0),
-            children![(
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: percent(50),
-                    margin: UiRect::left(px(-8)),
-                    top: px(0),
-                    width: px(16),
-                    height: px(56),
-                    border_radius: BorderRadius::all(px(8)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            )],
-        ));
     }
 }
 
@@ -781,7 +295,7 @@ fn indicators(
     transforms: Query<&GlobalTransform>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut arcs: Query<(&Indicator, &mut UiTransform, &mut Visibility, &Children)>,
-    mut bars: Query<&mut BackgroundColor>,
+    mut segs: Query<(&mut BackgroundColor, &mut BoxShadow)>,
 ) {
     let Ok(cam) = camera.single() else {
         return;
@@ -798,9 +312,14 @@ fn indicators(
         let to = (from - cam.translation()).xz();
         t.rotation = Rot2::radians(to.dot(right).atan2(to.dot(fwd)));
         *v = Visibility::Inherited;
-        for k in kids {
-            if let Ok(mut c) = bars.get_mut(*k) {
-                c.0 = Color::srgba(0.9, 0.05, 0.05, (left / HURT_LIFE).min(1.0) * 0.85);
+        // fully lit, then fading over the last 0.75 s
+        let fade = (left / 0.75).min(1.0);
+        let mid = (kids.len() as f32 - 1.0) / 2.0;
+        for (n, k) in kids.iter().enumerate() {
+            if let Ok((mut c, mut glow)) = segs.get_mut(k) {
+                let taper = 1.0 - ((n as f32 - mid).abs() / (mid + 1.0));
+                c.0 = Color::srgba(1.0, 0.18, 0.14, fade * (0.35 + 0.6 * taper));
+                glow.0[0].color = Color::srgba(1.0, 0.1, 0.05, fade * 0.5 * taper);
             }
         }
     }
@@ -821,6 +340,7 @@ fn decals(
     col: Res<MapCollision>,
     mut impacts: MessageReader<Impact>,
     mut damage: MessageReader<Damage>,
+    settings: Res<crate::game::Settings>,
 ) {
     let dec = &mut *decals;
     let mut marks: Vec<(Vec3, Vec3, f32, bool)> = Vec::new();
@@ -828,7 +348,8 @@ fn decals(
         marks.push((i.point, i.normal, HOLE_SIZE, false));
     }
     let mut bled: Vec<Entity> = Vec::new();
-    for d in damage.read() {
+    // The simulated blood (`gore.rs`) leaves its own stains.
+    for d in damage.read().filter(|_| !settings.realistic_blood) {
         if bled.contains(&d.target) {
             continue;
         }
@@ -894,186 +415,4 @@ fn set(text: &mut Text, s: String) {
     if text.0 != s {
         text.0 = s;
     }
-}
-
-fn update(
-    data: Res<ActorData>,
-    marks: Res<Marks>,
-    input: crate::controls::Input,
-    clock: Option<Res<Clock>>,
-    player: Query<(&Vitals, &Loadout, &Score, Option<&Dead>, Option<&Status>), With<Player>>,
-    actors: Query<(&Name, &Score, Has<Player>, Option<&Team>)>,
-    mut texts: Query<(&Label, &mut Text)>,
-    mut fills: Query<(&Fill, &mut Node, &mut BackgroundGradient)>,
-    mut shows: Query<(&Show, &mut Visibility)>,
-    mut flash: Query<&mut BackgroundColor, With<Flash>>,
-    mut hp_tier: Local<usize>,
-    mut low: Query<
-        (&mut BackgroundGradient, &mut Visibility),
-        (With<LowHp>, Without<Fill>, Without<Show>),
-    >,
-    real: Res<Time<Real>>,
-) {
-    let Ok((vitals, loadout, score, dead, status)) = player.single() else {
-        return;
-    };
-    let slot = &loadout.slots[loadout.current];
-    let item = data.items.get(slot.item);
-    let melee = item.is_none_or(|i| i.kind == "melee");
-    let ranged_empty = !melee && slot.magazine == 0;
-    let mut rows: Vec<_> = actors.iter().collect();
-    rows.sort_by_key(|(_, s, _, _)| (std::cmp::Reverse(s.kills), s.deaths));
-    let column = |head: &str, f: &dyn Fn(&(&Name, &Score, bool, Option<&Team>)) -> String| {
-        let lines = rows.iter().take(BOARD_ROWS).map(f);
-        std::iter::once(head.to_owned())
-            .chain(lines)
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    for (l, mut t) in &mut texts {
-        let s = match l {
-            Label::Hp => format!("{}", vitals.hp.ceil()),
-            Label::Ap => format!("{}", vitals.ap.ceil()),
-            Label::Ammo if melee => String::new(),
-            Label::Ammo => format!("{}/{}", slot.magazine, slot.reserve),
-            Label::Weapon => item
-                .and_then(|i| i.name.clone())
-                .unwrap_or_else(|| format!("item {}", slot.item)),
-            Label::Death => dead.map_or(String::new(), |d| {
-                if d.respawn >= HOLD {
-                    "You died - waiting to rejoin".to_owned()
-                } else {
-                    format!("You died - respawn in {}", d.respawn.ceil())
-                }
-            }),
-            Label::Score => format!("Kills {}   Deaths {}", score.kills, score.deaths),
-            Label::Notice if marks.notice.0 > 0.0 => marks.notice.1.clone(),
-            Label::Notice => String::new(),
-            Label::Status => status.map_or_else(String::new, |s| {
-                let mut v = Vec::new();
-                if s.stun > 0.0 {
-                    v.push(format!("STUNNED {:.1}s", s.stun));
-                }
-                if s.root > 0.0 {
-                    v.push(format!("ROOTED {:.1}s", s.root));
-                }
-                if s.slow_left > 0.0 {
-                    v.push(format!("SLOWED {:.0}% {:.1}s", s.slow * 100.0, s.slow_left));
-                }
-                if s.dot_left > 0.0 {
-                    v.push(format!("BURNING {:.0}/s {:.1}s", s.dot, s.dot_left));
-                }
-                v.join("\n")
-            }),
-            Label::Names => column("Name", &|(n, _, you, team)| {
-                let tag = match team {
-                    Some(Team::Red) => " [RED]",
-                    Some(Team::Blue) => " [BLUE]",
-                    None | Some(Team::Duel(_)) => "",
-                };
-                format!("{n}{}{tag}", if *you { " (you)" } else { "" })
-            }),
-            Label::Kills => column("Kills", &|(_, s, _, _)| s.kills.to_string()),
-            Label::Deaths => column("Deaths", &|(_, s, _, _)| s.deaths.to_string()),
-            Label::Clock => clock
-                .as_ref()
-                .map_or_else(String::new, |c| c.header.clone()),
-        };
-        set(&mut t, s);
-    }
-    for (f, mut n, mut g) in &mut fills {
-        let (v, max) = match *f {
-            Fill::Hp => (vitals.hp, vitals.max_hp),
-            Fill::Ap(i) => {
-                let seg = vitals.max_ap / 3.0;
-                (vitals.ap - seg * i as f32, seg)
-            }
-        };
-        n.width = percent((v / max.max(1.0)).clamp(0.0, 1.0) * 100.0);
-        if matches!(f, Fill::Hp) {
-            let t = tier(vitals.hp / vitals.max_hp.max(1.0));
-            if t != *hp_tier {
-                *hp_tier = t;
-                *g = gradient(HP_TIERS[t]);
-            }
-        }
-    }
-    for (s, mut v) in &mut shows {
-        let on = match s {
-            Show::Cross => dead.is_none(),
-            Show::Hit => marks.hit > 0.0,
-            Show::Kill => marks.kill > 0.0,
-            Show::Reload => ranged_empty && slot.reserve > 0,
-            Show::Empty => ranged_empty && slot.reserve == 0,
-            Show::Death => dead.is_some() && clock.as_ref().is_none_or(|c| c.over.is_none()),
-            Show::Board => {
-                input.pressed(crate::controls::Action::Score)
-                    || clock.as_ref().is_some_and(|c| c.over.is_some())
-            }
-        };
-        let want = if on {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if *v != want {
-            *v = want;
-        }
-    }
-    for mut c in &mut flash {
-        c.0 = Color::srgba(0.8, 0.0, 0.0, marks.flash / 0.4 * 0.22);
-    }
-    // Low health: red screen edges that pulse faster the lower the health.
-    let frac = vitals.hp / vitals.max_hp.max(1.0);
-    let level = if dead.is_some() || frac >= LOW_HP {
-        0.0
-    } else {
-        1.0 - frac / LOW_HP
-    };
-    for (mut g, mut v) in &mut low {
-        let want = if level > 0.0 {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if *v != want {
-            *v = want;
-        }
-        if level > 0.0 {
-            let pulse = 0.7 + 0.3 * (real.elapsed_secs() * (3.0 + 4.0 * level)).sin();
-            *g = vignette(0.65 * level * pulse);
-        }
-    }
-}
-
-/// The scoreboard's last line once the match is over: level, XP and bounty earned (`profile.rs`).
-#[derive(Component)]
-struct Earned;
-
-fn earned(
-    clock: Res<Clock>,
-    gain: Res<MatchGain>,
-    profile: Res<Profile>,
-    ranks: Option<Res<Ranks>>,
-    text: Single<&mut Text, With<Earned>>,
-) {
-    let level = profile.level();
-    let s = match clock.over {
-        None => String::new(),
-        Some(_) => format!(
-            "{}   +{} XP   +{} bounty   (bounty {})",
-            if level > gain.from_level {
-                format!("LEVEL UP {} -> {level}", gain.from_level)
-            } else {
-                format!(
-                    "Level {level} [{}]",
-                    ranks.as_ref().map_or("", |r| r.code(level))
-                )
-            },
-            gain.xp,
-            gain.bounty,
-            profile.bounty
-        ),
-    };
-    set(&mut text.into_inner(), s);
 }

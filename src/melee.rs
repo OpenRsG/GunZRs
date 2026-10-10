@@ -102,6 +102,9 @@ const MASSIVE_BACK: f32 = 5.0;
 /// Air juggle: a hit on an actor already in the blast chain lifts it again, at most this often.
 const JUGGLE_UP: f32 = 5.5;
 const MAX_JUGGLE: u8 = 3;
+/// Seconds after a switch-cancelled air slash during which switching back to the blade needs no
+/// draw delay (flash step / quick slash; *inferred*).
+const FLASH_WINDOW: f32 = 1.5;
 
 pub struct MeleePlugin;
 
@@ -250,6 +253,12 @@ pub struct Melee {
     power: f32,
     /// Alternates `guard_block1/2` and `damage/damage2`.
     alt: bool,
+    /// Until when drawing the blade again after an air slash was switch-cancelled is instant.
+    flash: f32,
+    /// The guard came out of a blow (butterfly / slide): the actor may move while it is up.
+    slide: bool,
+    /// That guard went up in the air (air butterfly): it may stay up there until the actor lands.
+    air_guard: bool,
     /// Air hits taken since landing.
     juggle: u8,
     /// Item last seen in hand (weapon switches restart the state).
@@ -329,7 +338,24 @@ fn drive(
         let weapon = data.items.get(item).and_then(|i| i.weapon.as_ref());
         if m.item != item {
             if m.item != 0 {
-                m.ready = m.ready.max(now + SWITCH_DELAY);
+                // K-style: switching away in the air cancels the slash (and its delay), drawing
+                // the blade again soon after needs no draw time (flash step).
+                let air_cancel = matches!(m.phase, Phase::Blow { .. }) && !motor.grounded;
+                let flash = weapon.is_some_and(|w| is_melee(w.kind)) && now < m.flash;
+                if air_cancel {
+                    m.flash = now + FLASH_WINDOW;
+                    debug!("t={now:.2} melee {who}: tech: switch-cancelled air slash");
+                } else if flash {
+                    m.flash = 0.0;
+                    debug!(
+                        "t={now:.2} melee {who}: tech: flash step (quick slash after a switch cancel)"
+                    );
+                }
+                m.ready = if air_cancel || flash {
+                    now
+                } else {
+                    m.ready.max(now + SWITCH_DELAY)
+                };
             }
             m.item = item;
             m.phase = Phase::Idle;
@@ -352,6 +378,11 @@ fn drive(
         let queued = now < m.queued_until;
         let grounded = motor.grounded;
         let guard_ok = intent.guard && grounded && !motor.wall && secs("guard_idle").is_some();
+        // Air butterfly: the guard also cancels an air slash in the air; that guard stays up
+        // (and carries on as a normal one after landing) while the button is held.
+        let guard_clip = intent.guard && !motor.wall && secs("guard_idle").is_some();
+        let air_bf = guard_clip && !grounded;
+        let guard_hold = guard_clip && (grounded || m.air_guard);
 
         // The actor controller ended the clip early: a jump, dash or wall kick cancelled it.
         if m.phase != Phase::Idle && acting.is_none() && t > 0.1 && t < m.secs - 0.05 {
@@ -371,7 +402,7 @@ fn drive(
             && !queued
             && secs("charge").is_some();
         let blow_from = |m: &Melee, power: f32| plan(&data, woman, motion, m, now, motor, power);
-        let free = !motor.wall && motor.tumble.is_none_or(|t| t > 0.1);
+        let free = motor.tumble.is_none_or(|t| t > 0.1);
 
         let next = match m.phase {
             Phase::Idle if !free => None,
@@ -408,7 +439,7 @@ fn drive(
                 }
                 if !m.struck {
                     None
-                } else if guard_ok {
+                } else if guard_ok || air_bf && (blow == AIR || blow == DIVE) {
                     // butterfly: the guard cancels the recovery
                     Some(Next::Guard(Stage::Start))
                 } else if queued && now >= m.ready && !dive {
@@ -491,8 +522,11 @@ fn drive(
                     } else {
                         None
                     }
-                } else if !guard_ok {
+                } else if !guard_hold {
                     Some(Next::Guard(Stage::Release))
+                } else if queued && now >= m.ready && !grounded {
+                    // click while the guard is up in the air: another air slash
+                    blow_from(m, 0.0)
                 } else if queued && now >= m.ready {
                     // guard + click: uppercut
                     secs("uppercut").map(|_| Next::Blow {
@@ -618,6 +652,25 @@ fn drive(
                         continue;
                     }
                 };
+                if stage == Stage::Start {
+                    m.slide = matches!(m.phase, Phase::Blow { .. } | Phase::Recover { .. });
+                    m.air_guard = !grounded;
+                    if m.slide {
+                        let what = match m.phase {
+                            Phase::Blow { .. } if !grounded => "air butterfly",
+                            Phase::Blow { blow, .. } if blow.effect == Effect::Launch => {
+                                "quick launch"
+                            }
+                            Phase::Blow { .. } => "butterfly",
+                            _ => "slide",
+                        };
+                        debug!(
+                            "t={now:.2} melee {who}: tech: {what} (guard cancels the recovery, may move)"
+                        );
+                    }
+                } else if stage == Stage::Release {
+                    m.slide = false;
+                }
                 debug!("t={now:.2} melee {who}: guard {stage:?} ({clip})");
                 let len = if clip == "guard_idle" {
                     f32::INFINITY
@@ -628,7 +681,12 @@ fn drive(
                 if stage == Stage::Release {
                     m.combo_until = now + CANCEL_COMBO;
                 }
-                go(m, &mut req, clip, len, ActionMove::Locked, 0.0);
+                let moving = if m.slide {
+                    ActionMove::Control(1.0)
+                } else {
+                    ActionMove::Locked
+                };
+                go(m, &mut req, clip, len, moving, 0.0);
             }
             Next::Charge => {
                 let Some(len) = secs("charge") else {
@@ -882,20 +940,35 @@ fn resolve(
                 dir: d,
                 pierce: None,
             });
-            vfx.write(Vfx::Blood { point: p, dir: d });
+            vfx.write(Vfx::Blood {
+                point: p,
+                dir: d,
+                amount,
+            });
             vfx.write(Vfx::Elu {
                 name: ["sword_damage1", "sword_damage2", "sword_damage3"]
                     [(rnd(&mut seed) * 3.0) as usize % 3],
                 at: Transform::from_translation(p),
             });
 
-            // Reaction. An actor already thrown up is juggled instead of flinching.
+            // Reaction. An actor already thrown up is juggled instead of flinching; a launch
+            // lifts an airborne one with full force (K-style juggle). A lying one is left alone.
             let reaction = match body.as_mut() {
                 None => None,
+                Some(((_, vm), _)) if vm.blast && vm.grounded => None,
                 Some(((_, vm), vstate)) if vm.blast => {
                     if vstate.juggle < MAX_JUGGLE {
                         vstate.juggle += 1;
-                        Some(Vec3::Y * JUGGLE_UP + flat * FLINCH_PUSH)
+                        debug!(
+                            "t={now:.2} melee: tech: juggle {label} x{} ({})",
+                            vstate.juggle, s.blow.name
+                        );
+                        let up = if s.blow.effect == Effect::Launch {
+                            UPPERCUT_UP
+                        } else {
+                            JUGGLE_UP
+                        };
+                        Some(Vec3::Y * up + flat * FLINCH_PUSH)
                     } else {
                         None
                     }

@@ -1969,12 +1969,34 @@ Headless shot hooks: `GUNZ_INV_SLOT=N` (9 = quest items) and `GUNZ_INV_SELL=1` (
 
 ### Pause-menu toggles (`profile::OPTS`, `session.rs`)
 
-Six `game::Settings` bools, shown as ON/OFF buttons under the Esc menu's sensitivity row and saved as
+Six `game::Settings` bools, shown as ON/OFF buttons under the Esc menu's CONTROLS button and saved as
 `opt_kill_sounds`, `opt_hit_sound`, `opt_static_spread`, `opt_team_bars`, `opt_screen_blood`, `opt_killcam`
 (`=0|1`; a missing key keeps the `Settings` default). `gunz-play --NAME` / `--no-NAME` (`_` as `-`) overrides
 the profile for that run only and is not saved; clicking a toggle saves it. The hit sound is the player's own
-file `<profile dir>/custom/hitsound.wav` (`Profile::hitsound_path`; none for a throwaway profile). Sensitivity
-is not persisted (`--sens`).
+file `<profile dir>/custom/hitsound.wav` (`Profile::hitsound_path`; none for a throwaway profile).
+
+### Controls (`src/controls.rs`)
+
+The retail `config.xml` keeps `<MOUSE><SENSITIVITY>`/`<INVERT>` and a `<KEYBOARD>` list of actions, each a
+DirectInput scan code plus an `alt` code (-1 = none). **Observed** defaults: USEWEAPON 29 (left Ctrl) alt 258,
+USEWEAPON2 259, PREVOUSWEAPON 16 (Q) alt 256, NEXTWEAPON 18 (E) alt 257, FORWARD/BACK/LEFT/RIGHT 17/31/30/32
+(W S A D), MELEEWEAPON..ITEM2 2..6 (keys 1-5), RELOAD 19 (R), JUMP 57 (Space), SCORE 15 (Tab), MENU 1 (Esc),
+TAUNT/BOW/WAVE/LAUGH/CRY/DANCE 79/80/81/75/76/77 (numpad 1 2 3 4 5 6), DEFENCE 42 (left Shift),
+MOUSESENSITIVITYDEC/INC 26/27 ([ ]), AUTODASH_LEFT/RIGHT unbound. Codes 256..259 are **inferred** to be wheel
+up, wheel down, left and right mouse button (they sit where a mouse action belongs). The port keeps those
+defaults with USEWEAPON2 and DEFENCE as one Guard (right mouse, left Shift), adds Dash (C: the held direction's
+tumble, forward if none) and keeps T and F5..F9 as second taunt/emote keys. Esc is not rebindable.
+
+Profile keys (missing ones keep the default): `mouse_sens` (0.1..5, times 0.0025 rad per count: 8 cm per 360 at
+800 DPI at 1), `mouse_vertical` (0.5..2, vertical speed relative to horizontal), `mouse_invert` (0|1),
+`mouse_accel` (0..1) and `mouse_accel_cap` (1..4): the gain is `min(1 + 0.05·accel·v, cap)` with `v` the frame's
+mouse speed in counts per millisecond (**inferred** curve, the linear Quake-style one), `mouse_raw` (0|1, browser
+only: asks the pointer lock for `unadjustedMovement`; the desktop build reads raw device motion anyway), and
+`bind_NAME=FIRST,SECOND` per action (`forward back left right jump dash fire guard reload prev_weapon next_weapon
+melee primary secondary item1 item2 score taunt bow wave laugh cry dance sens_down sens_up`), each a Bevy
+`KeyCode` name (`KeyW`, `ShiftLeft`, `Numpad1`, ...), `MouseLeft|MouseRight|MouseMiddle|MouseBack|MouseForward`,
+`WheelUp|WheelDown` or `-`. Binding an input takes it off any other action. The browser's touch controls hold
+actions directly (`controls::Pad`), so they work whatever the keys are bound to.
 
 ## Clans (`src/clan.rs`)
 

@@ -26,6 +26,7 @@ use crate::{
     character::{self, Character, Look, Wardrobe},
     col::MapCollision,
     combat::{SWITCH_DELAY, Vfx},
+    controls::{Action, DEFAULTS, LOOK, Pad, Reader},
     elu,
     game::*,
     item::{Items, WeaponKind},
@@ -88,14 +89,14 @@ const BLAST_STEER: f32 = 0.5;
 /// **Inferred.**
 const TAUNT_CANCEL: f32 = 0.5;
 /// Emotes: clip name (**observed**, `man01.xml`/`woman01.xml`: every motion type has `bow wave
-/// cry laugh dance`; `taunt` is the `T` key) and its keyboard key (**inferred**). Looping
-/// clips play one cycle.
-pub const EMOTES: [(&str, KeyCode); 5] = [
-    ("bow", KeyCode::F5),
-    ("wave", KeyCode::F6),
-    ("cry", KeyCode::F7),
-    ("laugh", KeyCode::F8),
-    ("dance", KeyCode::F9),
+/// cry laugh dance`; `taunt` is its own action) and its [`Action`] (rebindable). Looping clips
+/// play one cycle.
+pub const EMOTES: [(&str, Action); 5] = [
+    ("bow", Action::Bow),
+    ("wave", Action::Wave),
+    ("cry", Action::Cry),
+    ("laugh", Action::Laugh),
+    ("dance", Action::Dance),
 ];
 /// A trigger click this recent still fires once the shot delay is over. **Inferred.**
 const CLICK_BUFFER: f32 = 0.12;
@@ -815,7 +816,7 @@ struct Held {
     guard: bool,
     taunt: bool,
     emote: Option<&'static str>,
-    /// Scripts hold Tab (scoreboard) by pressing it in `ButtonInput<KeyCode>`.
+    /// Scripts hold the scoreboard through the [`Pad`].
     tab: bool,
 }
 
@@ -926,69 +927,110 @@ impl Script {
     }
 }
 
+/// The player's [`Intent`] from the mouse and the bound keys (`controls.rs`; mouse look with the
+/// profile's sensitivity and acceleration, the on-screen touch look as the page scaled it), or
+/// from a `--script`. The Dash action double-taps the held direction (forward if none) on
+/// consecutive frames, which `drive` takes as a tumble; Sens. up/down change the sensitivity.
 #[allow(clippy::too_many_arguments)]
 fn player_input(
     time: Res<Time>,
-    mut keys: ResMut<ButtonInput<KeyCode>>,
+    real: Res<Time<Real>>,
+    keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
-    settings: Res<Settings>,
+    mut pad: ResMut<Pad>,
+    mut profile: Option<ResMut<crate::profile::Profile>>,
+    touch: Option<Res<TouchScreen>>,
     frozen: Option<Res<Frozen>>,
     script: Option<ResMut<Script>>,
+    mut dash: Local<(u8, usize)>,
+    mut notice: MessageWriter<crate::hud::Notice>,
     player: Single<(&mut Intent, &Loadout), With<Player>>,
 ) {
     let (mut intent, load) = player.into_inner();
     let mut look = (intent.yaw, intent.pitch);
-    let held = match script {
+    let (mut dashed, mut sens) = (false, 0);
+    let mut held = match script {
         _ if frozen.is_some() => Held::default(),
         Some(mut s) => {
             let held = s.held(time.elapsed_secs(), &mut look);
-            if held.tab {
-                keys.press(KeyCode::Tab);
-            } else {
-                keys.release(KeyCode::Tab);
-            }
+            pad.now[Action::Score as usize] = held.tab;
             held
         }
         None => {
-            look.0 -= motion.delta.x * settings.sensitivity;
-            look.1 -= motion.delta.y * settings.sensitivity;
+            let r = Reader {
+                keys: &keys,
+                mouse: &buttons,
+                wheel: scroll.delta.y,
+                pad: &pad,
+                controls: profile.as_deref().map_or(&*DEFAULTS, |p| &p.controls),
+            };
+            let turn = if touch.is_some() {
+                motion.delta * LOOK
+            } else {
+                r.controls.look(motion.delta, real.delta_secs())
+            };
+            look.0 -= turn.x;
+            look.1 -= turn.y;
+            let n = load.slots.len();
+            let step = |a, by| (n > 0 && r.just(a)).then(|| (load.current + by) % n.max(1));
             let slot = [
-                KeyCode::Digit1,
-                KeyCode::Digit2,
-                KeyCode::Digit3,
-                KeyCode::Digit4,
-                KeyCode::Digit5,
+                Action::Melee,
+                Action::Primary,
+                Action::Secondary,
+                Action::Item1,
+                Action::Item2,
             ]
             .iter()
-            .position(|&k| keys.pressed(k))
-            .or_else(|| {
-                let n = load.slots.len();
-                (scroll.delta.y != 0.0 && n > 0).then(|| {
-                    if scroll.delta.y > 0.0 {
-                        (load.current + n - 1) % n
-                    } else {
-                        (load.current + 1) % n
-                    }
-                })
-            });
+            .position(|&a| r.pressed(a))
+            .or_else(|| step(Action::PrevWeapon, n.max(1) - 1))
+            .or_else(|| step(Action::NextWeapon, 1));
+            dashed = r.just(Action::Dash);
+            sens = r.just(Action::SensUp) as i32 - r.just(Action::SensDown) as i32;
             Held {
-                fwd: keys.pressed(KeyCode::KeyW),
-                back: keys.pressed(KeyCode::KeyS),
-                left: keys.pressed(KeyCode::KeyA),
-                right: keys.pressed(KeyCode::KeyD),
-                jump: keys.pressed(KeyCode::Space),
-                attack: buttons.pressed(MouseButton::Left),
-                guard: buttons.pressed(MouseButton::Right),
-                reload: keys.pressed(KeyCode::KeyR),
+                fwd: r.pressed(Action::Forward),
+                back: r.pressed(Action::Back),
+                left: r.pressed(Action::Left),
+                right: r.pressed(Action::Right),
+                jump: r.pressed(Action::Jump),
+                attack: r.pressed(Action::Fire),
+                guard: r.pressed(Action::Guard),
+                reload: r.pressed(Action::Reload),
                 slot,
-                taunt: keys.pressed(KeyCode::KeyT),
-                emote: EMOTES.iter().find(|e| keys.pressed(e.1)).map(|e| e.0),
+                taunt: r.pressed(Action::Taunt),
+                emote: EMOTES.iter().find(|e| r.pressed(e.1)).map(|e| e.0),
                 tab: false,
             }
         }
     };
+    if sens != 0
+        && let Some(p) = profile.as_mut()
+    {
+        p.controls.nudge_sens(sens);
+        notice.write(crate::hud::Notice(format!(
+            "Mouse sensitivity x{:.2}",
+            p.controls.sens
+        )));
+    }
+    // off, on, off, on: two fresh presses of one direction
+    if dashed && dash.0 == 0 {
+        let dirs = [held.fwd, held.back, held.left, held.right];
+        *dash = (4, dirs.iter().position(|&d| d).unwrap_or(0));
+    }
+    if dash.0 > 0 {
+        let on = dash.0 % 2 == 1;
+        let dirs = [
+            &mut held.fwd,
+            &mut held.back,
+            &mut held.left,
+            &mut held.right,
+        ];
+        for (i, d) in dirs.into_iter().enumerate() {
+            *d = on && i == dash.1;
+        }
+        dash.0 -= 1;
+    }
     let axis = |pos: bool, neg: bool| pos as i8 as f32 - neg as i8 as f32;
     intent.walk =
         Vec2::new(axis(held.right, held.left), axis(held.fwd, held.back)).clamp_length_max(1.0);

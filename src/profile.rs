@@ -9,6 +9,7 @@ use crate::{
     actor::{ActorData, DEFAULT_LOADOUT},
     character::Look,
     clan::Clan,
+    controls::Controls,
     game::{Killed, Player, QuestLoot, Reward, Settings, Vitals},
     level::Level,
     menu::Mode,
@@ -134,6 +135,8 @@ pub struct Profile {
     pub clan: Option<Clan>,
     /// The pause-menu toggles ([`OPTS`] order), saved as `opt_NAME=0|1`.
     pub opts: [bool; OPTS.len()],
+    /// Mouse and keyboard settings (`mouse_*`, `bind_*` keys).
+    pub controls: Controls,
     /// Where [`Profile::save`] writes; `None` = throwaway.
     path: Option<PathBuf>,
 }
@@ -159,6 +162,7 @@ impl Profile {
             rented: BTreeMap::new(),
             opts: std::array::from_fn(|i| *opt_mut(&mut Settings::default(), i)),
             clan: None,
+            controls: Controls::default(),
             path: None,
         }
     }
@@ -242,6 +246,7 @@ impl Profile {
         if let Some(c) = &self.clan {
             text += &format!("clan={}\n", c.to_text());
         }
+        text += &self.controls.to_text();
         text
     }
 
@@ -319,6 +324,7 @@ impl Profile {
                     let i = OPTS.iter().position(|o| o.0 == &k[4..]);
                     p.opts[i.ok_or(format!("unknown key {k:?}"))?] = num::<u8>(k, v)? != 0;
                 }
+                k if p.controls.set(k, v)? => {}
                 _ => return Err(format!("unknown key {k:?}")),
             }
         }

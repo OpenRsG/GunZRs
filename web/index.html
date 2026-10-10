@@ -674,6 +674,16 @@
   for (const t of ["gesturestart", "gesturechange", "dblclick"]) document.addEventListener(t, e => e.preventDefault(), {passive: false});
   document.addEventListener("touchmove", e => {if (e.touches.length > 1) e.preventDefault();}, {passive: false});
   addEventListener("wheel", e => {if (e.ctrlKey) e.preventDefault();}, {passive: false});
+  // Mouse: the game's "Raw input" setting (`globalThis.gunzRaw`, set by `src/web.rs`) asks the
+  // pointer lock for unaccelerated movement where the browser supports it (Chromium), a plain
+  // lock elsewhere. The side buttons are game buttons, not history back/forward.
+  const lock = HTMLCanvasElement.prototype.requestPointerLock;
+  HTMLCanvasElement.prototype.requestPointerLock = function (opts) {
+   if (!globalThis.gunzRaw) return lock.call(this, opts);
+   const p = lock.call(this, {unadjustedMovement: true});
+   return p?.catch?.(() => lock.call(this));
+  };
+  for (const t of ["mousedown", "mouseup", "auxclick"]) addEventListener(t, e => {if (e.button > 2) e.preventDefault();});
   const viewport = document.querySelector("meta[name=viewport]");
   visualViewport?.addEventListener("resize", () => {
    if (visualViewport.scale <= 1.01) return;
@@ -819,6 +829,9 @@
    layer.addEventListener("pointerup", lift);
    layer.addEventListener("pointercancel", lift);
    layer.addEventListener("contextmenu", e => e.preventDefault());
+   // a finger whose pointerup never came (app switch, notification shade) must not hold a control
+   addEventListener("blur", () => letGo());
+   document.addEventListener("visibilitychange", () => document.hidden && letGo());
    // the game paused or ended: hand taps to its menus, let go of everything
    globalThis.gunzPaused = paused => {
     if (!editing) layer.classList.toggle("off", paused);

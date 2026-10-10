@@ -15,7 +15,6 @@ use crate::{
 };
 use bevy::{
     prelude::*,
-    text::Justify,
     ui::{GlobalZIndex, UiTargetCamera},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
@@ -339,13 +338,11 @@ struct PauseUi;
 #[derive(Component)]
 struct EndUi;
 
-#[derive(Component)]
-struct SensText;
-
 #[derive(Component, Clone, Copy)]
 enum Act {
     Resume,
-    Sens(i32),
+    /// Opens the CONTROLS overlay (`controls.rs`).
+    Controls,
     /// Toggles `profile::OPTS[i]`.
     Opt(usize),
     Menu,
@@ -357,30 +354,28 @@ fn on_off(on: bool) -> &'static str {
     if on { "ON" } else { "OFF" }
 }
 
-/// Sensitivity steps: quarters of the default.
-fn sens_text(s: &Settings) -> String {
-    format!("x{:.2}", s.sensitivity / Settings::default().sensitivity)
-}
-
-/// Spawns/despawns the pause and end-of-match overlays to follow [`Frozen`] and [`Clock`].
+/// Spawns/despawns the pause and end-of-match overlays to follow [`Frozen`] and [`Clock`]; the
+/// CONTROLS overlay stands in for the pause menu while it is open.
+#[allow(clippy::too_many_arguments)]
 fn panels(
     mut commands: Commands,
     frozen: Option<Res<Frozen>>,
     hold: Option<Res<Hold>>,
+    controls: Option<Res<crate::controls::Overlay>>,
     clock: Res<Clock>,
     art: Option<Res<Art>>,
     settings: Res<Settings>,
     camera: Query<Entity, With<Camera3d>>,
     pause: Query<Entity, With<PauseUi>>,
     end: Query<Entity, With<EndUi>>,
-    mut sens: Query<&mut Text, With<SensText>>,
     opts: Query<(&Act, &Children)>,
-    mut texts: Query<&mut Text, Without<SensText>>,
+    mut texts: Query<&mut Text>,
 ) {
     let (Some(art), Ok(camera)) = (art, camera.single()) else {
         return;
     };
-    let want_pause = frozen.is_some() && clock.over.is_none() && hold.is_none();
+    let want_pause =
+        frozen.is_some() && clock.over.is_none() && hold.is_none() && controls.is_none();
     match (want_pause, pause.single()) {
         (false, Ok(e)) => commands.entity(e).despawn(),
         (true, Err(_)) => spawn_pause(&mut commands, &art, camera, &settings),
@@ -399,9 +394,6 @@ fn panels(
                     t.0 = on_off(*opt_mut(&mut s, *i)).into();
                 }
             }
-        }
-        for mut t in &mut sens {
-            t.0 = sens_text(&settings);
         }
     }
 }
@@ -435,35 +427,7 @@ fn spawn_pause(commands: &mut Commands, art: &Art, camera: Entity, settings: &Se
                 .with_children(|p| {
                     p.spawn(heading("PAUSED"));
                     p.spawn(button(art, 300.0, 44.0, "RESUME", 22.0, Act::Resume));
-                    p.spawn(Node {
-                        align_items: AlignItems::Center,
-                        column_gap: px(8),
-                        ..default()
-                    })
-                    .with_children(|s| {
-                        s.spawn((
-                            Text::new("Mouse sens."),
-                            TextFont::from_font_size(18.0),
-                            TextColor(Color::WHITE),
-                        ));
-                        s.spawn(button(art, 34.0, 30.0, "<", 16.0, Act::Sens(-1)));
-                        s.spawn((
-                            SensText,
-                            Text::new(sens_text(settings)),
-                            TextFont::from_font_size(18.0),
-                            TextColor(Color::WHITE),
-                            TextLayout {
-                                justify: Justify::Center,
-                                ..default()
-                            },
-                            Node {
-                                width: px(70),
-                                height: px(24),
-                                ..default()
-                            },
-                        ));
-                        s.spawn(button(art, 34.0, 30.0, ">", 16.0, Act::Sens(1)));
-                    });
+                    p.spawn(button(art, 300.0, 44.0, "CONTROLS", 20.0, Act::Controls));
                     p.spawn(Node {
                         flex_wrap: FlexWrap::Wrap,
                         justify_content: JustifyContent::Center,
@@ -560,11 +524,7 @@ fn buttons(
                     p.opts[i] = on;
                 }
             }
-            Act::Sens(d) => {
-                let unit = Settings::default().sensitivity;
-                let quarters = (settings.sensitivity / unit * 4.0).round() + d as f32;
-                settings.sensitivity = quarters.clamp(1.0, 16.0) / 4.0 * unit;
-            }
+            Act::Controls => commands.insert_resource(crate::controls::Overlay),
             Act::Menu => drop(exit.write(AppExit::from_code(EXIT_MENU))),
             Act::Again => drop(exit.write(AppExit::from_code(EXIT_AGAIN))),
             Act::Quit => drop(exit.write(AppExit::Success)),

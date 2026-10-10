@@ -30,6 +30,7 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Marks>()
+            .add_message::<Notice>()
             .init_resource::<Hurt>()
             .init_resource::<Shake>()
             .add_plugins((fx::plugin, feed::plugin))
@@ -82,6 +83,10 @@ struct Marks {
     /// Centre-screen notice ("You killed X") and its seconds left.
     notice: (f32, String),
 }
+
+/// A centre-screen line for the player (e.g. the sensitivity keys' new value).
+#[derive(Message)]
+pub struct Notice(pub String);
 
 /// Recent hits on the player: seconds left, the attacker and where the hit came from.
 #[derive(Resource, Default)]
@@ -704,6 +709,7 @@ fn track(
     mut damage: MessageReader<Damage>,
     mut killed: MessageReader<Killed>,
     mut blasts: MessageReader<Blast>,
+    mut notices: MessageReader<Notice>,
     mut shakes: MessageReader<CameraShake>,
     players: Query<&GlobalTransform, With<Player>>,
     transforms: Query<&GlobalTransform>,
@@ -762,6 +768,9 @@ fn track(
             marks.kill = 0.8;
             marks.notice = (2.0, format!("You killed {name}"));
         }
+    }
+    for n in notices.read() {
+        marks.notice = (1.5, n.0.clone());
     }
 }
 
@@ -890,7 +899,7 @@ fn set(text: &mut Text, s: String) {
 fn update(
     data: Res<ActorData>,
     marks: Res<Marks>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: crate::controls::Input,
     clock: Option<Res<Clock>>,
     player: Query<(&Vitals, &Loadout, &Score, Option<&Dead>, Option<&Status>), With<Player>>,
     actors: Query<(&Name, &Score, Has<Player>, Option<&Team>)>,
@@ -998,7 +1007,8 @@ fn update(
             Show::Empty => ranged_empty && slot.reserve == 0,
             Show::Death => dead.is_some() && clock.as_ref().is_none_or(|c| c.over.is_none()),
             Show::Board => {
-                keys.pressed(KeyCode::Tab) || clock.as_ref().is_some_and(|c| c.over.is_some())
+                input.pressed(crate::controls::Action::Score)
+                    || clock.as_ref().is_some_and(|c| c.over.is_some())
             }
         };
         let want = if on {

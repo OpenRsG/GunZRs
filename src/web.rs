@@ -2,12 +2,14 @@
 //! packs (`gunz-pack`) and the chosen match, then starts the wasm module. Everything else runs
 //! as on the desktop.
 
-use crate::{game::Frozen, mrs::Vfs};
+use crate::{
+    controls::{Action, Pad},
+    game::Frozen,
+    mrs::Vfs,
+    profile::Profile,
+};
 use bevy::{
-    input::{
-        InputSystems,
-        mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    },
+    input::{InputSystems, mouse::AccumulatedMouseMotion},
     prelude::*,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
@@ -102,56 +104,47 @@ pub struct WebPlugin;
 impl Plugin for WebPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, touch.after(InputSystems))
-            .add_systems(Update, (ready, relock))
+            .add_systems(Update, (ready, relock, raw_input))
             .add_systems(Last, exit);
     }
 }
 
-#[derive(Clone, Copy)]
-enum Ctl {
-    Key(KeyCode),
-    Mouse(MouseButton),
-}
-
-/// Held controls at `gunzTouch[2..12]`, in the page's order: stick W A S D, then jump, fire,
-/// guard, reload, scores, pause. The page writes 3 on a press and 2 on a release this side has
-/// not seen yet, so a tap shorter than a frame still counts.
-const HELD: [Ctl; 10] = [
-    Ctl::Key(KeyCode::KeyW),
-    Ctl::Key(KeyCode::KeyA),
-    Ctl::Key(KeyCode::KeyS),
-    Ctl::Key(KeyCode::KeyD),
-    Ctl::Key(KeyCode::Space),
-    Ctl::Mouse(MouseButton::Left),
-    Ctl::Mouse(MouseButton::Right),
-    Ctl::Key(KeyCode::KeyR),
-    Ctl::Key(KeyCode::Tab),
-    Ctl::Key(KeyCode::Escape),
+/// Held controls at `gunzTouch[2..11]`, in the page's order: stick forward, left, back, right,
+/// then jump, fire, guard, reload, scores; `[11]` is pause (Esc). The page writes 3 on a press
+/// and 2 on a release this side has not seen yet, so a tap shorter than a frame still counts.
+const HELD: [Action; 9] = [
+    Action::Forward,
+    Action::Left,
+    Action::Back,
+    Action::Right,
+    Action::Jump,
+    Action::Fire,
+    Action::Guard,
+    Action::Reload,
+    Action::Score,
 ];
+const PAUSE: usize = 11;
 /// Taps after the held controls, cleared once read; then the aim assist strength (0..=1).
 const NEXT_WEAPON: usize = 12;
 const DASH: usize = 13;
 const AIM_ASSIST: usize = 14;
 
 /// The page's touch controls (`globalThis.gunzTouch`, a `Float32Array(15)`; absent without a
-/// touch screen): `[0..2]` is the look drag in pixels since the last frame, then [`HELD`], next
-/// weapon (a scroll step), dash and the aim assist strength (`Settings::aim_assist`). Dash taps
-/// the stick's direction (forward if none) twice on consecutive frames, which `drive` takes as a
-/// tumble. The look drag replaces the mouse motion: the browser also reports every finger's
-/// movement (the stick's too) as mouse motion. Runs right after Bevy's input systems, so a touch
-/// reaches the game in the same frame as a key would. Also tells the page when the game pauses
-/// or resumes (`globalThis.gunzPaused(bool)`): it hides the controls so taps reach the pause and
-/// end menus.
+/// touch screen): `[0..2]` is the look drag in pixels since the last frame, then [`HELD`],
+/// pause, next weapon, dash and the aim assist strength (`Settings::aim_assist`). They hold
+/// actions in the [`Pad`], so they work whatever the keys are bound to. The look drag replaces
+/// the mouse motion: the browser also reports every finger's movement (the stick's too) as
+/// mouse motion. Runs right after Bevy's input systems, so a touch reaches the game in the
+/// same frame as a key would. Also tells the page when the game pauses or resumes
+/// (`globalThis.gunzPaused(bool)`): it hides the controls so taps reach the pause and end menus.
 #[allow(clippy::too_many_arguments)]
 fn touch(
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut motion: ResMut<AccumulatedMouseMotion>,
-    mut scroll: ResMut<AccumulatedMouseScroll>,
+    mut pad: ResMut<Pad>,
     frozen: Option<Res<Frozen>>,
     settings: Option<ResMut<crate::game::Settings>>,
-    mut down: Local<[bool; HELD.len()]>,
-    mut dash: Local<(u8, usize)>,
+    mut esc: Local<bool>,
     mut paused: Local<bool>,
     touch_screen: Option<Res<crate::game::TouchScreen>>,
     mut commands: Commands,
@@ -169,7 +162,7 @@ fn touch(
     for i in [0, 1, NEXT_WEAPON, DASH] {
         t.set_index(i as u32, 0.0);
     }
-    for i in 2..2 + HELD.len() {
+    for i in 2..=PAUSE {
         match v[i] {
             3.0 => t.set_index(i as u32, 1.0),
             2.0 => t.set_index(i as u32, 0.0),
@@ -183,28 +176,19 @@ fn touch(
     {
         s.aim_assist = aim;
     }
-    if v[NEXT_WEAPON] != 0.0 {
-        scroll.delta.y -= 1.0;
+    pad.before = pad.now;
+    for (i, a) in HELD.iter().enumerate() {
+        pad.now[*a as usize] = v[2 + i] != 0.0;
     }
-    let mut want: [bool; HELD.len()] = std::array::from_fn(|i| v[2 + i] != 0.0);
-    if v[DASH] != 0.0 && dash.0 == 0 {
-        *dash = (4, (0..4).find(|&d| want[d]).unwrap_or(0));
-    }
-    // off, on, off, on: two fresh presses of one direction
-    if dash.0 > 0 {
-        want[dash.1] = dash.0 % 2 == 1;
-        dash.0 -= 1;
-    }
-    for (i, ctl) in HELD.iter().enumerate() {
-        if want[i] == down[i] {
-            continue;
-        }
-        down[i] = want[i];
-        match (*ctl, want[i]) {
-            (Ctl::Key(k), true) => keys.press(k),
-            (Ctl::Key(k), false) => keys.release(k),
-            (Ctl::Mouse(b), true) => mouse.press(b),
-            (Ctl::Mouse(b), false) => mouse.release(b),
+    pad.now[Action::NextWeapon as usize] = v[NEXT_WEAPON] != 0.0;
+    pad.now[Action::Dash as usize] = v[DASH] != 0.0;
+    let pause = v[PAUSE] != 0.0;
+    if pause != *esc {
+        *esc = pause;
+        if pause {
+            keys.press(KeyCode::Escape);
+        } else {
+            keys.release(KeyCode::Escape);
         }
     }
     if frozen.is_some() != *paused {
@@ -237,13 +221,23 @@ fn relock(
     // button is a left click there
     if clock.is_some()
         && frozen.is_none()
-        && mouse.just_pressed(MouseButton::Left)
+        && mouse.get_just_pressed().next().is_some()
         && !global("gunzTouch").is_object()
     {
         for mut c in &mut windows {
             // assigning marks it changed, so the lock is requested again inside the gesture
             (c.grab_mode, c.visible) = (CursorGrabMode::Locked, false);
         }
+    }
+}
+
+/// Hands the profile's "Raw input" choice to the page (`globalThis.gunzRaw`): its pointer-lock
+/// wrapper asks for unaccelerated movement (`unadjustedMovement`) with it.
+fn raw_input(profile: Option<Res<Profile>>, mut sent: Local<Option<bool>>) {
+    let raw = profile.is_none_or(|p| p.controls.raw);
+    if *sent != Some(raw) {
+        *sent = Some(raw);
+        let _ = Reflect::set(&js_sys::global(), &"gunzRaw".into(), &raw.into());
     }
 }
 

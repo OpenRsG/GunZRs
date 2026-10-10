@@ -1131,12 +1131,12 @@ fn overlay(
 fn strip(
     war: Res<ClanWar>,
     profile: Res<Profile>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: crate::controls::Input,
     clock: Res<Clock>,
     mut vis: Query<&mut Visibility, With<Strip>>,
     mut texts: Query<(&Points, &mut Text)>,
 ) {
-    let show = keys.pressed(KeyCode::Tab) || clock.over.is_some();
+    let show = input.pressed(crate::controls::Action::Score) || clock.over.is_some();
     for mut v in &mut vis {
         let want = if show {
             Visibility::Inherited

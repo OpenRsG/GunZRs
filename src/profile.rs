@@ -11,6 +11,7 @@ use crate::{
     clan::Clan,
     controls::Controls,
     game::{Killed, Player, QuestLoot, Reward, Settings, Vitals},
+    gfx::Graphics,
     level::Level,
     menu::Mode,
     mrs::Vfs,
@@ -89,13 +90,14 @@ pub fn result_reward(headline: &str) -> (u32, u32) {
 /// The `Settings` bools the pause menu toggles: profile key (also the `--KEY`/`--no-KEY` flag
 /// with `_` as `-`) and label. Order = [`opt_mut`]. `hit_sound` plays
 /// `<profile dir>/custom/hitsound.wav` ([`Profile::hitsound_path`]).
-pub const OPTS: [(&str, &str); 6] = [
+pub const OPTS: [(&str, &str); 7] = [
     ("kill_sounds", "Kill sounds"),
     ("hit_sound", "Hit sound"),
     ("static_spread", "Fixed spread"),
     ("team_bars", "Team bars"),
     ("screen_blood", "Screen blood"),
     ("killcam", "Killcam"),
+    ("realistic_blood", "Realistic blood"),
 ];
 
 pub fn opt_mut(s: &mut Settings, i: usize) -> &mut bool {
@@ -106,6 +108,7 @@ pub fn opt_mut(s: &mut Settings, i: usize) -> &mut bool {
         &mut s.team_bars,
         &mut s.screen_blood,
         &mut s.killcam,
+        &mut s.realistic_blood,
     ]
     .into_iter()
     .nth(i)
@@ -137,6 +140,8 @@ pub struct Profile {
     pub opts: [bool; OPTS.len()],
     /// Mouse and keyboard settings (`mouse_*`, `bind_*` keys).
     pub controls: Controls,
+    /// Graphics settings (`gfx_*` keys).
+    pub graphics: Graphics,
     /// Where [`Profile::save`] writes; `None` = throwaway.
     path: Option<PathBuf>,
 }
@@ -163,6 +168,7 @@ impl Profile {
             opts: std::array::from_fn(|i| *opt_mut(&mut Settings::default(), i)),
             clan: None,
             controls: Controls::default(),
+            graphics: Graphics::default(),
             path: None,
         }
     }
@@ -247,6 +253,7 @@ impl Profile {
             text += &format!("clan={}\n", c.to_text());
         }
         text += &self.controls.to_text();
+        text += &self.graphics.to_text();
         text
     }
 
@@ -325,6 +332,7 @@ impl Profile {
                     p.opts[i.ok_or(format!("unknown key {k:?}"))?] = num::<u8>(k, v)? != 0;
                 }
                 k if p.controls.set(k, v)? => {}
+                k if p.graphics.set_text(k, v)? => {}
                 _ => return Err(format!("unknown key {k:?}")),
             }
         }
@@ -642,7 +650,7 @@ mod tests {
         back.path = p.path.clone();
         assert_eq!(back, p);
         let mut p = Profile::new();
-        p.opts = [false, true, true, false, false, true];
+        p.opts = [false, true, true, false, false, true, true];
         let q = Profile::parse(&p.to_text()).unwrap();
         assert!(p.to_text().contains("opt_hit_sound=1\n") && q.opts == p.opts);
         let mut s = Settings::default();

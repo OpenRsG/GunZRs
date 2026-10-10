@@ -69,7 +69,9 @@ const SPREAD_FOLLOW: f32 = 10.0;
 /// nothing in the data says whether GunZ hurts you; half keeps a rocket jump costly but not fatal.
 pub(crate) const SELF_BLAST: f32 = 0.5;
 /// Seconds after switching to a weapon before it may fire or swing (*inferred*; the data has no
-/// draw time and there is no draw clip). Read by the actor controller.
+/// draw time and there is no draw clip). Read by the actor controller. K-style techniques skip
+/// it: a reload started right after a shot (reload shot) and drawing the blade again after a
+/// switch-cancelled air slash (flash step); every gun keeps its own fire delay (swapshot).
 pub const SWITCH_DELAY: f32 = 0.3;
 /// zeffect.xml knockback is read as cm/s of horizontal velocity. *Inferred*.
 const KNOCKBACK_UNIT: f32 = 0.01;
@@ -310,9 +312,12 @@ pub(crate) enum Vfx {
         name: String,
         at: Transform,
     },
+    /// Blood from a hit at `point` travelling along `dir`; `amount` is the damage that scales
+    /// the spray (`gore.rs`; the retail sprites ignore it).
     Blood {
         point: Vec3,
         dir: Vec3,
+        amount: f32,
     },
     Spark {
         point: Vec3,
@@ -635,6 +640,7 @@ fn spawn_sprites(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
     mut seed: Local<u32>,
+    settings: Res<Settings>,
 ) {
     if *seed == 0 {
         *seed = 0x9E37_79B9;
@@ -661,7 +667,8 @@ fn spawn_sprites(
     };
     for v in vfx.read() {
         match *v {
-            Vfx::Blood { point, dir } => {
+            Vfx::Blood { .. } if settings.realistic_blood => {}
+            Vfx::Blood { point, dir, .. } => {
                 for _ in 0..6 {
                     let tex = &fx.blood
                         [(rnd(&mut seed) * fx.blood.len() as f32) as usize % fx.blood.len()];
@@ -924,7 +931,15 @@ fn resolve_fire(
             if f.item == SPY_ICE {
                 afflict.write(spy::frost(target, f.shooter));
             }
-            vfx.write(Vfx::Blood { point, dir: d });
+            // Headshots spray half as much again.
+            let head = actors
+                .get(target)
+                .is_ok_and(|(_, g, ..)| point.y - g.translation().y >= HEAD_FROM);
+            vfx.write(Vfx::Blood {
+                point,
+                dir: d,
+                amount: if head { amount * 1.5 } else { amount },
+            });
             if push > 0.0 {
                 commands.entity(target).insert(Push(flat * push));
             }

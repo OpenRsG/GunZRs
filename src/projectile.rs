@@ -410,7 +410,11 @@ fn splash(
             dir: d,
             pierce: None,
         });
-        vfx.write(Vfx::Blood { point: c, dir: d });
+        vfx.write(Vfx::Blood {
+            point: c,
+            dir: d,
+            amount,
+        });
     }
 }
 

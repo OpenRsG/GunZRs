@@ -8,7 +8,9 @@ use crate::{
     actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RUN},
     col::MapCollision,
     combat::{EYE, HIT_RADIUS, is_melee, rnd, yaw_of},
-    game::{Acting, Bot, Dead, Guarding, Intent, Loadout, Status, Team, Vitals, apart, friendly},
+    game::{
+        Acting, Bot, Dead, Guarding, Intent, Loadout, Motor, Status, Team, Vitals, apart, friendly,
+    },
     item::{Items, Weapon, WeaponKind},
     level::Level,
     nav::{Kick, Kind, Nav, PDT, Search, Step, walkable},
@@ -70,6 +72,23 @@ struct KickRun {
     t: f32,
     next: u32,
     step: usize,
+}
+
+/// A K-style gun technique in progress (see `bot_ai`): slash shot (air slash -> gun -> shot),
+/// reload shot (shot, reload tap, switch, shot) and swapshot (shot, switch, shot).
+#[derive(Clone, Copy, PartialEq)]
+enum Trick {
+    SlashShot,
+    ReloadShot,
+    Swapshot,
+}
+
+/// The technique, seconds since it began and the gun it switches to.
+#[derive(Clone, Copy)]
+struct Combo {
+    kind: Trick,
+    t: f32,
+    to: usize,
 }
 
 /// Bot state: steering timers and the route it follows.
@@ -140,6 +159,20 @@ struct BotAi {
     kick_t: f32,
     kick_hold: f32,
     no_kick: f32,
+    /// Seconds left in which the bot dashes as soon as it is airborne (jump dash).
+    jd: f32,
+    /// Seconds until the next air dash break / slash shot roll.
+    air_cd: f32,
+    ss_cd: f32,
+    /// Gun technique in progress and seconds until the next may start.
+    combo: Option<Combo>,
+    combo_cd: f32,
+    /// Seconds an uppercut (guard + click) is still held, and until the next one may start.
+    launch: f32,
+    launch_cd: f32,
+    /// Wall hang climb in progress (seconds in, the wall's outward normal) and its cooldown.
+    climb: Option<(f32, Vec3)>,
+    climb_cd: f32,
 }
 
 impl BotAi {
@@ -193,6 +226,15 @@ impl BotAi {
             kick_t: 0.0,
             kick_hold: 0.0,
             no_kick: 0.0,
+            jd: 0.0,
+            air_cd: 0.0,
+            ss_cd: 0.0,
+            combo: None,
+            combo_cd: 3.0,
+            launch: 0.0,
+            launch_cd: 2.0,
+            climb: None,
+            climb_cd: 3.0,
         }
     }
 }
@@ -543,7 +585,7 @@ fn bot_ai(
     col: Res<MapCollision>,
     nav: Option<ResMut<Nav>>,
     spawns: Option<Res<Spawns>>,
-    foes: Query<(Option<&Acting>, Has<Guarding>)>,
+    foes: Query<(Option<&Acting>, Has<Guarding>, Option<&Motor>)>,
     items: Query<(&WorldItem, &Transform)>,
     clouds: Query<(&Transform, &SmokeCloud)>,
     actors: Query<
@@ -563,6 +605,7 @@ fn bot_ai(
             Has<Dead>,
             Has<Flashed>,
             Option<&Status>,
+            &Motor,
         ),
         With<Bot>,
     >,
@@ -576,7 +619,9 @@ fn bot_ai(
     // A* is the one heavy step: one replan starts per frame and all searches share a budget of
     // node expansions (about 2 ms), so a long search spreads over several frames.
     let (mut routed, mut planned, mut budget) = (false, false, 2500usize);
-    for (me, name, g, mut intent, mut ai, loadout, vitals, team, dead, blind, status) in &mut bots {
+    for (me, name, g, mut intent, mut ai, loadout, vitals, team, dead, blind, status, motor) in
+        &mut bots
+    {
         if dead {
             (intent.attack, intent.jump, intent.reload, intent.walk) =
                 (false, false, false, Vec2::ZERO);
@@ -613,9 +658,9 @@ fn bot_ai(
                     .total_cmp(&b.1.distance_squared(pos))
             });
         let target = foe.map(|f| f.1);
-        let (foe_acting, foe_guard) = foe
+        let (foe_acting, foe_guard, foe_motor) = foe
             .and_then(|f| foes.get(f.0).ok())
-            .unwrap_or((None, false));
+            .unwrap_or((None, false, None));
         let me_acting = foes.get(me).ok().and_then(|f| f.0);
         let dist = target.map_or(f32::MAX, |t| flat(t - pos).length());
 
@@ -1159,6 +1204,8 @@ fn bot_ai(
             hop |= rnd(&mut ai.rng) < skill + 0.2;
         }
         ai.tumble_t -= dt;
+        ai.air_cd -= dt;
+        ai.jd -= dt;
         // K-style: a blade closes the last few metres with a forward dash and slashes out of it.
         let dash = melee && !flee && seen.is_some() && ai.direct && (3.0..8.0).contains(&dist);
         if (fight || dash || flee && seen.is_some())
@@ -1180,8 +1227,35 @@ fn bot_ai(
                     .raycast(pos + world * 2.5 + Vec3::Y * 0.5, Vec3::NEG_Y, 2.5)
                     .is_some();
             if clear && rnd(&mut ai.rng) < 0.3 + 0.6 * skill {
-                debug!("bot {name}: tumble {dir}");
-                ai.tap = Some((dir, 0.0));
+                if dash && motor.grounded && rnd(&mut ai.rng) < skill - 0.2 {
+                    // skilled blades jump first and dash in the air (jump dash)
+                    debug!("bot {name}: jump dash");
+                    (hop, ai.jd) = (true, 0.6);
+                } else {
+                    debug!("bot {name}: tumble {dir}");
+                    ai.tap = Some((dir, 0.0));
+                }
+            }
+        }
+        if ai.jd > 0.0 && !motor.grounded && ai.tap.is_none() {
+            debug!("bot {name}: air dash");
+            (ai.jd, ai.tap) = (0.0, Some((Vec2::Y, 0.0)));
+        }
+        // Dash break / half step: out of an air slash, a skilled blade dashes sideways again
+        // (the actor gives the air dash back when a slash cancels one).
+        if melee
+            && !scripted
+            && ai.tap.is_none()
+            && ai.air_cd <= 0.0
+            && !motor.grounded
+            && let Some(a) = me_acting
+            && matches!(a.clip, "attack_Jump" | "jump_slash1")
+            && a.time >= a.cancel_from
+        {
+            ai.air_cd = 1.5;
+            if rnd(&mut ai.rng) < 0.6 * skill {
+                debug!("bot {name}: dash break after {}", a.clip);
+                ai.tap = Some((Vec2::new(ai.strafe, 0.0), 0.0));
             }
         }
         let mut slash = false;
@@ -1208,6 +1282,56 @@ fn bot_ai(
         ai.hold -= dt;
         if !scripted && (ai.throw.is_some() || ai.hold > 0.0 || ai.lay.is_some()) {
             (walk, hop, ai.tap) = (Vec2::ZERO, false, None);
+        }
+        // Wall hang climb (K-style): an enemy stands on a ledge above a bot with a blade: jump
+        // at the wall, hold the guard against it in the air and forward + jump to scale it.
+        ai.climb_cd -= dt;
+        let mut hang = false;
+        if let Some((t, n)) = ai.climb {
+            let top = target.is_none_or(|e| pos.y >= e.y + 0.1);
+            if top || t > 4.0 || !melee || scripted || blind {
+                debug!(
+                    "bot {name}: hang climb {} after {t:.1} s at y {:.1}",
+                    if top { "done" } else { "gave up" },
+                    pos.y
+                );
+                (ai.climb, ai.climb_cd) = (None, 8.0);
+            } else {
+                ai.climb = Some((t + dt, n));
+                ai.yaw = yaw_of(-n);
+                walk = Vec2::Y;
+                hop = !motor.grounded || t < 0.1 || (t * 10.0) as u32 % 2 == 0;
+                (guard, hang, ai.tap) = (false, !motor.grounded, None);
+            }
+        } else if melee
+            && skill >= 0.3
+            && ai.climb_cd <= 0.0
+            && motor.grounded
+            && !scripted
+            && !flee
+            && !ai.direct
+            && ai.throw.is_none()
+            && ai.lay.is_none()
+            && !blind
+            && let Some(e) = seen
+            && (2.0..7.0).contains(&(e.y - pos.y))
+            && dist < 7.0
+        {
+            let d = flat(e - pos).normalize_or_zero();
+            ai.climb_cd = 2.0;
+            if let Some(h) = col.raycast(pos + Vec3::Y * 0.9, d, 1.4)
+                && h.normal.y.abs() < 0.3
+                && h.normal.dot(-d) > 0.5
+            {
+                debug!(
+                    "bot {name}: hang climb towards the enemy {:.1} m above",
+                    e.y - pos.y
+                );
+                ai.climb = Some((
+                    0.0,
+                    Vec3::new(h.normal.x, 0.0, h.normal.z).normalize_or_zero(),
+                ));
+            }
         }
         // Never walk off a ledge (strafing and backing up included) unless the route says so.
         let wish = Vec3::new(walk.x * c - walk.y * s, 0.0, -walk.x * s - walk.y * c);
@@ -1267,7 +1391,16 @@ fn bot_ai(
             && dist <= reach + 1.0
             && ai.bf_cd <= 0.0
             && let Some(a) = me_acting
-            && matches!(a.clip, "attack1" | "attack2" | "attack3" | "attack4")
+            && matches!(
+                a.clip,
+                "attack1"
+                    | "attack2"
+                    | "attack3"
+                    | "attack4"
+                    | "uppercut"
+                    | "attack_Jump"
+                    | "jump_slash1"
+            )
             && a.time >= a.cancel_from
         {
             ai.bf_cd = 0.6;
@@ -1277,7 +1410,7 @@ fn bot_ai(
             }
         }
         let butterfly = ai.bf.is_some();
-        intent.guard = butterfly || melee && ai.guard_t > 0.0;
+        intent.guard = butterfly || melee && ai.guard_t > 0.0 || hang;
         let engaged = seen.is_some() && dist <= reach && ai.react <= 0.0;
         ai.burst_t -= dt;
         if ai.burst_t <= 0.0 {
@@ -1309,6 +1442,31 @@ fn bot_ai(
         if press.is_some() {
             intent.attack = true;
         }
+        // Launch and juggle: a blade holds guard + click for an uppercut; an enemy already in the
+        // air (launched, falling) is launched again so that it stays up. Skilled bots only.
+        ai.launch -= dt;
+        ai.launch_cd -= dt;
+        let foe_air = foe_motor.is_some_and(|m| m.blast && !m.grounded);
+        if melee && !blind && seen.is_some() && ai.react <= 0.0 && ai.launch <= 0.0 {
+            if foe_air && dist <= reach + 0.3 && rnd(&mut ai.rng) < 0.2 + 0.7 * skill {
+                debug!("bot {name}: juggle (uppercut on an airborne enemy)");
+                ai.launch = 0.35;
+            } else if !foe_air
+                && !foe_guard
+                && dist <= reach
+                && ai.launch_cd <= 0.0
+                && motor.grounded
+            {
+                ai.launch_cd = (3.0 + 3.0 * rnd(&mut ai.rng)) * (1.5 - skill);
+                if rnd(&mut ai.rng) < 0.1 + 0.5 * skill {
+                    debug!("bot {name}: launch (guard + click)");
+                    ai.launch = 0.35;
+                }
+            }
+        }
+        if ai.launch > 0.0 && melee && !blind {
+            (intent.guard, intent.attack) = (true, true);
+        }
         // Lay the mine once it is in hand and loaded.
         if let (Some(t), Some(s)) = (ai.lay, mine_slot)
             && loadout.current == s
@@ -1323,6 +1481,105 @@ fn bot_ai(
             .slots
             .get(loadout.current)
             .is_some_and(|s| !melee && s.magazine == 0);
+        // K-style gun techniques, rolled at most every few seconds and scaled with skill: a slash
+        // shot after an air slash, a reload shot or a swapshot with two guns.
+        let gun = |i: usize| {
+            loadout.slots.get(i).is_some_and(|s| {
+                s.magazine > 0
+                    && data
+                        .items
+                        .get(s.item)
+                        .and_then(|i| i.weapon.as_ref())
+                        .is_some_and(|w| !is_melee(w.kind) && gun_range(w.kind).is_some())
+            })
+        };
+        ai.combo_cd -= dt;
+        ai.ss_cd -= dt;
+        let chance = 0.1 + 0.6 * skill;
+        if ai.combo.is_none() && !scripted && !blind && ai.throw.is_none() && ai.lay.is_none() {
+            // an air slash, or a launch that has hit (insta-kill: switch to the gun, shoot the
+            // enemy in the air), can be switch-cancelled
+            let air_slash = melee
+                && me_acting.is_some_and(|a| {
+                    a.time >= a.cancel_from
+                        && (!motor.grounded && matches!(a.clip, "attack_Jump" | "jump_slash1")
+                            || foe_air && a.clip == "uppercut")
+                });
+            let cur = loadout.current;
+            if air_slash
+                && seen.is_some()
+                && dist <= reach + 3.0
+                && ai.ss_cd <= 0.0
+                && let Some(to) = (0..loadout.slots.len()).find(|&i| gun(i))
+            {
+                ai.ss_cd = 1.0;
+                if rnd(&mut ai.rng) < chance {
+                    debug!(
+                        "bot {name}: {} (switch to slot {to})",
+                        if me_acting.is_some_and(|a| a.clip == "uppercut") {
+                            "insta-kill"
+                        } else {
+                            "slash shot"
+                        }
+                    );
+                    ai.combo = Some(Combo {
+                        kind: Trick::SlashShot,
+                        t: 0.0,
+                        to,
+                    });
+                }
+            } else if !melee
+                && seen.is_some()
+                && ai.react <= 0.0
+                && ai.combo_cd <= 0.0
+                && gun(cur)
+                && (3.0..30.0).contains(&dist)
+                && let Some(to) = (0..loadout.slots.len()).find(|&i| i != cur && gun(i))
+            {
+                ai.combo_cd = 3.0 + 3.0 * rnd(&mut ai.rng);
+                if rnd(&mut ai.rng) < chance {
+                    let kind = if skill > 0.5
+                        && loadout.slots[cur].reserve > 0
+                        && rnd(&mut ai.rng) < 0.5
+                    {
+                        Trick::ReloadShot
+                    } else {
+                        Trick::Swapshot
+                    };
+                    debug!(
+                        "bot {name}: {} (slot {cur} -> {to})",
+                        match kind {
+                            Trick::ReloadShot => "reload shot",
+                            _ => "swapshot",
+                        }
+                    );
+                    ai.combo = Some(Combo { kind, t: 0.0, to });
+                }
+            }
+        }
+        if let Some(mut c) = ai.combo {
+            c.t += dt;
+            if target.is_none() || blind || scripted || c.t > 1.6 {
+                ai.combo = None;
+            } else {
+                ai.switch_t = ai.switch_t.max(1.0);
+                // click pulses: a click per shot, whenever the gun is ready again
+                let pulse = (c.t * 12.0) as u32 % 2 == 0;
+                let switch_at = match c.kind {
+                    Trick::SlashShot => 0.0,
+                    Trick::ReloadShot => 0.25,
+                    Trick::Swapshot => 0.15,
+                };
+                intent.slot = (c.t >= switch_at && loadout.current != c.to).then_some(c.to);
+                intent.attack = if c.t < switch_at - 0.05 {
+                    c.t < 0.1
+                } else {
+                    c.t >= switch_at + 0.05 && pulse
+                };
+                intent.reload = c.kind == Trick::ReloadShot && (0.1..0.2).contains(&c.t);
+                ai.combo = Some(c);
+            }
+        }
         if scripted {
             (intent.attack, intent.guard, intent.reload) = (false, false, false);
         }

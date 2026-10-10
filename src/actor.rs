@@ -88,6 +88,26 @@ const BLAST_STEER: f32 = 0.5;
 /// An emote or taunt can be cancelled by a jump, dash or step after this many seconds.
 /// **Inferred.**
 const TAUNT_CANCEL: f32 = 0.5;
+/// K-style techniques (bug-born movement tech of the original game, kept as features; the
+/// numbers below are **inferred**, no data file or replay holds them).
+/// Seconds an air slash holds the actor's altitude (gravity cancel), once per jump, and the
+/// highest rising speed (m/s) at which it still does (near the top of a jump or falling).
+const GRAV_HOLD: f32 = 0.25;
+const GRAV_CANCEL_VY: f32 = 4.0;
+/// Seconds of falling after which an air dash is always available again (super dash).
+const SUPER_FALL: f32 = 1.5;
+/// Seconds after a slash cancelled a wall state during which a jump kicks off the wall again.
+const FLY_WINDOW: f32 = 0.5;
+/// Climb speed (m/s) of a wall hang with forward + jump held.
+const HANG_CLIMB: f32 = 4.0;
+/// Gravity felt during a dash in the air.
+const AIR_TUMBLE_GRAVITY: f32 = 0.25;
+/// A reload started within this many seconds of a shot is a reload shot.
+const RS_WINDOW: f32 = 0.5;
+/// A shot this soon after a switch cancel is the technique's shot (slash shot, reload shot).
+const TECH_SHOT: f32 = 1.5;
+/// A shot from another gun within this many seconds of the last one is a swapshot.
+const SWAP_WINDOW: f32 = 0.6;
 /// Emotes: clip name (**observed**, `man01.xml`/`woman01.xml`: every motion type has `bow wave
 /// cry laugh dance`; `taunt` is its own action) and its [`Action`] (rebindable). Looping clips
 /// play one cycle.
@@ -332,6 +352,8 @@ enum State {
     Wall {
         anim: &'static str,
         left: f32,
+        /// Outward normal of the wall kicked off.
+        n: Vec3,
     },
     /// Running along the wall behind normal `n` (`side` -1 wall on the left, +1 right) or up
     /// it (`side` 0, facing it). While `left > 0` the running clip plays, then its `_down` one.
@@ -339,6 +361,10 @@ enum State {
         n: Vec3,
         side: f32,
         left: f32,
+    },
+    /// Clinging to the wall behind normal `n` (melee weapon, guard held in the air).
+    Hang {
+        n: Vec3,
     },
     /// A clip played as a full-body action (an [`ActionRequest`] or a taunt): `t` of `total`
     /// seconds elapsed (`total` is infinite for a looping clip).
@@ -362,6 +388,50 @@ enum State {
         dagger: bool,
     },
     Dead,
+}
+
+/// K-style technique bookkeeping (times are `f32::MIN` = never).
+struct Tech {
+    /// The air dash of this jump is spent.
+    dashed: bool,
+    /// Seconds of gravity cancel left, and whether this jump used it.
+    hold: f32,
+    hold_spent: bool,
+    /// Seconds of continuous falling.
+    fall: f32,
+    /// Kicked off a wall since touching the ground (a further wall run is a multi wall run).
+    kicked: bool,
+    /// The running reload began right after a shot.
+    rs: bool,
+    /// Last shot's time and slot (`usize::MAX` = none).
+    shot_at: f32,
+    last_shot: usize,
+    /// When an air slash / a post-shot reload was cancelled by a weapon switch.
+    ss_at: f32,
+    rs_at: f32,
+    /// When a launch (uppercut) recovery was cancelled by a weapon switch (insta-kill).
+    ik_at: f32,
+    /// The next tumble clip starts without its dash sound (a dash right after a slash).
+    silent: bool,
+}
+
+impl Default for Tech {
+    fn default() -> Self {
+        Self {
+            dashed: false,
+            hold: 0.0,
+            hold_spent: false,
+            fall: 0.0,
+            kicked: false,
+            rs: false,
+            shot_at: f32::MIN,
+            last_shot: usize::MAX,
+            ss_at: f32::MIN,
+            rs_at: f32::MIN,
+            ik_at: f32::MIN,
+            silent: false,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -420,6 +490,7 @@ pub struct Actor {
     hurt: bool,
     /// Seconds spent in the air (landing sound).
     air: f32,
+    tech: Tech,
 }
 
 /// What to spawn: `pos` is the feet position in Bevy metres.
@@ -590,6 +661,7 @@ impl ActorSpawner<'_, '_> {
                     wall_spent: false,
                     hurt: false,
                     air: 0.0,
+                    tech: Tech::default(),
                 },
                 Motor {
                     woman: spec.woman,
@@ -644,6 +716,11 @@ fn is_melee(kind: WeaponKind) -> bool {
         kind,
         WeaponKind::Katana | WeaponKind::Dagger | WeaponKind::DoubleKatana | WeaponKind::SpyCase
     )
+}
+
+/// Whether `clip` is a sword blow that can be thrown in the air (`attack_Jump`, `jump_slash*`).
+fn blow_clip(clip: &str) -> bool {
+    clip.starts_with("attack") || clip.starts_with("jump_slash")
 }
 
 /// Whether zitem `id` is a melee weapon (`false` for anything else, e.g. an explosion's item).
@@ -823,12 +900,15 @@ struct Held {
     emote: Option<&'static str>,
     /// Scripts hold the scoreboard through the [`Pad`].
     tab: bool,
+    /// Scripts press the Dash action (a double tap of the held direction) on a fresh press.
+    dash: bool,
 }
 
 /// Scripted player input for headless runs (`gunz-play --script`): `;`-separated steps
 /// `KEYS:SECONDS` run one after another, or `yaw=DEG` / `pitch=DEG` (instant). `KEYS` is
-/// `+`-joined from `w a s d jump attack guard reload taunt bow wave cry laugh dance tab 1..9
-/// wait` (the emote keys are F5-F9 on the keyboard).
+/// `+`-joined from `w a s d jump attack guard reload taunt bow wave cry laugh dance tab dash
+/// 1..9 wait` (the emote keys are F5-F9 on the keyboard; `dash` is the Dash action, a double tap
+/// of the held direction).
 #[derive(Resource)]
 pub struct Script {
     steps: Vec<Step>,
@@ -882,6 +962,7 @@ impl Script {
                         "taunt" => step.held.taunt = true,
                         "reload" => step.held.reload = true,
                         "tab" => step.held.tab = true,
+                        "dash" => step.held.dash = true,
                         "wait" => {}
                         n => match (n.parse::<usize>(), EMOTES.iter().find(|e| e.0 == n)) {
                             (Ok(n @ 1..=9), _) => step.held.slot = Some(n - 1),
@@ -949,7 +1030,7 @@ fn player_input(
     touch: Option<Res<TouchScreen>>,
     frozen: Option<Res<Frozen>>,
     script: Option<ResMut<Script>>,
-    mut dash: Local<(u8, usize)>,
+    mut dash: Local<(u8, usize, bool)>,
     mut notice: MessageWriter<crate::hud::Notice>,
     player: Single<(&mut Intent, &Loadout), With<Player>>,
 ) {
@@ -1006,6 +1087,7 @@ fn player_input(
                 taunt: r.pressed(Action::Taunt),
                 emote: EMOTES.iter().find(|e| r.pressed(e.1)).map(|e| e.0),
                 tab: false,
+                dash: false,
             }
         }
     };
@@ -1019,9 +1101,12 @@ fn player_input(
         )));
     }
     // off, on, off, on: two fresh presses of one direction
+    dashed |= held.dash && !dash.2;
+    dash.2 = held.dash;
     if dashed && dash.0 == 0 {
         let dirs = [held.fwd, held.back, held.left, held.right];
-        *dash = (4, dirs.iter().position(|&d| d).unwrap_or(0));
+        dash.0 = 4;
+        dash.1 = dirs.iter().position(|&d| d).unwrap_or(0);
     }
     if dash.0 > 0 {
         let on = dash.0 % 2 == 1;
@@ -1232,6 +1317,7 @@ fn begin_reload(
     sound: &mut MessageWriter<ActorSound>,
 ) {
     a.state = State::Reload { left: g.reload };
+    a.tech.rs = now - a.tech.shot_at < RS_WINDOW;
     info!(
         "t={now:.2} reload: {name} item {} {:.1} s (mag {}+{})",
         s.item, g.reload, s.magazine, s.reserve
@@ -1360,6 +1446,7 @@ fn drive(
         Option<&Status>,
         Option<&Mods>,
         Has<Remote>,
+        Option<&Name>,
     )>,
     mut dead: Query<&mut Dead>,
     pushes: Query<&Push>,
@@ -1402,9 +1489,11 @@ fn drive(
         status,
         mods,
         remote,
+        name,
     ) in &mut actors
     {
         let a = &mut *a;
+        let who = name.map_or("?", |n| n.as_str());
         let woman = a.woman;
         if a.ready.len() < load.slots.len() {
             a.ready.resize(load.slots.len(), 0.0);
@@ -1444,19 +1533,40 @@ fn drive(
         }
         let alive = !matches!(a.state, State::Dead);
 
-        // Weapon switching and visibility.
+        // Weapon switching and visibility. An air slash can be switch-cancelled (K-style).
+        let air_slash =
+            !a.grounded && matches!(a.state, State::Action { clip, .. } if blow_clip(clip));
+        // insta-kill: a launch's recovery (after its hit frame) can be switch-cancelled too
+        let launch_done = matches!(
+            a.state,
+            State::Action { clip: "uppercut", t, cancel_from, .. } if t >= cancel_from
+        );
         if alive
             && let Some(s) = intent.slot
             && s < load.slots.len()
-            && matches!(a.state, State::Free | State::Reload { .. })
+            && (air_slash || launch_done || matches!(a.state, State::Free | State::Reload { .. }))
         {
             load.current = s;
         }
         if a.shown != load.current {
             let (from, to) = (a.shown, load.current);
             let cancelled = matches!(a.state, State::Reload { .. });
-            if cancelled {
+            // reload shot: a reload begun right after a shot also cancels the draw delay
+            let quick = cancelled && a.tech.rs;
+            let air_cancel = (air_slash || launch_done) && intent.slot.is_some();
+            if cancelled || air_cancel {
                 a.state = State::Free;
+            }
+            if quick {
+                a.tech.rs_at = now;
+                debug!("t={now:.2} tech: reload cancel {who} (no draw delay)");
+            }
+            if air_cancel && launch_done {
+                a.tech.ik_at = now;
+                debug!("t={now:.2} tech: insta-kill {who} (switch cancels the launch recovery)");
+            } else if air_cancel {
+                a.tech.ss_at = now;
+                debug!("t={now:.2} tech: switch cancel {who} (air slash)");
             }
             let to_gear = gear(&data.items, load.slots[to].item);
             info!(
@@ -1488,7 +1598,7 @@ fn drive(
             a.restart = true;
             a.draw = true;
             a.shot = false;
-            a.ready[to] = a.ready[to].max(now + SWITCH_DELAY);
+            a.ready[to] = a.ready[to].max(now + if quick { 0.0 } else { SWITCH_DELAY });
         }
         let slot = load.current;
         let item = load.slots[slot].item;
@@ -1526,6 +1636,28 @@ fn drive(
             && let Some(c) = data.clip(woman, g.motion, r.clip)
         {
             let speed = r.speed.max(0.05);
+            if blow_clip(r.clip) {
+                match a.state {
+                    State::Tumble { .. } => {
+                        a.tech.dashed = false;
+                        debug!(
+                            "t={now:.2} tech: dash cancel {who} (slash out of a dash, dash again)"
+                        );
+                    }
+                    State::Wall { n, .. } | State::WallRun { n, .. } | State::Hang { n } => {
+                        // stay at the wall: a jump kicks off it again (flying / wall climbing)
+                        a.wall = Some((n, now + FLY_WINDOW - WALL_GRACE));
+                        a.vel.x = -n.x * 0.5;
+                        a.vel.z = -n.z * 0.5;
+                        debug!("t={now:.2} tech: wall slash cancel {who}");
+                    }
+                    _ => {}
+                }
+                if !a.grounded && !a.tech.hold_spent && a.vel.y <= GRAV_CANCEL_VY {
+                    (a.tech.hold, a.tech.hold_spent, a.vel.y) = (GRAV_HOLD, true, 0.0);
+                    debug!("t={now:.2} tech: gravity cancel {who} (air slash holds altitude)");
+                }
+            }
             a.state = State::Action {
                 clip: r.clip,
                 t: 0.0,
@@ -1589,6 +1721,12 @@ fn drive(
                 *left -= dt;
                 let lost = now - a.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
                 if a.grounded || lost || (*left > 0.0 && walk.y < 0.2) {
+                    a.state = State::Free;
+                }
+            }
+            State::Hang { .. } => {
+                let lost = now - a.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
+                if a.grounded || lost || !intent.guard {
                     a.state = State::Free;
                 }
             }
@@ -1667,8 +1805,11 @@ fn drive(
         let pressed = [walk.y > 0.5, walk.y < -0.5, walk.x < -0.5, walk.x > 0.5];
         for d in 0..4 {
             if pressed[d] && !a.held[d] {
+                // one air dash per jump (a slash out of a dash gives it back); super dash: always
+                // after falling for a while
+                let air_ok = a.grounded || !a.tech.dashed || a.tech.fall >= SUPER_FALL;
                 if now - a.taps[d] < DOUBLE_TAP
-                    && a.grounded
+                    && air_ok
                     && (cancelable || matches!(a.state, State::Reload { .. }))
                 {
                     let (dir, anim) = [
@@ -1678,6 +1819,21 @@ fn drive(
                         (right, "tumbleR"),
                     ][d];
                     let secs = data.clip(woman, g.motion, anim).map_or(0.6, |c| c.secs);
+                    if !a.grounded {
+                        debug!(
+                            "t={now:.2} tech: {} {who} {anim}",
+                            if a.tech.dashed {
+                                "super dash"
+                            } else {
+                                "air dash"
+                            }
+                        );
+                        a.tech.dashed = true;
+                        a.vel.y = a.vel.y.max(0.0);
+                    }
+                    // light step: a dash right after a slash makes no dash sound
+                    a.tech.silent =
+                        matches!(a.state, State::Action { clip, .. } if blow_clip(clip));
                     a.state = State::Tumble {
                         dir,
                         anim,
@@ -1691,15 +1847,18 @@ fn drive(
             a.held[d] = pressed[d];
         }
 
-        // Jump and wall kick.
+        // Jump and wall kick. A jump cancels a ground dash (K-style: its cooldown).
         if alive
             && jump_edge
-            && (cancelable || matches!(a.state, State::Reload { .. }))
+            && (cancelable || matches!(a.state, State::Reload { .. } | State::Tumble { .. }))
             && a.grounded
         {
             a.vel.y = JUMP;
             a.grounded = false;
-            if matches!(a.state, State::Action { .. }) {
+            if matches!(a.state, State::Tumble { .. }) {
+                debug!("t={now:.2} tech: jump cancel {who} (dash cooldown cancelled)");
+            }
+            if matches!(a.state, State::Action { .. } | State::Tumble { .. }) {
                 a.state = State::Free;
             }
         } else if alive
@@ -1721,19 +1880,61 @@ fn drive(
                 "jumpwallR"
             };
             let secs = data.clip(woman, g.motion, anim).map_or(0.6, |c| c.secs);
-            a.state = State::Wall { anim, left: secs };
+            if matches!(a.state, State::Action { .. }) {
+                debug!(
+                    "t={now:.2} tech: wall flying {who} (jump off the wall after a slash cancel)"
+                );
+            } else if now - a.tech.ss_at < TECH_SHOT {
+                debug!("t={now:.2} tech: flash climb {who} (wall jump after a switch cancel)");
+            }
+            a.state = State::Wall {
+                anim,
+                left: secs,
+                n,
+            };
             a.restart = true;
             a.vel = n * WALL_OUT + Vec3::Y * WALL_UP;
             a.wall = None;
+            // every kick is a fresh jump: another wall run, air dash and gravity cancel
+            a.wall_spent = false;
+            (a.tech.kicked, a.tech.dashed, a.tech.hold_spent) = (true, false, false);
             sound.write(ActorSound {
                 actor: e,
                 cue: Cue::Anim("hangonwall".into()),
             });
         }
 
+        // Wall hang: a melee weapon, guard held in the air against a wall (also ends a wall run
+        // or the flight of a kick). Forward + jump held while hanging climbs.
+        if alive
+            && g.melee
+            && g.wall
+            && intent.guard
+            && !a.grounded
+            && (cancelable
+                || matches!(
+                    a.state,
+                    State::Wall { .. } | State::WallRun { .. } | State::Tumble { .. }
+                ))
+            && let Some((n, t)) = a.wall
+            && now - t < 0.1
+            && col
+                .raycast(
+                    tf.translation + Vec3::Y * 0.05,
+                    Vec3::NEG_Y,
+                    WALL_MIN_HEIGHT,
+                )
+                .is_none()
+        {
+            a.state = State::Hang { n };
+            a.vel = Vec3::ZERO;
+            a.restart = true;
+            debug!("t={now:.2} tech: wall hang {who}");
+        }
+
         // Wall run: in the air, forward held, touching a wall (once per jump).
         if alive
-            && matches!(a.state, State::Free)
+            && (cancelable || matches!(a.state, State::Tumble { .. }))
             && !a.grounded
             && !a.wall_spent
             && g.wall
@@ -1766,6 +1967,9 @@ fn drive(
                     WALL_RUN_SIDE
                 },
             };
+            if a.tech.kicked {
+                debug!("t={now:.2} tech: multi wall run {who}");
+            }
             a.wall_spent = true;
             a.restart = true;
             a.vel.y = if side == 0.0 {
@@ -1780,18 +1984,29 @@ fn drive(
         }
 
         // Taunt and emotes: the weapon's clip of that name, standing.
+        let sliding = matches!(
+            a.state,
+            State::Action { clip, moving: ActionMove::Control(_), .. } if clip.starts_with("guard")
+        );
         if let Some(clip) = emote_edge
             && a.grounded
-            && matches!(a.state, State::Free)
+            && (sliding || matches!(a.state, State::Free))
             && let Some(c) = data.clip(woman, g.motion, clip)
         {
+            if sliding {
+                debug!("t={now:.2} tech: slide emote {who} ({clip})");
+            }
             a.state = State::Action {
                 clip,
                 t: 0.0,
                 total: c.secs,
                 speed: 1.0,
-                moving: ActionMove::Locked,
-                cancel_from: TAUNT_CANCEL,
+                moving: if sliding {
+                    ActionMove::Control(1.0)
+                } else {
+                    ActionMove::Locked
+                },
+                cancel_from: if sliding { f32::INFINITY } else { TAUNT_CANCEL },
             };
             a.restart = true;
         }
@@ -1817,6 +2032,26 @@ fn drive(
                     s.magazine -= 1;
                     a.ready[slot] = now + g.delay * mods.map_or(1.0, |m| m.shot_delay);
                     a.shot = true;
+                    {
+                        let t = &mut a.tech;
+                        if now - t.rs_at < TECH_SHOT {
+                            t.rs_at = f32::MIN;
+                            debug!("t={now:.2} tech: reload shot {who}");
+                        } else if now - t.ss_at < TECH_SHOT {
+                            t.ss_at = f32::MIN;
+                            debug!("t={now:.2} tech: slash shot {who}");
+                        } else if now - t.ik_at < TECH_SHOT {
+                            t.ik_at = f32::MIN;
+                            debug!("t={now:.2} tech: insta-kill shot {who}");
+                        } else if t.last_shot != slot && now - t.shot_at < SWAP_WINDOW {
+                            debug!(
+                                "t={now:.2} tech: swapshot {who} (slot {slot} fired {:.2} s after slot {})",
+                                now - t.shot_at,
+                                t.last_shot
+                            );
+                        }
+                        (t.last_shot, t.shot_at) = (slot, now);
+                    }
                     fire.write(Fire {
                         shooter: e,
                         item,
@@ -1880,6 +2115,7 @@ fn drive(
                     along * speed
                 } - n * 1.5;
             }
+            State::Hang { n } => hv = -n,
             State::Dead => hv = approach(hv, Vec3::ZERO, 20.0 * dt),
             State::Blast {
                 stage: Blasted::Fall,
@@ -1919,6 +2155,7 @@ fn drive(
             }
             commands.entity(e).remove::<Push>();
         }
+        a.tech.hold = (a.tech.hold - dt).max(0.0);
         let (gravity, fall) = match a.state {
             State::WallRun { side, left, .. } if left > 0.0 && side == 0.0 => {
                 a.vel.y = climb(WALL_RUN_UP - left);
@@ -1926,6 +2163,16 @@ fn drive(
             }
             State::WallRun { side, left, .. } if left > 0.0 && side != 0.0 => (RUN_GRAVITY, FALL),
             State::WallRun { .. } => (SLIDE_GRAVITY, FALL),
+            State::Hang { .. } => {
+                a.vel.y = if walk.y > 0.5 && intent.jump {
+                    HANG_CLIMB
+                } else {
+                    0.0
+                };
+                (0.0, FALL)
+            }
+            State::Tumble { .. } if !a.grounded => (AIR_TUMBLE_GRAVITY, FALL),
+            _ if a.tech.hold > 0.0 => (0.0, FALL),
             _ => (1.0, FALL),
         };
         a.vel.y = (a.vel.y - GRAVITY * gravity * dt).max(-fall);
@@ -1975,8 +2222,11 @@ fn drive(
             }
             a.air = 0.0;
             a.wall_spent = false;
+            (a.tech.dashed, a.tech.hold_spent, a.tech.kicked, a.tech.fall) =
+                (false, false, false, 0.0);
         } else {
             a.air += dt;
+            a.tech.fall = if a.vel.y < 0.0 { a.tech.fall + dt } else { 0.0 };
         }
         a.grounded = mv.grounded;
 
@@ -1995,6 +2245,7 @@ fn drive(
                 };
                 (yaw_of(face) - intent.yaw + PI).rem_euclid(2.0 * PI) - PI
             }
+            State::Hang { n } => (yaw_of(-n) - intent.yaw + PI).rem_euclid(2.0 * PI) - PI,
             State::Free | State::Reload { .. }
                 if a.grounded && walk.length() > 0.1 && walk.y >= 0.0 =>
             {
@@ -2032,6 +2283,8 @@ fn drive(
                 _ if fwd.dot(n) > 0.3 => "runW_downB",
                 _ => "runW_downF",
             },
+            State::Hang { .. } if walk.y > 0.5 && intent.jump => "runW",
+            State::Hang { .. } => "runW_downF",
             _ if !a.grounded => {
                 if a.vel.y > 0.0 {
                     "jumpU"
@@ -2069,7 +2322,14 @@ fn drive(
                 a.step = -1;
                 match data.clip(woman, want.0, want.1) {
                     Some(c) => {
-                        if !c.sound.is_empty() && name != "jumpD" {
+                        let light =
+                            name.starts_with("tumble") && std::mem::take(&mut a.tech.silent);
+                        if light {
+                            debug!(
+                                "t={now:.2} tech: light step {who} (dash after a slash, no dash sound)"
+                            );
+                        }
+                        if !c.sound.is_empty() && name != "jumpD" && !light {
                             sound.write(ActorSound {
                                 actor: e,
                                 cue: Cue::Anim(c.sound.clone()),
@@ -2152,7 +2412,10 @@ fn drive(
             State::Tumble { left, total, .. } => Some(total - left),
             _ => None,
         };
-        motor.wall = matches!(a.state, State::Wall { .. } | State::WallRun { .. });
+        motor.wall = matches!(
+            a.state,
+            State::Wall { .. } | State::WallRun { .. } | State::Hang { .. }
+        );
         motor.blast = matches!(a.state, State::Blast { .. });
         motor.woman = woman;
         match a.state {

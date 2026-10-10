@@ -8,7 +8,7 @@
 use crate::{
     game::{Player, Reward, Team},
     level::Level,
-    menu::{Art, Mode, Page, State, button, heading, panel},
+    menu::{Mode, Page, State, button, heading, panel},
     mrs::Vfs,
     profile::{MatchGain, Profile},
     session::{Clock, Rules},
@@ -548,7 +548,7 @@ struct Preview;
 /// The `Start` of a clan war with no clan sends the player here (`messages.xml` 1112).
 const NO_CLAN: &str = "You are not a member of any clan.";
 
-pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, clan: &ClanArt) {
+pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
     let row = || Node {
         align_items: AlignItems::Center,
         column_gap: px(6),
@@ -593,9 +593,9 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, clan: &ClanArt) {
                     ] {
                         c.spawn(row()).with_children(|r| {
                             r.spawn(cap(name, 110.0));
-                            r.spawn(button(art, 30.0, 28.0, "<", 16.0, step(-1)));
+                            r.spawn(button(30.0, 28.0, "<", 16.0, step(-1)));
                             r.spawn(value(t));
-                            r.spawn(button(art, 30.0, 28.0, ">", 16.0, step(1)));
+                            r.spawn(button(30.0, 28.0, ">", 16.0, step(1)));
                         });
                     }
                 });
@@ -640,7 +640,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, clan: &ClanArt) {
                         ..default()
                     },
                 ));
-                c.spawn(button(art, 160.0, 40.0, "CREATE", 20.0, Act::Create));
+                c.spawn(button(160.0, 40.0, "CREATE", 20.0, Act::Create));
             });
             m.spawn((Show(true), row())).with_children(|r| {
                 for (label, act) in [
@@ -649,7 +649,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, art: &Art, clan: &ClanArt) {
                     ("KICK", Act::Kick),
                     ("LEAVE", Act::Leave),
                 ] {
-                    r.spawn(button(art, 98.0, 36.0, label, 16.0, act));
+                    r.spawn(button(98.0, 36.0, label, 16.0, act));
                 }
             });
             m.spawn((

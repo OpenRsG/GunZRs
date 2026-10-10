@@ -160,8 +160,20 @@ fn take_shot(
     }
 }
 
+/// Size of a headless `--shot` image: 1280x720, or `GUNZ_SHOT_SIZE=WxH` (to check small windows).
+pub fn shot_size() -> (u32, u32) {
+    std::env::var("GUNZ_SHOT_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .filter(|&(w, h)| w > 0 && h > 0)
+        .unwrap_or((1280, 720))
+}
+
 /// Spawns the viewer camera (GunZ's horizontal FOV 90 at 16:9). In `--shot` runs it renders
-/// into a 1280x720 sRGB image instead of the (absent) window.
+/// into a [`shot_size`] sRGB image instead of the (absent) window.
 pub fn spawn_camera<'a>(
     commands: &'a mut Commands,
     images: &mut Assets<Image>,
@@ -183,7 +195,8 @@ pub fn spawn_camera<'a>(
     // indirect-draw setup (render thread 1.03 -> 0.95 ms on Castle with 8 bots).
     camera.insert(NoIndirectDrawing);
     if shot {
-        let target = Image::new_target_texture(1280, 720, TextureFormat::Rgba8UnormSrgb, None);
+        let (w, h) = shot_size();
+        let target = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
         camera.insert(RenderTarget::Image(images.add(target).into()));
     }
     camera

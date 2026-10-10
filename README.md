@@ -46,7 +46,7 @@ builds Linux, Windows and macOS, but nobody has played it on Windows or macOS ye
 
 ## Controls
 
-Defaults follow the original game's `config.xml`; C, T and F5-F9 are this port's extras.
+Defaults follow the original game's `config.xml`; C, T, F5-F9, `[` and `]` are this port's extras.
 
 | Key | Action |
 |---|---|
@@ -73,11 +73,47 @@ with its limit and a live speed curve, and, in the browser, raw input (unacceler
 in Chromium browsers; the desktop build always reads raw mouse motion). Everything is saved in
 the profile.
 
+GRAPHICS (a main-menu tab, and in the Esc menu) has three presets and every setting by itself:
+ORIGINAL draws the image exactly as the game always did (no tonemapping, no effects, 4x MSAA);
+ENHANCED (the default) and ULTRA add HDR with tonemapping, bloom, SMAA, sharpening, anisotropic
+filtering, distance fog, vignette, film grain, chromatic aberration and camera-turn motion blur;
+every screen effect has its own strength (OFF costs nothing): speed streaks while tumbling or
+falling, a hit flash, and a drained, throbbing screen at low health. LIGHTING lights the characters
+from the map's own lightmap colours (with a rim light), lights up the walls, floor and characters
+around muzzle flashes and explosions, and puts a soft contact shadow under every character.
+Also field of view, vsync and a frame limit (not in the browser). Changes show in the match at once
+and are saved in the profile; `gunz-play --gfx original|enhanced|ultra` picks a preset for one run.
+
 Dead in a round mode? Space or click cycles the player you spectate.
 
 Your profile (level, XP, bounty, inventory, equipped items) is saved in
 `$XDG_DATA_HOME/gunzrs/profile.txt` (`%APPDATA%\gunzrs\profile.txt` on Windows). Kills and match
 results pay XP and bounty; spend the bounty in the SHOP tab and equip items in INVENTORY.
+
+### K-style techniques
+
+The original game's bug-born movement tech works as ordinary features, always on, for you and the
+bots (timings are estimates, see `docs/formats.md` "K-style techniques"). With the default
+loadout (katana, revolver, rifle) and the keys above:
+
+| Technique | How |
+|---|---|
+| Air dash | Jump, then dash (C or double-tap): one per jump; a slash out of a dash, a wall kick or a jump gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
+| Dash cancel, wall cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
+| Flying / wall climbing | Wall kick, slash, jump off the wall again, repeat (flash climb: slash, switch to a gun and back, jump) |
+| Switch cancel | Switch weapons during an air slash: slash shot (jump, slash, switch to a gun, shoot), flash step (slash, gun, back to the blade: no draw delay) |
+| Reload shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon |
+| Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |
+| Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump |
+| Wall hang | In the air against a wall with a blade, hold guard; forward + jump while hanging climbs |
+| Butterfly, slide | Slash, then guard before the recovery ends: you can move while the guard is up, and emote (slide); jump or dash out of it |
+| Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block, repeat; or jump, slash, block, dash, slash, block |
+| Quick launch, juggle | Uppercut (guard + attack), guard to cancel its recovery; an uppercut on an airborne launched enemy keeps them up |
+| Insta-kill | Uppercut, then switch to a gun right after it hits and shoot the airborne enemy |
+| Light step | A dash right after a slash makes no dash sound |
+
+Bots of higher skill use air dashes, dash breaks, air butterflies, slash shots, insta-kills, reload shots,
+swapshots, launches and juggles, and climb a wall with a hang to reach an enemy on a ledge.
 
 ## Status
 
@@ -88,8 +124,8 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Maps | All 30 RS v7 maps plus quest maps, with lightmaps, skies and every prop (fires, light shafts, water, fans, waving flags and curtains) |
 | Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
 | Characters | Man and woman models; every clothing piece of the item data (102 chests, 50 legs, 33 hair/hats... for the man) chosen per slot with optional dyes on the PLAYER page, live preview (drag to turn, zoom, framing per body part); bots wear random clothes; skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
-| Movement | Run, jump, tumble, wall kick, wall run, wall climb, falls; run speed, jump, gravity, fall speed and wall kicks measured from public match replays; rocket launchers and machine guns slow you and block wall moves, as their item data says |
-| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, K-style |
+| Movement | Run, jump, tumble, air dash, wall kick, wall run, wall hang and climb, falls; run speed, jump, gravity, fall speed and wall kicks measured from public match replays; rocket launchers and machine guns slow you and block wall moves, as their item data says |
+| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, slide, juggle, and the K-style cancels (see "K-style techniques") |
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera; optional fixed (non-random) bullet spread |
@@ -99,11 +135,12 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
 | Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards; sacrifice items unlock special scenarios, a random dice roll picks the route, quest items stay in your inventory, level limits and challenge time bonuses |
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
-| Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, grenade and smoke throws, pickups, retreating, skill level |
+| Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall hang climbs), grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
-| Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a sliding kill feed at the top right with the retail kill-log weapon icons, a HEADSHOT tag (and the retail HEAD SHOT banner for your own) and clan emblems in a clan war; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
+| Menus and HUD | Modern flat UI (rounded cards, accent colour, hover / pressed / selected states): main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview; HUD with health and armour bars that trail behind damage, a weapon strip with item icons and an ammo counter with low-ammo and RELOAD warnings, a crosshair that opens with running, jumping and shots, hit and kill markers, animated notices, a ranked scoreboard with K/D, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a sliding kill feed at the top right with the retail kill-log weapon icons, a HEADSHOT tag (and the retail HEAD SHOT banner for your own) and clan emblems in a clan war; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
 | Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; a rising kill-streak sound and your own hit sound (`custom/hitsound.wav` next to the profile) |
-| Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars and screen blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
+| Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars, screen blood and realistic blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
+| Blood | Simulated gore (on by default, `--no-realistic-blood` / the pause menu for the retail sprites and marks): droplet sprays scaled by damage that fly with gravity, splatter walls and floors by impact angle, run down walls in drips, pool under corpses, trail from hurt bots, and splash drops and a dark vignette on your screen |
 | LAN multiplayer | HOST LAN / JOIN LAN in the menu (or `--host` / `--join ADDR`, `--join lan` finds the host by broadcast): deathmatch, team deathmatch, gladiator and team gladiator with the host's bots. The host decides hits, deaths and scores; each player moves their own character. TCP and UDP port 7790 must be open on the host |
 
 ### Not done yet

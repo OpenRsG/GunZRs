@@ -7,7 +7,7 @@
 
 use crate::{
     game::{Frozen, Hold, Player, Score, Settings, Team, Vitals},
-    menu::{Art, Mode, button, heading, hover, panel},
+    menu::{ACCENT, Chosen, DIM, Mode, Page, button, heading, hover, panel, primary},
     modes::{Berserker, ModesPlugin, Phase, Round},
     net::Lan,
     profile::{OPTS, Profile, opt_mut},
@@ -15,6 +15,7 @@ use crate::{
 };
 use bevy::{
     prelude::*,
+    text::LineBreak,
     ui::{GlobalZIndex, UiTargetCamera},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
@@ -80,15 +81,18 @@ impl Rules {
 pub struct Clock {
     pub elapsed: f32,
     pub over: Option<String>,
-    /// The HUD's top line: score, round and time for the current mode.
+    /// The HUD's mode line under the timer: score, round and leader for the current mode (may
+    /// be empty), and the timer above it.
     pub header: String,
+    pub timer: String,
     /// Extra HUD text of the mode (the quest's sector and NPC count), written by its plugin.
     pub note: String,
 }
 
-/// Headless runs: open the pause menu when the match clock reaches this many seconds.
+/// Headless runs: open the pause menu when the match clock reaches this many seconds, with the
+/// CONTROLS or GRAPHICS overlay on top for `Some(Page::Controls | Page::Graphics)`.
 #[derive(Resource)]
-pub struct PauseAt(pub f32);
+pub struct PauseAt(pub f32, pub Option<Page>);
 
 /// Starting health/armour of the player (`gunz-play --hp/--ap`), for HUD checks.
 #[derive(Resource)]
@@ -111,7 +115,7 @@ impl Plugin for SessionPlugin {
                     (teams, clock, pause_key, panels, buttons, cursor)
                         .chain()
                         .run_if(resource_exists::<Rules>),
-                    hover.run_if(resource_exists::<Art>),
+                    hover,
                 ),
             );
     }
@@ -194,7 +198,7 @@ fn standing(
     (me, other)
 }
 
-/// The HUD's top line.
+/// The HUD's top lines: the mode line (score, round, who leads; may be empty) and the timer.
 fn header(
     rules: &Rules,
     round: &Round,
@@ -202,7 +206,7 @@ fn header(
     (mine, theirs): (u32, u32),
     names: &Query<&Name>,
     boss: Option<&str>,
-) -> String {
+) -> (String, String) {
     let mmss = |s: u32| format!("{}:{:02}", s / 60, s % 60);
     let left = |limit: f32, used: f32| mmss((limit - used).max(0.0).ceil() as u32);
     let total = match rules.time_limit {
@@ -219,43 +223,52 @@ fn header(
         },
     );
     match rules.mode {
-        Mode::Team | Mode::TeamGladiator => format!("RED {mine} : {theirs} BLUE   {total}"),
-        Mode::Elimination | Mode::Assassinate => {
-            format!(
-                "RED {mine} : {theirs} BLUE   ROUND {}   {round_t}",
-                round.n.max(1)
-            )
-        }
+        Mode::Team | Mode::TeamGladiator => (format!("RED {mine} : {theirs} BLUE"), total),
+        Mode::Elimination | Mode::Assassinate => (
+            format!("RED {mine} : {theirs} BLUE   ROUND {}", round.n.max(1)),
+            round_t,
+        ),
         Mode::Duel | Mode::DuelTournament => {
             let name = |e| names.get(e).map_or("?", |n| n.as_str());
             match round.duelists() {
-                Some((a, b)) if in_round && rules.mode == Mode::DuelTournament => {
-                    format!("{}   {} vs {}   {round_t}", round.stage(), name(a), name(b))
-                }
-                Some((a, b)) if in_round => {
-                    format!("ROUND {}   {} vs {}   {round_t}", round.n, name(a), name(b))
-                }
-                _ => total,
+                Some((a, b)) if in_round && rules.mode == Mode::DuelTournament => (
+                    format!("{}   {} vs {}", round.stage(), name(a), name(b)),
+                    round_t,
+                ),
+                Some((a, b)) if in_round => (
+                    format!("ROUND {}   {} vs {}", round.n, name(a), name(b)),
+                    round_t,
+                ),
+                _ => (String::new(), total),
             }
         }
-        Mode::Spy => format!(
-            "YOU {mine} : {theirs} THEM   ROUND {}   {round_t}",
-            round.n.max(1)
+        Mode::Spy => (
+            format!("YOU {mine} : {theirs} THEM   ROUND {}", round.n.max(1)),
+            round_t,
         ),
-        Mode::ClanWar => format!("{mine} : {theirs}   ROUND {}   {round_t}", round.n.max(1)),
-        Mode::Infected => format!("{}   YOU {mine} : {theirs} THEM   {round_t}", clock.note),
+        Mode::ClanWar => (
+            format!("{mine} : {theirs}   ROUND {}", round.n.max(1)),
+            round_t,
+        ),
+        Mode::Infected => (
+            format!("{}   YOU {mine} : {theirs} THEM", clock.note),
+            round_t,
+        ),
         Mode::Berserker => match rules.kill_limit {
-            Some(k) => format!("BERSERKER {}   {total}   first to {k}", boss.unwrap_or("-")),
-            None => format!("BERSERKER {}   {total}", boss.unwrap_or("-")),
+            Some(k) => (
+                format!("BERSERKER {}   first to {k}", boss.unwrap_or("-")),
+                total,
+            ),
+            None => (format!("BERSERKER {}", boss.unwrap_or("-")), total),
         },
         Mode::Deathmatch | Mode::Gladiator | Mode::Gunman => match rules.kill_limit {
-            Some(k) => format!("{total}   first to {k}"),
-            None => total,
+            Some(k) => (format!("first to {k}"), total),
+            None => (String::new(), total),
         },
         Mode::Quest | Mode::Blitzkrieg | Mode::GunGame | Mode::DynDuel => {
-            format!("{}   {total}", clock.note)
+            (clock.note.clone(), total)
         }
-        Mode::Training => total,
+        Mode::Training => (String::new(), total),
     }
 }
 
@@ -279,9 +292,12 @@ fn clock(
         .single()
         .ok()
         .and_then(|n| n.as_str().split(" [").next());
-    let text = header(&rules, &round, &clock, (mine, theirs), &names, boss);
-    if clock.header != text {
-        clock.header = text;
+    let (line, timer) = header(&rules, &round, &clock, (mine, theirs), &names, boss);
+    if clock.header != line {
+        clock.header = line;
+    }
+    if clock.timer != timer {
+        clock.timer = timer;
     }
     // The tournament bracket decides the match by itself, once its last screen has shown.
     if let (Some(v), Phase::Done) = (round.verdict, round.phase) {
@@ -319,8 +335,13 @@ fn pause_key(
     if clock.over.is_some() || hold.is_some() {
         return;
     }
-    let scripted = pause_at.is_some_and(|p| clock.elapsed >= p.0);
+    let scripted = pause_at.as_ref().is_some_and(|p| clock.elapsed >= p.0);
     if scripted {
+        match pause_at.and_then(|p| p.1) {
+            Some(Page::Controls) => commands.insert_resource(crate::controls::Overlay),
+            Some(Page::Graphics) => commands.insert_resource(crate::gfx::Overlay),
+            _ => {}
+        }
         commands.remove_resource::<PauseAt>();
     }
     if scripted || keys.just_pressed(KeyCode::Escape) {
@@ -343,6 +364,8 @@ enum Act {
     Resume,
     /// Opens the CONTROLS overlay (`controls.rs`).
     Controls,
+    /// Opens the GRAPHICS overlay (`gfx.rs`).
+    Graphics,
     /// Toggles `profile::OPTS[i]`.
     Opt(usize),
     Menu,
@@ -362,36 +385,45 @@ fn panels(
     frozen: Option<Res<Frozen>>,
     hold: Option<Res<Hold>>,
     controls: Option<Res<crate::controls::Overlay>>,
+    graphics: Option<Res<crate::gfx::Overlay>>,
     clock: Res<Clock>,
-    art: Option<Res<Art>>,
     settings: Res<Settings>,
     camera: Query<Entity, With<Camera3d>>,
     pause: Query<Entity, With<PauseUi>>,
     end: Query<Entity, With<EndUi>>,
-    opts: Query<(&Act, &Children)>,
+    opts: Query<(Entity, &Act, &Children, Has<Chosen>)>,
     mut texts: Query<&mut Text>,
 ) {
-    let (Some(art), Ok(camera)) = (art, camera.single()) else {
+    let Ok(camera) = camera.single() else {
         return;
     };
-    let want_pause =
-        frozen.is_some() && clock.over.is_none() && hold.is_none() && controls.is_none();
+    let want_pause = frozen.is_some()
+        && clock.over.is_none()
+        && hold.is_none()
+        && controls.is_none()
+        && graphics.is_none();
     match (want_pause, pause.single()) {
         (false, Ok(e)) => commands.entity(e).despawn(),
-        (true, Err(_)) => spawn_pause(&mut commands, &art, camera, &settings),
+        (true, Err(_)) => spawn_pause(&mut commands, camera, &settings),
         _ => {}
     }
     match (&clock.over, end.single()) {
         (None, Ok(e)) => commands.entity(e).despawn(),
-        (Some(headline), Err(_)) => spawn_end(&mut commands, &art, camera, headline),
+        (Some(headline), Err(_)) => spawn_end(&mut commands, camera, headline),
         _ => {}
     }
     if settings.is_changed() {
         let mut s = settings.clone();
-        for (a, kids) in &opts {
+        for (e, a, kids, chosen) in &opts {
             if let (Act::Opt(i), Some(&k)) = (a, kids.first()) {
+                let on = *opt_mut(&mut s, *i);
                 if let Ok(mut t) = texts.get_mut(k) {
-                    t.0 = on_off(*opt_mut(&mut s, *i)).into();
+                    t.0 = on_off(on).into();
+                }
+                match (on, chosen) {
+                    (true, false) => drop(commands.entity(e).insert(Chosen)),
+                    (false, true) => drop(commands.entity(e).remove::<Chosen>()),
+                    _ => {}
                 }
             }
         }
@@ -415,71 +447,96 @@ fn root(camera: Entity) -> impl Bundle {
     )
 }
 
-fn spawn_pause(commands: &mut Commands, art: &Art, camera: Entity, settings: &Settings) {
+fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
     commands
         .spawn((
             PauseUi,
             root(camera),
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
         ))
         .with_children(|r| {
-            r.spawn(panel(380.0, AlignItems::Center))
+            r.spawn(panel(470.0, AlignItems::Center))
                 .with_children(|p| {
                     p.spawn(heading("PAUSED"));
-                    p.spawn(button(art, 300.0, 44.0, "RESUME", 22.0, Act::Resume));
-                    p.spawn(button(art, 300.0, 44.0, "CONTROLS", 20.0, Act::Controls));
+                    p.spawn(primary(438.0, 48.0, "RESUME", 22.0, Act::Resume));
+                    p.spawn(Node {
+                        column_gap: px(8),
+                        ..default()
+                    })
+                    .with_children(|b| {
+                        b.spawn(button(215.0, 40.0, "CONTROLS", 17.0, Act::Controls));
+                        b.spawn(button(215.0, 40.0, "GRAPHICS", 17.0, Act::Graphics));
+                    });
+                    p.spawn((
+                        Text::new("OPTIONS"),
+                        TextFont::from_font_size(13.0),
+                        TextColor(DIM),
+                        Node {
+                            margin: UiRect::top(px(6)),
+                            align_self: AlignSelf::FlexStart,
+                            ..default()
+                        },
+                    ));
                     p.spawn(Node {
                         flex_wrap: FlexWrap::Wrap,
-                        justify_content: JustifyContent::Center,
-                        width: px(360),
-                        row_gap: px(4),
+                        width: px(438),
+                        column_gap: px(8),
+                        row_gap: px(6),
                         ..default()
                     })
                     .with_children(|g| {
                         let mut s = settings.clone();
                         for (i, (_, label)) in OPTS.iter().enumerate() {
+                            let on = *opt_mut(&mut s, i);
                             g.spawn(Node {
-                                width: px(180),
+                                width: px(215),
                                 align_items: AlignItems::Center,
                                 justify_content: JustifyContent::SpaceBetween,
-                                padding: UiRect::horizontal(px(4)),
                                 ..default()
                             })
                             .with_children(|c| {
                                 c.spawn((
                                     Text::new(*label),
-                                    TextFont::from_font_size(16.0),
+                                    TextFont::from_font_size(15.0),
                                     TextColor(Color::WHITE),
+                                    TextLayout {
+                                        linebreak: LineBreak::NoWrap,
+                                        ..default()
+                                    },
                                 ));
-                                c.spawn(button(
-                                    art,
-                                    48.0,
-                                    26.0,
-                                    on_off(*opt_mut(&mut s, i)),
-                                    14.0,
-                                    Act::Opt(i),
-                                ));
+                                let mut b =
+                                    c.spawn(button(52.0, 26.0, on_off(on), 13.0, Act::Opt(i)));
+                                if on {
+                                    b.insert(Chosen);
+                                }
                             });
                         }
                     });
-                    p.spawn(button(art, 300.0, 44.0, "RETURN TO MENU", 20.0, Act::Menu));
-                    p.spawn(button(art, 300.0, 44.0, "QUIT", 20.0, Act::Quit));
+                    p.spawn(Node {
+                        column_gap: px(8),
+                        margin: UiRect::top(px(8)),
+                        ..default()
+                    })
+                    .with_children(|b| {
+                        b.spawn(button(215.0, 40.0, "MAIN MENU", 17.0, Act::Menu));
+                        b.spawn(button(215.0, 40.0, "QUIT", 17.0, Act::Quit));
+                    });
                 });
         });
 }
 
 /// The scoreboard itself is the HUD's (shown while the match is over); this adds the headline
-/// above it and the buttons below it (the board is 420 px tall and centred).
-fn spawn_end(commands: &mut Commands, art: &Art, camera: Entity, headline: &str) {
+/// above it and the buttons below it (the board starts 220 px above the centre).
+fn spawn_end(commands: &mut Commands, camera: Entity, headline: &str) {
     let color = match headline {
-        "VICTORY" => Color::srgb(1.0, 0.85, 0.3),
-        "DEFEAT" => Color::srgb(0.9, 0.25, 0.2),
+        "VICTORY" => ACCENT,
+        "DEFEAT" => Color::srgb(0.95, 0.3, 0.25),
         _ => Color::WHITE,
     };
     commands.spawn((EndUi, root(camera))).with_children(|r| {
         r.spawn((
             Text::new(headline),
-            TextFont::from_font_size(56.0),
+            TextFont::from_font_size(60.0),
             TextColor(color),
             TextShadow::default(),
             Node {
@@ -488,17 +545,17 @@ fn spawn_end(commands: &mut Commands, art: &Art, camera: Entity, headline: &str)
             },
         ));
         r.spawn(Node {
-            height: px(430),
+            height: px(440),
             ..default()
         });
         r.spawn(Node {
-            column_gap: px(12),
+            column_gap: px(10),
             ..default()
         })
         .with_children(|b| {
-            b.spawn(button(art, 220.0, 44.0, "PLAY AGAIN", 20.0, Act::Again));
-            b.spawn(button(art, 220.0, 44.0, "MAIN MENU", 20.0, Act::Menu));
-            b.spawn(button(art, 160.0, 44.0, "QUIT", 20.0, Act::Quit));
+            b.spawn(primary(190.0, 46.0, "PLAY AGAIN", 18.0, Act::Again));
+            b.spawn(button(170.0, 46.0, "MAIN MENU", 17.0, Act::Menu));
+            b.spawn(button(110.0, 46.0, "QUIT", 17.0, Act::Quit));
         });
     });
 }
@@ -525,6 +582,7 @@ fn buttons(
                 }
             }
             Act::Controls => commands.insert_resource(crate::controls::Overlay),
+            Act::Graphics => commands.insert_resource(crate::gfx::Overlay),
             Act::Menu => drop(exit.write(AppExit::from_code(EXIT_MENU))),
             Act::Again => drop(exit.write(AppExit::from_code(EXIT_AGAIN))),
             Act::Quit => drop(exit.write(AppExit::Success)),

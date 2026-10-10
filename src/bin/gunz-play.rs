@@ -19,7 +19,8 @@
 //! TOGGLES (also in the pause menu, saved in the profile as `opt_NAME=0|1`; a flag overrides the
 //! profile for this run): `--kill-sounds`/`--no-kill-sounds` (default on), `--hit-sound` (plays
 //! `<profile dir>/custom/hitsound.wav`, default off), `--static-spread` (off), `--team-bars` (on),
-//! `--screen-blood` (on), `--killcam` (on); each has a `--no-` form.
+//! `--screen-blood` (on), `--killcam` (on), `--realistic-blood` (on: simulated gore, off: retail
+//! blood sprites and marks); each has a `--no-` form.
 //! MODE is `dm` (deathmatch), `tdm` (team deathmatch), `gladiator` / `team-gladiator` (melee
 //! weapons only), `elimination` (team rounds, no respawn until the round ends), `assassinate`
 //! (rounds, one VIP per team), `duel` (one-on-one rounds, the winner stays, the rest queue and
@@ -66,17 +67,20 @@
 //! starts; the frame `--time` seconds after the script start (default: script length + 0.3, or
 //! 0.5) is saved. `--at` is the player's feet in map coordinates (cm), `--yaw` the facing in
 //! degrees (0 = -Z, positive turns left), `--hp`/`--ap` the starting health/armour,
-//! `--pause-at` opens the pause menu when the match clock reaches S seconds, `--die-at` kills
+//! `--pause-at` opens the pause menu when the match clock reaches S seconds (`--pause-page
+//! controls|graphics` also opens that overlay), `--die-at` kills
 //! the player then (the match clock starts with the first frame, 1.5 s before the script).
-//! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player|shop|inventory|clan|controls` picks the
+//! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player|shop|inventory|clan|controls|graphics` picks the
 //! screen and the options above set what it shows.
+//! `--gfx original|enhanced|ultra` takes that graphics preset for this run (it also lands in the profile
+//! file the next time the profile is saved; the in-game GRAPHICS panel edits them for good).
 //! `--npc NAME[,NAME..]` spawns quest monsters (`system/npc.xml` ids such as `11`, `16`, or
 //! `npc2.xml` names such as `knifeman`, `tower`) in a row in front of the player, `--bots-ahead M`
 //! metres away (default 8) and hostile to it; `GUNZ_NPC_HOLD=S` keeps them idle for S seconds.
 //!
 //! SCRIPT is `;`-separated steps run one after another: `KEYS:SECONDS` holds the `+`-joined
 //! keys for that long (`w a s d` move, `jump`, `attack`, `guard`, `reload`, `tab` scoreboard,
-//! `1`..`9`
+//! `dash` the Dash action (a double tap of the held direction, forward if none), `1`..`9`
 //! select weapon, `wait` nothing), `yaw=DEG` / `pitch=DEG` set the aim instantly (pitch
 //! positive looks up).
 //! Example: `"w:1.0;jump:0.3;2:0.1;attack:0.5;w:0.05;wait:0.05;w:0.4"` runs, jumps, draws the
@@ -180,11 +184,12 @@ fn main() -> AppExit {
     let usage = || {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--look LOOK] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
+             [--bots-ahead M] [--skill 0..1] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam|realistic-blood] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S] [--host | --join ADDR|lan]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \
-             [--hp N] [--ap N] [--pause-at S] [--die-at S] [--menu-page match|player|shop|inventory|clan|controls] [--npc NAME[,NAME..]]\n\
+             [--hp N] [--ap N] [--pause-at S [--pause-page controls|graphics]] [--die-at S] [--menu-page match|player|shop|inventory|clan|controls|graphics] [--npc NAME[,NAME..]]\n       \
+             [--gfx original|enhanced|ultra]\n\
              (see the doc comment of src/bin/gunz-play.rs)"
         );
         AppExit::from_code(2)
@@ -205,6 +210,12 @@ fn main() -> AppExit {
         take_arg::<f32>(&mut args, "--pause-at"),
         take_arg::<Page>(&mut args, "--menu-page"),
         take_arg::<f32>(&mut args, "--die-at"),
+    ) else {
+        return usage();
+    };
+    let (Ok(gfx), Ok(pause_page)) = (
+        take_arg::<gunz::gfx::Preset>(&mut args, "--gfx"),
+        take_arg::<Page>(&mut args, "--pause-page"),
     ) else {
         return usage();
     };
@@ -361,7 +372,7 @@ fn main() -> AppExit {
         });
     }
     if let Some(s) = pause_at {
-        app.insert_resource(PauseAt(s));
+        app.insert_resource(PauseAt(s, pause_page));
     }
     if let Some(s) = die_at {
         app.insert_resource(DieAt(s));
@@ -408,40 +419,42 @@ fn main() -> AppExit {
     }
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(gunz::web::WebPlugin);
-    let exit = app
-        .add_plugins((
-            LevelPlugin,
-            FxPlugin(None),
-            GamePlugin,
-            effect::WarmFxPlugin,
-        ))
-        .insert_resource(PlayerSetup {
-            at: start.0,
-            yaw: start.1,
-            woman: config.woman,
-            loadout: config.loadout.clone(),
-            look: config.look,
-            name: if config.net.is_some() {
-                name
-            } else {
-                String::new()
-            },
-        })
-        .insert_resource({
-            let mut s = Settings::default();
-            Profile::open(headless).apply(&mut s);
-            for &(i, on) in &toggles {
-                *opt_mut(&mut s, i) = on;
-            }
-            s
-        })
-        .insert_resource(rules)
-        .insert_resource(BotCount(bots))
-        .insert_resource(BotSkill(config.skill))
-        .insert_resource(col)
-        .insert_resource(data)
-        .insert_resource(level)
-        .run();
+    app.add_plugins((
+        LevelPlugin,
+        FxPlugin(None),
+        GamePlugin,
+        effect::WarmFxPlugin,
+    ))
+    .insert_resource(PlayerSetup {
+        at: start.0,
+        yaw: start.1,
+        woman: config.woman,
+        loadout: config.loadout.clone(),
+        look: config.look,
+        name: if config.net.is_some() {
+            name
+        } else {
+            String::new()
+        },
+    })
+    .insert_resource({
+        let mut s = Settings::default();
+        Profile::open(headless).apply(&mut s);
+        for &(i, on) in &toggles {
+            *opt_mut(&mut s, i) = on;
+        }
+        s
+    })
+    .insert_resource(rules)
+    .insert_resource(BotCount(bots))
+    .insert_resource(BotSkill(config.skill))
+    .insert_resource(col)
+    .insert_resource(data)
+    .insert_resource(level);
+    if let Some(p) = gfx {
+        app.world_mut().resource_mut::<Profile>().graphics.preset(p);
+    }
+    let exit = app.run();
     match exit {
         AppExit::Error(c) if c.get() == EXIT_MENU => relaunch(&game, &config, true),
         AppExit::Error(c) if c.get() == EXIT_AGAIN => relaunch(&game, &config, false),

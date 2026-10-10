@@ -454,6 +454,11 @@ impl ActorSpawner<'_, '_> {
         self.data.random_look(woman, salt)
     }
 
+    /// The match seed ([`ActorData::seed`]).
+    pub fn seed(&self) -> u64 {
+        self.data.seed
+    }
+
     pub fn spawn(&mut self, spec: ActorSpec) -> Entity {
         let vfs = &self.level.vfs;
         let ch = self.data.character(spec.woman);

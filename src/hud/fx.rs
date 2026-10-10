@@ -224,6 +224,7 @@ fn mate_bars(
     mut fills: Query<(&Mate, &MateBar, &mut Node, &mut BackgroundColor), Without<MateRoot>>,
     mut ammo: Query<(&Mate, &mut MateAmmo, &mut Text)>,
     mut commands: Commands,
+    ui: Res<UiScale>,
 ) {
     let (cam, cam_at) = *camera;
     let side = me.single().ok().flatten().copied();
@@ -260,6 +261,7 @@ fn mate_bars(
         let Some(p) = p else {
             continue;
         };
+        let p = p / ui.0;
         node.left = px(p.x - BAR_W / 2.0);
         node.top = px(p.y - HP_H - AP_H - AMMO_H - 2.0);
     }

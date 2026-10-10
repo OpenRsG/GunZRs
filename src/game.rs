@@ -267,6 +267,8 @@ pub struct Settings {
     pub screen_blood: bool,
     /// Orbitable kill camera on the killer after death.
     pub killcam: bool,
+    /// Touch-screen aim assist strength, 0 (off) ..= 1; the browser's touch controls set it.
+    pub aim_assist: f32,
 }
 
 impl Default for Settings {
@@ -280,6 +282,7 @@ impl Default for Settings {
             team_bars: true,
             screen_blood: true,
             killcam: true,
+            aim_assist: 0.0,
         }
     }
 }
@@ -288,6 +291,11 @@ impl Default for Settings {
 /// a neutral `Intent` and ignores the mouse. `Time<Virtual>` is paused at the same time.
 #[derive(Resource)]
 pub struct Frozen;
+
+/// Present when the player plays with the browser page's touch controls (`web.rs`): the HUD
+/// keeps clear of the on-screen buttons.
+#[derive(Resource)]
+pub struct TouchScreen;
 
 /// A mode's pre-match screen (Blitzkrieg's class select) holds the match: the game is frozen
 /// like a pause, but without the pause menu and without Esc resuming it.
@@ -600,6 +608,8 @@ pub struct Killed {
     pub victim: Entity,
     pub killer: Entity,
     pub item: u32,
+    /// A gun bullet in the head took the last health (kill feed's headshot mark).
+    pub head: bool,
 }
 
 /// Knockback impulse (m/s, world space) inserted/added by combat on a hit actor. The actor

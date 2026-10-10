@@ -30,7 +30,7 @@ use std::{
 /// TCP port of the host, and the UDP port it answers LAN probes on.
 pub const PORT: u16 = 7790;
 const MAGIC: &[u8; 4] = b"GZRS";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 const PROBE: &[u8] = b"GZRS?";
 const ANSWER: &[u8] = b"GZRS!";
 /// A peer that lets this much unsent data pile up has stalled: it is dropped.
@@ -611,7 +611,8 @@ fn host_send(
         let mut w = W::new(KILL);
         w.u64(k.victim.to_bits())
             .u64(k.killer.to_bits())
-            .u32(k.item);
+            .u32(k.item)
+            .u8(k.head as u8);
         events.push(w);
     }
     for h in wounded.read() {
@@ -924,13 +925,14 @@ fn client_recv(
             })(),
             // Kills and wounds of an actor this client never saw (it already left) are dropped.
             Some(KILL) => (|| {
-                let (victim, killer, item) = (r.u64()?, r.u64()?, r.u32()?);
+                let (victim, killer, item, head) = (r.u64()?, r.u64()?, r.u32()?, r.u8()? != 0);
                 if let Some(&victim) = client.ids.get(&victim) {
                     let killer = client.ids.get(&killer).copied().unwrap_or(victim);
                     killed.write(Killed {
                         victim,
                         killer,
                         item,
+                        head,
                     });
                 }
                 Some(())

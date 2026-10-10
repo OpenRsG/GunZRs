@@ -187,6 +187,7 @@ fn ping(
     spies: Query<(Entity, &GlobalTransform, &Name), (With<Located>, Without<Dead>)>,
     old: Query<Entity, With<Blip>>,
     mut seen: Local<(f32, HashMap<Entity, Vec3>)>,
+    ui: Res<UiScale>,
 ) {
     for e in &old {
         commands.entity(e).despawn();
@@ -218,6 +219,7 @@ fn ping(
             let right = view.affine().inverse().transform_point3(at).x >= 0.0;
             Vec2::new(if right { size.x - 200.0 } else { 16.0 }, size.y / 2.0)
         });
+        let p = p / ui.0;
         commands.spawn((
             Blip,
             UiTargetCamera(cam_e),

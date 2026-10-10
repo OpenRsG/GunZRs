@@ -142,6 +142,10 @@ impl Plugin for ActorPlugin {
                     equip.in_set(ActorSet::Input),
                     player_input.in_set(ActorSet::Input),
                     status.in_set(ActorSet::Input).after(player_input),
+                    aim_assist
+                        .in_set(ActorSet::Input)
+                        .after(player_input)
+                        .run_if(|s: Res<Settings>| s.aim_assist > 0.0),
                     drive.in_set(ActorSet::Drive),
                     follow_camera.in_set(ActorSet::Camera),
                 ),
@@ -997,6 +1001,82 @@ fn player_input(
     intent.emote = held.emote;
     intent.reload = held.reload;
     intent.slot = held.slot;
+}
+
+/// Aim assist cone half-angle (rad) at `dist` metres for `strength` 0..=1: about a body's width
+/// plus a little, so it narrows with distance (6 degrees at 10 m, 3 at 30 m at strength 0.5).
+fn assist_cone(dist: f32, strength: f32) -> f32 {
+    (((0.5 + 0.7 * strength) / dist).atan() + 0.03 * strength).min(0.25)
+}
+
+/// One frame of aim assist: `look` (yaw, pitch) eased towards the unit direction `to` (pitch
+/// at 60 %), faster while firing. Never overshoots.
+fn assist(look: (f32, f32), to: Vec3, strength: f32, dt: f32, firing: bool) -> (f32, f32) {
+    let goal = (crate::combat::yaw_of(to), to.y.clamp(-1.0, 1.0).asin());
+    let rate = 6.0 * strength * if firing { 1.6 } else { 1.0 };
+    let k = 1.0 - (-rate * dt).exp();
+    let dyaw = (goal.0 - look.0 + PI).rem_euclid(2.0 * PI) - PI;
+    (look.0 + dyaw * k, look.1 + (goal.1 - look.1) * k * 0.6)
+}
+
+/// Touch aim assist (`Settings::aim_assist`, the browser's touch settings): while the player
+/// turns, moves or fires, the aim eases towards the visible enemy closest to the crosshair
+/// inside [`assist_cone`], and turning slows down on it ("friction") so a swipe does not
+/// overshoot. Idle, it never moves the view.
+#[allow(clippy::type_complexity)]
+fn aim_assist(
+    time: Res<Time>,
+    settings: Res<Settings>,
+    frozen: Option<Res<Frozen>>,
+    col: Option<Res<MapCollision>>,
+    player: Single<(&Transform, &mut Intent, Option<&Team>), (With<Player>, Without<Dead>)>,
+    others: Query<
+        (&Transform, Option<&Team>, Has<Bot>),
+        (
+            With<Intent>,
+            Without<Player>,
+            Without<Dead>,
+            Without<Protected>,
+        ),
+    >,
+    mut last: Local<Option<(f32, f32)>>,
+) {
+    if frozen.is_some() {
+        *last = None;
+        return;
+    }
+    let s = settings.aim_assist.min(1.0);
+    let (tf, mut intent, team) = player.into_inner();
+    let (origin, dir) = aim(tf.translation, &intent, true);
+    let target = others
+        .iter()
+        .filter(|(_, t, bot)| !friendly((team.copied(), false), (t.copied(), *bot)))
+        .filter_map(|(o, ..)| {
+            let d = o.translation + Vec3::Y * 1.2 - origin;
+            let dist = d.length();
+            let angle = dir.angle_between(d);
+            (dist > 1.0 && dist < 60.0 && angle < assist_cone(dist, s)).then_some((angle, d, dist))
+        })
+        .filter(|(_, d, dist)| {
+            col.as_ref()
+                .is_none_or(|c| c.raycast(origin, *d, dist - 0.4).is_none())
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    // the player's own turn this frame (a respawn or a script resets the view: not a turn)
+    let turn = last
+        .map(|l| (intent.yaw - l.0, intent.pitch - l.1))
+        .filter(|t| t.0.abs() < 0.5 && t.1.abs() < 0.5)
+        .unwrap_or_default();
+    if let Some((_, d, _)) = target {
+        let base = (intent.yaw - turn.0, intent.pitch - turn.1);
+        let slow = 1.0 - 0.5 * s;
+        let mut look = (base.0 + turn.0 * slow, base.1 + turn.1 * slow);
+        if turn != (0.0, 0.0) || intent.walk != Vec2::ZERO || intent.attack {
+            look = assist(look, d.normalize(), s, time.delta_secs(), intent.attack);
+        }
+        (intent.yaw, intent.pitch) = (look.0, look.1.clamp(-1.3, 1.3));
+    }
+    *last = Some((intent.yaw, intent.pitch));
 }
 
 /// Seconds the player's camera takes for one turn around the corpse (on top of the mouse).
@@ -2082,5 +2162,23 @@ mod tests {
         let s = Script::parse("wave:1;taunt+dance:1").unwrap();
         assert_eq!(s.steps[0].held.emote, Some("wave"));
         assert_eq!(s.steps[1].held.emote, Some("dance"));
+    }
+
+    #[test]
+    fn aim_assist_eases_without_overshoot() {
+        // target 5 degrees to the right (yaw grows to the left) and a little up
+        let to = Quat::from_euler(EulerRot::YXZ, -0.087, 0.05, 0.0) * Vec3::NEG_Z;
+        let mut look = (0.0, 0.0);
+        for _ in 0..600 {
+            let next = assist(look, to, 0.5, 1.0 / 60.0, false);
+            assert!(next.0 <= look.0 && next.0 >= -0.087 - 1e-4, "{next:?}");
+            look = next;
+        }
+        assert!((look.0 + 0.087).abs() < 1e-3 && (look.1 - 0.05).abs() < 1e-3);
+        // across the -pi/pi seam it turns the short way
+        let back = Quat::from_rotation_y(PI - 0.05) * Vec3::NEG_Z;
+        assert!(assist((-PI + 0.05, 0.0), back, 1.0, 0.1, true).0 < -PI + 0.05);
+        assert!(assist_cone(10.0, 0.5) < assist_cone(5.0, 0.5));
+        assert!(assist_cone(10.0, 0.0) < assist_cone(10.0, 1.0));
     }
 }

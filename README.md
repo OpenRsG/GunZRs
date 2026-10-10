@@ -90,7 +90,7 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
 | Bots | Path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
-| Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, kill feed, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
+| Menus and HUD | Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview, scoreboard, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a sliding kill feed at the top right with the retail kill-log weapon icons, a HEADSHOT tag (and the retail HEAD SHOT banner for your own) and clan emblems in a clan war; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
 | Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; a rising kill-streak sound and your own hit sound (`custom/hitsound.wav` next to the profile) |
 | Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars and screen blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
 | LAN multiplayer | HOST LAN / JOIN LAN in the menu (or `--host` / `--join ADDR`, `--join lan` finds the host by broadcast): deathmatch, team deathmatch, gladiator and team gladiator with the host's bots. The host decides hits, deaths and scores; each player moves their own character. TCP and UDP port 7790 must be open on the host |
@@ -117,7 +117,7 @@ sudo tailscale serve --bg --https=10000 http://127.0.0.1:8090   # HTTPS on your 
 
 `web/` builds the same game for the browser. `gunz-pack` plays a short traced match on every
 map (and opens the game's menu) and keeps only the files those runs read. The result is one
-shared pack (characters, weapons, effects, sounds; about 27 MB gzipped instead of the 1.6 GB
+shared pack (characters, weapons, effects, sounds; about 40 MB gzipped instead of the 1.6 GB
 install) plus one pack per map (3-14 MB). The page fetches the shared pack and the wasm module
 (7 MB brotli) right away and a map's pack only once you pick that map. Packs are cached for
 good by their CRC. Clothes are too many to pack (hundreds of MB): every other file under
@@ -126,8 +126,15 @@ outfit at the start of a match, a piece you browse to). After START a loading sc
 download (size and its own bar), an overall bar, the speed and time left, then the start-up step
 until the match is on screen. CHARACTER & CLOTHES opens the game's own PLAYER page; its SAVE
 keeps the character in the browser's local storage and its START plays the map and mode picked
-there. On a touch screen the match has on-screen controls (a floating stick, drag to look, fire,
-jump, dash, guard, reload, weapon swap, scores, pause) and goes fullscreen.
+there. On a touch screen the match has on-screen controls (a stick, drag anywhere else to look,
+fire, jump, dash, guard, reload, weapon swap, scores, pause) and goes fullscreen; pinch and
+double-tap zoom are off. The gear button (or TOUCH CONTROLS in the page's menu) opens their
+settings, kept in the browser: look sensitivity and invert, aim assist strength (it leans the
+aim towards the visible enemy nearest the crosshair while you turn, move or shoot, never on its
+own; 0 = off), a floating or fixed stick and its dead zone, button size and opacity,
+left-handed layout, vibration, and a layout editor to drag each control anywhere and resize it.
+The menus and the match HUD shrink to fit windows smaller than 1280 x 720 (phones), and with
+touch controls the weapon and ammo panel moves to the bottom centre, clear of FIRE.
 No LAN in the browser. `web/dist` holds retail bytes, so serve it only to your own devices (a
 tailnet-only `tailscale serve`, never `tailscale funnel`).
 

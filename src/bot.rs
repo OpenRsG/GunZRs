@@ -5,7 +5,7 @@
 //! blows), and falls back to the spawn point farthest from the enemy when hurt.
 
 use crate::{
-    actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RUN},
+    actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RUN, Script},
     col::MapCollision,
     combat::{EYE, HIT_RADIUS, is_melee, rnd, yaw_of},
     game::{
@@ -90,6 +90,124 @@ struct Combo {
     to: usize,
 }
 
+/// What a technique move needs besides a blade in hand, the ground under the feet and an enemy in
+/// sight.
+#[derive(Clone, Copy, PartialEq)]
+enum Need {
+    /// The enemy within reach of the blade.
+    Close,
+    /// A gun with ammo (`G`), the enemy 2-12 m away.
+    Gun,
+    /// Two guns with ammo (`G`, `H`), the enemy 2-12 m away.
+    Guns,
+    /// A tall wall 1.5-4 m ahead, which the bot faces (and a gun when the script names `G`).
+    Wall,
+}
+
+/// The guides' techniques as bot moves: name, the lowest [`BotSkill`] that tries it, what it
+/// needs and its keys in the `gunz-play --script` form (`B`, `G`, `H`: the blade's, a gun's and a
+/// second gun's slot). The same scripts were checked headless with the player
+/// (docs/formats.md "K-style techniques"); the skills are *inferred* difficulty ranks.
+const MOVES: [(&str, f32, Need, &str); 15] = [
+    (
+        "butterfly",
+        0.2,
+        Need::Close,
+        "jump:0.05;w+dash:0.08;w+attack:0.05;wait:0.12;guard:0.3",
+    ),
+    (
+        "double butterfly",
+        0.4,
+        Need::Close,
+        "jump:0.05;attack:0.05;wait:0.12;guard:0.1;w+dash:0.08;w+attack:0.05;wait:0.12;guard:0.3",
+    ),
+    (
+        "triple butterfly",
+        0.6,
+        Need::Close,
+        "jump:0.05;attack:0.05;guard:0.6;jump:0.05;attack:0.05;guard:0.6;jump:0.05;attack:0.05;guard:0.3",
+    ),
+    (
+        "quadruple butterfly",
+        0.85,
+        Need::Close,
+        "attack:0.05;guard+dash:0.06;wait:0.22;attack:0.05;guard+d+dash:0.06;wait:0.22;attack:0.05;guard+a+dash:0.06;wait:0.1",
+    ),
+    (
+        "juggle",
+        0.5,
+        Need::Close,
+        "guard:0.1;guard+attack:0.05;wait:0.25;guard:0.1;jump:0.05;w+dash:0.06;w+attack:0.05;wait:0.12;guard:0.3",
+    ),
+    (
+        "slashshot",
+        0.3,
+        Need::Gun,
+        "jump:0.05;w+dash:0.08;w+attack:0.1;G:0.05;attack:0.1;wait:0.2;B:0.05",
+    ),
+    (
+        "half step",
+        0.5,
+        Need::Gun,
+        "jump:0.05;w+dash:0.08;w+attack:0.05;wait:0.1;G:0.05;s+dash:0.1;attack:0.1;wait:0.2;B:0.05",
+    ),
+    (
+        "reload half step",
+        0.6,
+        Need::Gun,
+        "jump:0.05;w+dash:0.08;w+attack:0.05;wait:0.1;G:0.05;s+dash:0.1;attack:0.1;wait:0.15;reload:0.1;B:0.05",
+    ),
+    (
+        "flash step",
+        0.6,
+        Need::Gun,
+        "jump:0.05;attack:0.05;wait:0.1;G:0.05;B:0.05;w+dash:0.12;attack:0.05;wait:0.1;G:0.05;B:0.05;w+dash:0.12;attack:0.05;wait:0.2",
+    ),
+    (
+        "forbidden step",
+        0.85,
+        Need::Guns,
+        "jump:0.05;attack:0.05;wait:0.1;G:0.05;attack:0.05;B:0.05;w+dash:0.1;w+attack:0.05;wait:0.1;H:0.05;w+dash:0.1;attack:0.1;wait:0.2;B:0.05",
+    ),
+    (
+        "extended flip",
+        0.3,
+        Need::Close,
+        "guard+w:0.1;guard+w+attack:0.05;w:0.25;w+dash:0.1;wait:0.3",
+    ),
+    (
+        "wall cancel",
+        0.5,
+        Need::Wall,
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;w+dash:0.12;w+jump:0.1;wait:0.4",
+    ),
+    (
+        "advanced wall cancel",
+        0.7,
+        Need::Wall,
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.1;G:0.05;B:0.05;w+dash:0.12;w+jump:0.1;wait:0.4",
+    ),
+    (
+        "multi wall run",
+        0.7,
+        Need::Wall,
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;attack:0.05;wait:0.15;w+dash:0.12;w+jump:0.05;wait:0.15;w+jump:0.05;wait:0.4",
+    ),
+    (
+        "wall hang cancel",
+        0.4,
+        Need::Wall,
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.6;guard:0.4;wait:0.2",
+    ),
+];
+
+/// A technique move being played: its script and the heading it keeps (a wall move faces the
+/// wall; the others face the enemy as in any fight).
+struct Moves {
+    script: Script,
+    yaw: Option<f32>,
+}
+
 /// Bot state: steering timers and the route it follows.
 #[derive(Component)]
 struct BotAi {
@@ -172,6 +290,9 @@ struct BotAi {
     /// Wall hang climb in progress (seconds in, the wall's outward normal) and its cooldown.
     climb: Option<(f32, Vec3)>,
     climb_cd: f32,
+    /// Technique move in progress and seconds until the next roll.
+    moves: Option<Moves>,
+    move_cd: f32,
 }
 
 impl BotAi {
@@ -234,6 +355,8 @@ impl BotAi {
             launch_cd: 2.0,
             climb: None,
             climb_cd: 3.0,
+            moves: None,
+            move_cd: 3.0,
         }
     }
 }
@@ -1568,6 +1691,82 @@ fn bot_ai(
                 ai.combo = Some(c);
             }
         }
+        // Technique moves ([`MOVES`]): rolled every few seconds in a blade fight, each from its
+        // skill rank up and more often the higher the skill; the script holds the controls.
+        ai.move_cd -= dt;
+        if ai.moves.is_none()
+            && ai.move_cd <= 0.0
+            && melee
+            && !scripted
+            && !blind
+            && !flee
+            && ai.react <= 0.0
+            && motor.grounded
+            && ai.throw.is_none()
+            && ai.lay.is_none()
+            && ai.climb.is_none()
+            && ai.combo.is_none()
+            && seen.is_some()
+            && let Some(b) = blade
+        {
+            ai.move_cd = (1.5 + 3.0 * rnd(&mut ai.rng)) * (1.6 - skill);
+            let (what, min, need, keys) =
+                MOVES[(rnd(&mut ai.rng) * MOVES.len() as f32) as usize % MOVES.len()];
+            let guns: Vec<usize> = (0..loadout.slots.len()).filter(|&i| gun(i)).collect();
+            let ahead = Quat::from_rotation_y(ai.yaw) * Vec3::NEG_Z;
+            let floor = col
+                .raycast(pos + ahead * 2.5 + Vec3::Y * 0.5, Vec3::NEG_Y, 2.5)
+                .is_some();
+            // a tall wall roughly ahead with room to run at it
+            let wall = [0.0f32, 0.5, -0.5].iter().find_map(|&o| {
+                let d = Quat::from_rotation_y(ai.yaw + o) * Vec3::NEG_Z;
+                let h = col.raycast(pos + Vec3::Y * 0.9, d, 4.0)?;
+                (h.distance > 1.5
+                    && h.normal.y.abs() < 0.3
+                    && h.normal.dot(-d) > 0.8
+                    && col
+                        .raycast(pos + Vec3::Y * 3.0, d, h.distance + 0.5)
+                        .is_some())
+                .then(|| yaw_of(-Vec3::new(h.normal.x, 0.0, h.normal.z)))
+            });
+            let fits = match need {
+                Need::Close => dist <= reach + 0.5 && floor,
+                Need::Gun => !guns.is_empty() && (2.0..12.0).contains(&dist) && floor,
+                Need::Guns => guns.len() >= 2 && (2.0..12.0).contains(&dist) && floor,
+                Need::Wall => wall.is_some() && (!keys.contains('G') || !guns.is_empty()),
+            };
+            if skill >= min && fits && rnd(&mut ai.rng) < 0.3 + 0.6 * skill {
+                let slot = |i: Option<&usize>| i.map_or(String::new(), |i| (i + 1).to_string());
+                let keys = keys
+                    .replace('B', &slot(Some(&b)))
+                    .replace('G', &slot(guns.first()))
+                    .replace('H', &slot(guns.get(1)));
+                match Script::parse(&keys) {
+                    Ok(mut script) => {
+                        debug!("bot {name}: move {what}");
+                        script.lead = time.elapsed_secs();
+                        ai.moves = Some(Moves {
+                            script,
+                            yaw: wall.filter(|_| need == Need::Wall),
+                        });
+                    }
+                    Err(e) => warn!("bot move {what}: {e}"),
+                }
+            }
+        }
+        if let Some(mut m) = ai.moves.take()
+            && !(motor.blast || scripted || blind)
+        {
+            if let Some(y) = m.yaw {
+                ai.yaw = turn(ai.yaw, y, 12.0 * dt);
+                intent.yaw = ai.yaw;
+            }
+            // the script switches weapons; the range pick resumes right after it
+            (ai.tap, ai.bf, ai.launch, ai.switch_t) = (None, None, 0.0, 0.2);
+            if m.script.play(time.elapsed_secs(), &mut intent) {
+                ai.moves = Some(m);
+            }
+        }
         if scripted {
             (intent.attack, intent.guard, intent.reload) = (false, false, false);
         }
@@ -1595,6 +1794,21 @@ fn bot_ai(
                 intent.walk,
                 ai.stuck,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A typo in a move would only show as a warning when a bot rolls it.
+    #[test]
+    fn moves_parse() {
+        for (what, _, _, keys) in MOVES {
+            let keys = keys.replace('B', "1").replace('G', "2").replace('H', "3");
+            let s = Script::parse(&keys).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert!(s.secs() > 0.3 && s.secs() < 3.0, "{what}: {} s", s.secs());
         }
     }
 }

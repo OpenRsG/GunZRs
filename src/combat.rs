@@ -312,6 +312,12 @@ pub(crate) enum Vfx {
         name: String,
         at: Transform,
     },
+    /// Effect-list effect `name` riding on entity `on` (`at` relative to it).
+    On {
+        name: &'static str,
+        on: Entity,
+        at: Transform,
+    },
     /// Blood from a hit at `point` travelling along `dir`; `amount` is the damage that scales
     /// the spray (`gore.rs`; the retail sprites ignore it).
     Blood {
@@ -439,7 +445,7 @@ impl Fx {
         at: Transform,
         assets: &mut FxAssets,
         commands: &mut Commands,
-    ) {
+    ) -> Option<Entity> {
         let (vfs, defs) = (self.vfs, &self.defs);
         if !self.cache.contains_key(name) {
             let loaded = (|| {
@@ -466,12 +472,13 @@ impl Fx {
             self.cache.insert(name.to_owned(), loaded);
         }
         let Some(Some(c)) = self.cache.get(name) else {
-            return;
+            return None;
         };
         let model = self
             .loader
             .spawn(assets, commands, "sfx/", &c.elu, c.ani.clone(), at);
         commands.entity(model.root).insert(Lifetime(c.life));
+        Some(model.root)
     }
 
     /// Spawns the rigid ELU model at VFS `path` (textures from its own directory) at `at`.
@@ -527,8 +534,15 @@ fn spawn_elu_fx(
 ) {
     for v in vfx.read() {
         match *v {
-            Vfx::Elu { name, at } => fx.spawn(name, at, &mut assets, &mut commands),
-            Vfx::Named { ref name, at } => fx.spawn(name, at, &mut assets, &mut commands),
+            Vfx::Elu { name, at } => _ = fx.spawn(name, at, &mut assets, &mut commands),
+            Vfx::Named { ref name, at } => _ = fx.spawn(name, at, &mut assets, &mut commands),
+            Vfx::On { name, on, at } => {
+                if let Some(e) = fx.spawn(name, at, &mut assets, &mut commands)
+                    && let Ok(mut c) = commands.get_entity(on)
+                {
+                    c.add_child(e);
+                }
+            }
             Vfx::Facing {
                 name,
                 at,

@@ -226,10 +226,12 @@ struct Snap {
 impl Snap {
     fn write(&self, w: &mut W) {
         let i = &self.intent;
-        let flags = [i.jump, i.attack, i.reload, i.guard, i.taunt, self.dead]
-            .iter()
-            .enumerate()
-            .fold(0u8, |f, (b, on)| f | (*on as u8) << b);
+        let flags = [
+            i.jump, i.attack, i.reload, i.guard, i.taunt, self.dead, i.dash,
+        ]
+        .iter()
+        .enumerate()
+        .fold(0u8, |f, (b, on)| f | (*on as u8) << b);
         let emote = match i.emote {
             Some("taunt") => 6,
             Some(e) => EMOTES
@@ -275,6 +277,7 @@ impl Snap {
             slot: None,
             guard: bit(3),
             taunt: bit(4),
+            dash: bit(6),
             emote: match emote {
                 1..=5 => Some(EMOTES[emote as usize - 1].0),
                 6 => Some("taunt"),
@@ -1035,6 +1038,7 @@ mod tests {
                 pitch: -0.5,
                 attack: true,
                 guard: true,
+                dash: true,
                 emote: Some("dance"),
                 ..default()
             },

@@ -96,7 +96,7 @@ const GUARD_HALF: f32 = 90.0;
 const FLINCH_PUSH: f32 = 1.5;
 const KNOCKDOWN_PUSH: f32 = 3.5;
 const UPPERCUT_UP: f32 = 7.0;
-const UPPERCUT_BACK: f32 = 1.0;
+const UPPERCUT_BACK: f32 = 3.0;
 const MASSIVE_UP: f32 = 5.5;
 const MASSIVE_BACK: f32 = 5.0;
 /// Air juggle: a hit on an actor already in the blast chain lifts it again, at most this often.
@@ -105,6 +105,11 @@ const MAX_JUGGLE: u8 = 3;
 /// Seconds after a switch-cancelled air slash during which switching back to the blade needs no
 /// draw delay (flash step / quick slash; *inferred*).
 const FLASH_WINDOW: f32 = 1.5;
+/// Block cancel (the quadruple butterfly's glitch): a guard this many seconds or more into a blow
+/// lands the blow at once and cuts the rest of its swing (*inferred*).
+const BLOCK_CANCEL: f32 = 0.05;
+/// A slash may start this many seconds into a dash (*inferred*).
+const DASH_SLASH: f32 = 0.05;
 
 pub struct MeleePlugin;
 
@@ -263,6 +268,10 @@ pub struct Melee {
     juggle: u8,
     /// Item last seen in hand (weapon switches restart the state).
     item: u32,
+    /// When the guard was last pressed and whether it was held last frame (a block cancel needs a
+    /// press during the blow; a guard held into an uppercut is not one).
+    guard_at: f32,
+    prev_guard: bool,
 }
 
 /// A blow reached its hit frame.
@@ -331,6 +340,10 @@ fn drive(
         if click {
             m.down_at = now;
         }
+        if intent.guard && !m.prev_guard {
+            m.guard_at = now;
+        }
+        m.prev_guard = intent.guard;
         if !motor.blast && motor.grounded {
             m.juggle = 0;
         }
@@ -384,12 +397,29 @@ fn drive(
         let air_bf = guard_clip && !grounded;
         let guard_hold = guard_clip && (grounded || m.air_guard);
 
-        // The actor controller ended the clip early: a jump, dash or wall kick cancelled it.
-        if m.phase != Phase::Idle && acting.is_none() && t > 0.1 && t < m.secs - 0.05 {
+        // The actor controller ended the clip early: a jump, dash or wall kick cancelled it (the
+        // `Acting` of a clip requested last frame is there from this frame on; a dash shows at once).
+        if m.phase != Phase::Idle
+            && acting.is_none()
+            && t > 0.0
+            && (t < m.secs - 0.05 || motor.tumble.is_some())
+        {
             debug!(
                 "t={now:.2} melee {who}: {:?} K-style cancel (tumble/jump took over) at {t:.2}s",
                 m.phase
             );
+            // the jump or dash came on the hit frame itself: the blade still lands
+            if let Phase::Blow { blow, strike, .. } = m.phase
+                && !m.struck
+                && t >= strike - 0.05
+            {
+                strikes.write(Strike {
+                    attacker: e,
+                    item,
+                    blow,
+                    power: m.power,
+                });
+            }
             m.phase = Phase::Idle;
             m.combo_until = now + CANCEL_COMBO;
         }
@@ -402,7 +432,7 @@ fn drive(
             && !queued
             && secs("charge").is_some();
         let blow_from = |m: &Melee, power: f32| plan(&data, woman, motion, m, now, motor, power);
-        let free = motor.tumble.is_none_or(|t| t > 0.1);
+        let free = motor.tumble.is_none_or(|t| t > DASH_SLASH);
 
         let next = match m.phase {
             Phase::Idle if !free => None,
@@ -423,7 +453,19 @@ fn drive(
                 ret,
                 dive,
             } => {
-                if !m.struck && t >= strike {
+                let cancel_guard = guard_ok || air_bf && (blow == AIR || blow == DIVE);
+                // block cancel: slashes only (not the uppercut, the slam or a charged swing)
+                let block_cancel = cancel_guard
+                    && [SLASH, FINISHER, AIR, DIVE].contains(&blow)
+                    && m.guard_at >= m.t0
+                    && t >= BLOCK_CANCEL;
+                if !m.struck && (t >= strike || block_cancel) {
+                    if t < strike {
+                        debug!(
+                            "t={now:.2} melee {who}: tech: block cancel (the guard lands {} at {t:.2}s and cuts its swing)",
+                            blow.name
+                        );
+                    }
                     m.struck = true;
                     strikes.write(Strike {
                         attacker: e,
@@ -439,7 +481,7 @@ fn drive(
                 }
                 if !m.struck {
                     None
-                } else if guard_ok || air_bf && (blow == AIR || blow == DIVE) {
+                } else if cancel_guard {
                     // butterfly: the guard cancels the recovery
                     Some(Next::Guard(Stage::Start))
                 } else if queued && now >= m.ready && !dive {

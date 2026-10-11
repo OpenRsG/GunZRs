@@ -324,6 +324,9 @@ pub struct Intent {
     pub slot: Option<usize>,
     /// Guard held (right mouse; melee weapons only): see [`Guarding`].
     pub guard: bool,
+    /// Dash held (the controller acts on the press): a tumble towards the held direction
+    /// (forward if none), the same as a double tap of that direction.
+    pub dash: bool,
     /// Taunt key held (the controller acts on the press): plays the weapon's `taunt` clip.
     pub taunt: bool,
     /// Emote clip to play (`bow`, `wave`, `cry`, `laugh`, `dance`, or `taunt`), held; the

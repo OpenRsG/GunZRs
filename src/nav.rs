@@ -489,9 +489,7 @@ impl Pawn {
                 }
             }
             Air::Kick(_) => {}
-            Air::Free if self.grounded => {
-                self.hv += (wish - self.hv).clamp_length_max(60.0 * self.dt);
-            }
+            Air::Free if self.grounded => self.hv = wish,
             Air::Free => {
                 self.hv += (wish - self.hv).clamp_length_max(10.0 * self.dt);
             }
@@ -1233,7 +1231,7 @@ impl Nav {
 /// Nav file magic and layout version. Bump `FORMAT` whenever the layout or what [`Nav::new`]
 /// finds changes: files made by an older build are then refused and the nav is built instead.
 const MAGIC: u32 = u32::from_le_bytes(*b"GZNV");
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// The box of the map's vertices in Bevy metres: what the nav samples.
 fn bounds(map: &Map) -> (Vec3, Vec3) {

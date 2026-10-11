@@ -96,7 +96,7 @@ fn main() -> AppExit {
         let mut item = load(&def).unwrap_or_else(|e| panic!("{}: {e}", def.name));
         let (center, r) = effect::bounds(&item.elu);
         println!(
-            "{}: {} nodes, {} materials, animation {}",
+            "{}: {} nodes, {} materials, animation {}, bounds centre {center:.2} radius {r:.2} m",
             def.name,
             item.elu.nodes.len(),
             item.elu.materials.len(),

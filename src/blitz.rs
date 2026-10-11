@@ -33,6 +33,7 @@ use crate::{
     item::{Items, WeaponKind},
     level::Level,
     menu::Mode,
+    phase::{MatchStart, MatchSystems},
     session::{Clock, PROTECT_SECS, RESPAWN_SECS, Rules, freeze},
     ui::{ACCENT, INK, compact, digits, display, hover, shadow, strong},
     view::{SCALE, Shot, to_bevy},
@@ -123,7 +124,7 @@ pub struct BlitzPlugin;
 
 impl Plugin for BlitzPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup.run_if(on)).add_systems(
+        app.add_systems(MatchStart, setup.run_if(on)).add_systems(
             Update,
             (
                 classes,
@@ -146,7 +147,8 @@ impl Plugin for BlitzPlugin {
                 (ui::select_ui, hover, ui::minimap, ui::reward_ui),
             )
                 .chain()
-                .run_if(live),
+                .run_if(live)
+                .in_set(MatchSystems),
         );
     }
 }
@@ -1643,7 +1645,6 @@ fn classes(
     mut commands: Commands,
     mut vtime: ResMut<Time<Virtual>>,
     mut equip: MessageWriter<Equip>,
-    mut seed: Local<u32>,
     mut q: Query<(Entity, &mut Honor, &mut Vitals, &Team, &Name, Has<Player>)>,
 ) {
     if !blitz.assign || !q.iter().any(|a| a.5) {
@@ -1680,9 +1681,8 @@ fn classes(
         }
         chosen = Some(s.sel);
     }
-    if *seed == 0 {
-        *seed = 0x2545_f491;
-    }
+    // once per match (`assign`), so the stream always starts from the same seed
+    let mut seed = 0x2545_f491_u32;
     let mut order: Vec<(Entity, bool)> = q.iter().map(|a| (a.0, a.5)).collect();
     order.sort_by_key(|o| !o.1);
     let mut count = [[0u8; CLASSES.len()]; 2];

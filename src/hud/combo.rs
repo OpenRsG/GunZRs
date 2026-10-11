@@ -10,6 +10,7 @@
 mod synth;
 
 use super::{Root, set};
+use crate::phase::{MatchApp, MatchSystems};
 use crate::{
     actor::ActorData,
     audio::{Expires, SOUND_LIFE},
@@ -21,20 +22,23 @@ use crate::{
 use bevy::{ecs::component::Mutable, prelude::*};
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Combo>().add_systems(
-        Update,
-        (
-            load.run_if(
-                resource_exists::<Assets<AudioSource>>.and_then(not(resource_exists::<Chimes>)),
-            ),
-            spawn.run_if(any_with_component::<Root>.and_then(not(any_with_component::<Meter>))),
+    app.init_match_resource::<Combo>()
+        .init_match_resource::<Popups>()
+        .add_systems(
+            Update,
             (
-                track.run_if(resource_exists::<ActorData>),
-                animate.run_if(any_with_component::<Meter>.and_then(resource_exists::<Parts>)),
+                load.run_if(
+                    resource_exists::<Assets<AudioSource>>.and_then(not(resource_exists::<Chimes>)),
+                ),
+                spawn.run_if(any_with_component::<Root>.and_then(not(any_with_component::<Meter>))),
+                (
+                    track.run_if(resource_exists::<ActorData>),
+                    animate.run_if(any_with_component::<Meter>.and_then(resource_exists::<Parts>)),
+                )
+                    .chain(),
             )
-                .chain(),
-        ),
-    );
+                .in_set(MatchSystems),
+        );
 }
 
 /// Seconds after the last hit the combo breaks.
@@ -351,6 +355,13 @@ struct Pop {
     kill: bool,
     points: u32,
 }
+
+/// The popup slots (one per [`Parts::pops`] node) and the start of the banner shown last.
+#[derive(Resource, Default)]
+struct Popups {
+    pops: [Option<Pop>; POPS],
+    shown_banner: f32,
+}
 /// Count punch and multiplier pop: extra scale and seconds.
 const PUNCH: (f32, f32) = (0.3, 0.12);
 const BADGE: (f32, f32) = (0.6, 0.3);
@@ -644,9 +655,9 @@ fn animate(
     mut bgs: Query<&mut BackgroundColor>,
     mut shadows: Query<&mut BoxShadow>,
     mut grads: Query<&mut BackgroundGradient>,
-    mut pops: Local<[Option<Pop>; POPS]>,
-    mut shown_banner: Local<f32>,
+    mut popups: ResMut<Popups>,
 ) {
+    let Popups { pops, shown_banner } = &mut *popups;
     let (now, p) = (time.elapsed_secs(), &*parts);
     let show = |on| {
         if on {

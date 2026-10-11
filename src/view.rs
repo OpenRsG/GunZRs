@@ -128,8 +128,28 @@ pub struct Shot {
     path: String,
     frame: u32,
     /// Frame at which the image is captured; later frames still render and the app exits
-    /// 60 frames after it.
-    pub capture: u32,
+    /// 60 frames after it. [`Shot::PENDING`] until the screen being shown knows when.
+    capture: u32,
+}
+
+impl Shot {
+    /// No capture frame yet (a loading screen); `GUNZ_SEQ` saves every frame meanwhile.
+    const PENDING: u32 = u32::MAX / 2;
+
+    /// Frames rendered so far.
+    pub fn frame(&self) -> u32 {
+        self.frame
+    }
+
+    /// Captures `frames` frames from now.
+    pub fn capture_in(&mut self, frames: u32) {
+        self.capture = self.frame + frames;
+    }
+
+    /// Waits for the next screen to say when to capture.
+    pub fn pending(&mut self) {
+        self.capture = Self::PENDING;
+    }
 }
 
 /// Waits for pipelines to compile, captures the camera target, then exits.
@@ -151,7 +171,14 @@ fn take_shot(
         .filter(|_| shot.path.contains('%'))
         .map_or(0, |s| (s * 60.0) as u32);
     let lead = shot.capture.saturating_sub(shot.frame);
-    if shot.frame <= shot.capture && lead <= span && lead % 3 == 0 {
+    let pending = shot.capture == Shot::PENDING;
+    if shot.frame <= shot.capture
+        && if pending {
+            span > 0 && shot.frame % 3 == 0
+        } else {
+            lead <= span && lead % 3 == 0
+        }
+    {
         let path = shot.path.replace('%', &format!("{:05}", shot.frame));
         commands
             .spawn(Screenshot::image(target.handle.clone()))

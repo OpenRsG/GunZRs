@@ -2,7 +2,7 @@
 //! Controls: WASD move, Space/C up/down, Shift fast, hold right mouse to look, Esc quit.
 //! `--shot` renders one 1280x720 frame from the spawn point without opening a window.
 
-use bevy::prelude::*;
+use bevy::{ecs::schedule::ScheduleLabel, prelude::*};
 use gunz::{
     effect::{self, FxPlugin},
     level::{Level, LevelPlugin},
@@ -57,7 +57,7 @@ fn main() -> AppExit {
     );
 
     let mut app = view::app(&map_name, shot);
-    app.add_plugins((LevelPlugin, FxPlugin(time)))
+    app.add_plugins((LevelPlugin(Startup.intern()), FxPlugin(time)))
         .insert_resource(Level { vfs, map: level })
         .insert_resource(ViewOverride(view))
         .add_systems(Startup, spawn_view)

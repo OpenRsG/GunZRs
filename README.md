@@ -35,6 +35,9 @@ cargo run --release --bin gunz-play -- "/path/to/GUNZ THE DUEL"
 ./start.sh                                               # same, also tries the Flatpak install (GUNZ_GAME=DIR overrides)
 ```
 
+The menu, the loading screen (map name, step and a bar) and the match share one window and one
+process: START, MAIN MENU and PLAY AGAIN never close and reopen it.
+
 | Steam install | `GAME` folder |
 |---|---|
 | Linux (native) | `~/.steam/steam/steamapps/common/GUNZ THE DUEL` |
@@ -128,8 +131,8 @@ each input sequence was played headless and its log checked (the juggle's last h
 | Reload shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon |
 | Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |
 | Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump |
-| Wall hang | In the air against a wall with a blade, hold guard; forward + jump while hanging climbs |
-| Butterfly, slide | Slash, then guard before the recovery ends: you can move while the guard is up, and emote (slide); jump or dash out of it |
+| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift / right mouse) with any weapon that allows wall moves: you cling and float there for as long as you hold it; forward + jump climbs, jump alone kicks off the wall, letting go drops |
+| Butterfly | Slash, then guard before the recovery ends: the guard cancels the recovery (it roots you like any guard); jump or dash out of it |
 | Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block; jump, slash, block, dash, slash, block; or jump, slash, block three times (a jump pressed just before landing is kept) |
 | Block cancel (quadruple BF) | Guard during a slash lands the hit at once and goes straight to the guard; press guard with the next direction for the glitch rhythm |
 | Quick launch, juggle | Uppercut (guard + attack), guard to cancel its recovery; an uppercut on an airborne launched enemy keeps them up; flip, block, jump, dash, slash, block |
@@ -155,7 +158,7 @@ climb a wall with a hang to reach an enemy on a ledge.
 | Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
 | Characters | Man and woman models; every clothing piece of the item data (102 chests, 50 legs, 33 hair/hats... for the man) chosen per slot with optional dyes on the PLAYER page, live preview (drag to turn, zoom, framing per body part); bots wear random clothes; skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
 | Movement | Run, jump, tumble, air dash, wall kick, wall run, wall hang and climb, falls; run speed, jump, gravity, fall speed and wall kicks measured from public match replays; rocket launchers and machine guns slow you and block wall moves, as their item data says |
-| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, slide, juggle, and the K-style cancels (see "K-style techniques") |
+| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, juggle, and the K-style cancels (see "K-style techniques") |
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera; optional fixed (non-random) bullet spread |

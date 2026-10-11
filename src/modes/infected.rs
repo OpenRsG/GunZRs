@@ -101,13 +101,19 @@ fn infect(
     *name = Name::new(format!("{}{TAG}", name_of(name)));
 }
 
+/// The match's patient-zero draw: its random seed and the last round drawn for.
+#[derive(Resource, Default)]
+pub(super) struct Picks {
+    seed: u32,
+    round: u32,
+}
+
 /// Draws patient zero when a round goes live, turns the survivors a zombie kills, and makes
 /// everyone a survivor again (loadout back) when a new round begins.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spread(
     mut commands: Commands,
-    mut seed: Local<u32>,
-    mut picked: Local<u32>,
+    mut picks: ResMut<Picks>,
     round: Res<Round>,
     data: Res<ActorData>,
     mut new_round: MessageReader<NewRound>,
@@ -144,21 +150,21 @@ pub(super) fn spread(
         killed.clear();
         return;
     }
-    if *picked != round.n {
-        *picked = round.n;
+    if picks.round != round.n {
+        picks.round = round.n;
         let mut alive: Vec<Entity> = actors.iter().filter(|a| !a.5).map(|a| a.0).collect();
         alive.sort_unstable();
-        if *seed == 0 {
+        if picks.seed == 0 {
             // like the quest roll: `GUNZ_SEED=N` fixes it, otherwise the clock; small seeds
             // give alike first xorshift outputs, so scramble
             let s: u32 = std::env::var("GUNZ_SEED")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_else(|| crate::profile::wall().subsec_nanos().max(1));
-            *seed = s.wrapping_mul(0x9E37_79B1) | 1;
+            picks.seed = s.wrapping_mul(0x9E37_79B1) | 1;
         }
         if !alive.is_empty() {
-            let e = alive[(rnd(&mut seed) * alive.len() as f32) as usize % alive.len()];
+            let e = alive[(rnd(&mut picks.seed) * alive.len() as f32) as usize % alive.len()];
             if let Ok((_, mut name, mut v, load, ..)) = actors.get_mut(e) {
                 infect(
                     &mut commands,

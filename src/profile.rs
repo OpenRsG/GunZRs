@@ -16,6 +16,7 @@ use crate::{
     level::Level,
     menu::Mode,
     mrs::Vfs,
+    phase::{MatchStart, MatchSystems},
     session::{Clock, Rules, StartVitals},
     shop::ShopData,
     slashfx::Slash,
@@ -499,13 +500,18 @@ pub struct ProfilePlugin;
 impl Plugin for ProfilePlugin {
     fn build(&self, app: &mut App) {
         let profile = Profile::open(app.world().contains_resource::<Shot>());
-        app.insert_resource(MatchGain {
-            from_level: profile.level(),
-            ..default()
-        })
-        .insert_resource(profile)
-        .add_systems(Startup, load_ranks)
-        .add_systems(Update, (gear_bonus, earn, keep_loot, finish, save).chain());
+        // `MatchGain` is inserted at every match start (`from_level`: the level then)
+        app.insert_resource(profile)
+            .add_systems(MatchStart, load_ranks.run_if(not(resource_exists::<Ranks>)))
+            .add_systems(
+                Update,
+                (
+                    (gear_bonus, earn, keep_loot, finish)
+                        .chain()
+                        .in_set(MatchSystems),
+                    save.after(finish),
+                ),
+            );
     }
 }
 

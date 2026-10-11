@@ -791,6 +791,21 @@ fn lerp(a: Color, b: Color, t: f32) -> Color {
     Color::from(LinearRgba::from(a).mix(&LinearRgba::from(b), t.clamp(0.0, 1.0)))
 }
 
+/// Frame-to-frame state of the panels of one match: shown bar fractions `[hp, ap]` with their
+/// trails, seconds before the trails drain, last values and the applied HP tier ([`vitals`]);
+/// last position, smoothed speed (m/s) and shot kick (px) ([`reticle`]); the longest respawn
+/// wait ([`scores`]); notice pop age and the time left last frame ([`banner`]).
+#[derive(Resource, Default)]
+pub(super) struct Smooth {
+    shown: [f32; 4],
+    hold: f32,
+    seen: [f32; 2],
+    hp_tier: usize,
+    kick: (Vec3, f32, f32),
+    respawn_max: f32,
+    banner: (f32, f32),
+}
+
 /// Health and armour: bar widths with their trails, numbers, the damage pop, status effects, the
 /// hit flash and the low-health vignette.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -804,12 +819,15 @@ pub(super) fn vitals(
     settings: Res<Settings>,
     profile: Option<Res<Profile>>,
     mut low: Query<(&mut BackgroundGradient, &mut Visibility), (With<LowHp>, Without<Fill>)>,
-    // shown fractions [hp, ap], their trails, seconds before the trails drain, last values
-    mut shown: Local<[f32; 4]>,
-    mut hold: Local<f32>,
-    mut seen: Local<[f32; 2]>,
-    mut hp_tier: Local<usize>,
+    mut st: ResMut<Smooth>,
 ) {
+    let Smooth {
+        shown,
+        hold,
+        seen,
+        hp_tier,
+        ..
+    } = &mut *st;
     let Ok((vitals, dead, status)) = player.single() else {
         return;
     };
@@ -940,9 +958,9 @@ pub(super) fn reticle(
     player: Query<(Entity, &GlobalTransform, &Loadout, Has<Dead>), With<Player>>,
     mut ticks: Query<(&Tick, &mut UiTransform, &mut BackgroundColor)>,
     mut shows: Query<(&Show, &mut Visibility, &mut UiTransform), Without<Tick>>,
-    // last position, smoothed speed (m/s), shot kick (px)
-    mut state: Local<(Vec3, f32, f32)>,
+    mut st: ResMut<Smooth>,
 ) {
+    let state = &mut st.kick;
     let Ok((me, at, loadout, dead)) = player.single() else {
         return;
     };
@@ -1156,8 +1174,9 @@ pub(super) fn scores(
             Without<TeamScore>,
         ),
     >,
-    mut respawn_max: Local<f32>,
+    mut st: ResMut<Smooth>,
 ) {
+    let respawn_max = &mut st.respawn_max;
     for mut n in &mut line {
         let want = if clock.as_ref().is_some_and(|c| !c.header.is_empty()) {
             Display::Flex
@@ -1298,8 +1317,9 @@ pub(super) fn banner(
     marks: Res<Marks>,
     real: Res<Time<Real>>,
     banner: Single<(&mut Text, &mut TextColor, &mut UiTransform), With<Banner>>,
-    mut age: Local<(f32, f32)>,
+    mut st: ResMut<Smooth>,
 ) {
+    let age = &mut st.banner;
     let (mut text, mut color, mut tf) = banner.into_inner();
     let (left, line) = &marks.notice;
     // a fresh notice (more time left than last frame) restarts the pop

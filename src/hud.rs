@@ -3,6 +3,7 @@
 //! `interface/default/*.png`, decals from `sfx/`. Sound lives in `audio.rs`. Format notes:
 //! `docs/formats.md` (HUD and sound).
 
+use crate::phase::{MatchApp, MatchSystems};
 use crate::{
     actor::ActorData,
     col::MapCollision,
@@ -25,10 +26,11 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Marks>()
+        app.init_match_resource::<Marks>()
             .add_message::<Notice>()
-            .init_resource::<Hurt>()
-            .init_resource::<Shake>()
+            .init_match_resource::<Hurt>()
+            .init_match_resource::<Shake>()
+            .init_match_resource::<panels::Smooth>()
             .add_plugins((fx::plugin, feed::plugin, combo::plugin))
             .add_systems(
                 Update,
@@ -53,11 +55,17 @@ impl Plugin for HudPlugin {
                     decals
                         .run_if(resource_exists::<Decals>)
                         .run_if(resource_exists::<MapCollision>),
-                ),
+                )
+                    .in_set(MatchSystems),
             )
             // The shake edits the camera's global transform after propagation, so the camera
             // controller keeps writing its plain transform and nothing accumulates.
-            .add_systems(PostUpdate, shake_camera.after(TransformSystems::Propagate));
+            .add_systems(
+                PostUpdate,
+                shake_camera
+                    .after(TransformSystems::Propagate)
+                    .in_set(MatchSystems),
+            );
     }
 }
 

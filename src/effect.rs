@@ -8,6 +8,7 @@ use crate::{
     elu::Elu,
     model::{self, Model, Textures},
     mrs::Vfs,
+    phase::{MatchApp, MatchSystems},
     view::{self, SCALE},
 };
 use bevy::{
@@ -266,19 +267,24 @@ pub struct WarmFxPlugin;
 
 impl Plugin for WarmFxPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, warm);
+        app.init_match_resource::<WarmFrames>()
+            .add_systems(Update, warm.in_set(MatchSystems));
     }
 }
+
+/// Frames [`warm`] has seen the camera in this match.
+#[derive(Resource, Default)]
+struct WarmFrames(u8);
 
 /// Waits for the camera's transform to propagate (second frame it exists), then runs once.
 fn warm(
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut vfx: MessageWriter<Vfx>,
-    mut seen: Local<u8>,
+    mut seen: ResMut<WarmFrames>,
 ) {
     let Ok(cam) = camera.single() else { return };
-    *seen = seen.saturating_add(1);
-    if *seen != 2 {
+    seen.0 = seen.0.saturating_add(1);
+    if seen.0 != 2 {
         return;
     }
     let at = Transform {

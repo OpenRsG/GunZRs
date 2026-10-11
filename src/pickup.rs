@@ -13,6 +13,7 @@ use crate::{
     elu::{self, Elu},
     game::{Loadout, Vitals},
     level::Level,
+    phase::{MatchPostStart, MatchSystems},
     session::Rules,
     view::{SCALE, to_bevy},
 };
@@ -75,8 +76,8 @@ pub struct PickupPlugin;
 impl Plugin for PickupPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Picked>()
-            .add_systems(PostStartup, spawn_items)
-            .add_systems(Update, collect);
+            .add_systems(MatchPostStart, spawn_items)
+            .add_systems(Update, collect.in_set(MatchSystems));
     }
 }
 

@@ -624,10 +624,23 @@ fonts of `ui.rs`. Maps are the 30 directories under `maps/` holding an `.RS` fil
 candidates are zitem weapons that have a name and a model (melee -> slot 1, range -> slots 2/3,
 custom -> slot 4; `character` part sets: 170 for the man, 259 for the woman).
 
-`gunz-play` without MAP opens the menu; Start re-executes the binary with the chosen flags
-(`--map` preselects in the menu, `--menu-page match|player --shot` renders a menu screen headlessly);
-the pause menu / match-end buttons exit with code 3 (back to the menu) or 4 (same match again) and
-the launcher re-executes accordingly. Rules: see "Game modes"; the result is VICTORY / DEFEAT / DRAW
+`gunz-play` without MAP opens the menu (`--map` preselects in the menu, `--menu-page match|player --shot`
+renders a menu screen headlessly). The menu, the loading screen and the match are three screens
+(`phase::Screen`) of one Bevy app, so a run is one process and one window (winit cannot make a second
+event loop, which is why the old flow re-executed the binary): Start leaves the menu and shows the
+loading screen (map name, the step being read and a bar) while the map, collision, characters and items
+(and a quest plan or the LAN handshake) are read on a task pool thread; then the level is built and the
+match starts, with the loading screen kept over its first 45 frames (the pipelines compile meanwhile).
+The pause menu / match-end buttons send `phase::Leave`: MAIN MENU despawns the match and shows the
+menu again, PLAY AGAIN goes through the loading screen with the same config. Leaving a match
+despawns every entity of the app except the start-up ones (window, pointers) and the music voices
+(`phase::Persist`), removes every resource created after loading began, resets the `init_match_resource`
+ones and starts the clocks over; systems of a match are in `MatchSystems`, its start-up systems in
+`MatchStart`/`MatchPostStart` (a quest's sector swap runs the latter again). In the browser a new match
+or the menu is still a page reload (`gunzPlay`, `gunzExit(3|4)`). Headless runs can drive the transitions:
+`GUNZ_MENU_START=SECS[,..]` presses START that long after the menu opens and `GUNZ_LEAVE=SECS:menu|again[,..]`
+presses MAIN MENU / PLAY AGAIN when the match clock reaches SECS (one entry per opening / match; the run's
+other options apply to every match). Rules: see "Game modes"; the result is VICTORY / DEFEAT / DRAW
 for the player and the HUD scoreboard stays up with the buttons.
 
 ### Dash and slash trails, the EFFECTS panel (`src/dashfx.rs`, `src/slashfx.rs`, `menu::demo`; **not retail**)
@@ -1495,8 +1508,12 @@ No new file format; how the retail character animations are used (**observed** =
   `runW_downF` (`runW_downB` when turned away). Jump during a wall run = wall kick.
 - Guard (**observed** clips `guard_start`, `guard_idle`, `guard_block1/2`, `guard_cancel`;
   melee motion types with them only): right mouse / script key `guard` on the ground. The actor
-  carries `Guarding` while raised (movement locked); combat writes `Blocked(entity)` to play a
-  block clip. Camera: swept sphere (0.25 m) instead of a ray, and it ducks under low ceilings.
+  carries `Guarding` while raised and is rooted for as long as any guard clip plays on the ground
+  (a butterfly's guard too; in the air it keeps its momentum). `melee.rs` asks for the next guard
+  clip a frame before the controller's action ends (`clip_over`), so the body never runs free
+  between `guard_start` and `guard_idle`. Combat writes `Blocked(entity)` to play a
+  block clip. In the air against a wall the same key is the wall hang ("K-style techniques").
+  Camera: swept sphere (0.25 m) instead of a ray, and it ducks under low ceilings.
 - Weapon use: shots at `delay` ms; magazine / reserve from `magazine` and `maxbullet - magazine`
   (**inferred** that `maxbullet` counts the magazine); a reload lasts the character's `reload`
   clip (`load` for grenade/item types): 1.33 s 1h pistol/SMG, 2.0 s the others (**inferred**:
@@ -1699,12 +1716,12 @@ the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=d
 | Reload shot | A reload started within `RS_WINDOW` 0.5 s of a shot, cancelled by a switch, skips the `SWITCH_DELAY` 0.3 s of the next weapon (the magazine stays as it was) | `tech: reload cancel`, `tech: reload shot` |
 | Swapshot | Every loadout slot has its own fire delay (`Actor::ready`); a shot from another gun within 0.6 s of the last shot | `tech: swapshot` |
 | Gravity cancel | A slash started in the air at a rising speed <= 4 m/s (near the top of a jump, or falling) zeroes the vertical speed and the gravity for 0.25 s, once per jump | `tech: gravity cancel` |
-| Wall hang, wall hang cancel | A melee weapon, guard held in the air, a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, pressed into the wall, faces it; plays `runW_downF`). Forward + jump held climbs at 4 m/s (plays `runW`). Releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel` |
+| Wall hang, wall hang cancel | Guard held (Shift / right mouse) in the air with any weapon that allows wall moves (a gun's guard has no other use; rocket launchers and machine guns block wall moves), a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, height pinned, pressed into the wall, faces it; plays `runW_downF`). It lasts exactly as long as the guard is held: no time limit and no slide-off (the capsule pressed into a leaning wall would creep up or down it, so its height is held). Forward + jump held climbs at 4 m/s (plays `runW`); a jump without forward kicks off the wall (`jumpwall*`, as from a wall run); releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel` |
 | Multi wall run, aerial wall run | A wall run may start from a tumble or a cancelled action, and a kick restores the once-per-jump wall run (`wall_spent`) | `tech: multi wall run` |
 | Block cancel (quadruple butterfly) | A guard pressed `BLOCK_CANCEL` 0.05 s or more into a slash (combo, finisher, air or dive slash; not the uppercut, the landing slam or a charged swing), before its hit frame, lands the slash at once and goes on as the butterfly guard; the dash pressed with it (a double tap whose second tap comes with the guard, or Dash + guard) leaves the guard at once. The item `delay` (katana 329 ms) still spaces the slashes. A guard held from before the slash is not a press | `tech: block cancel` |
 | Extended flip | A dash out of the uppercut once its blade has landed | `tech: extended flip` |
-| Butterfly, slide | The guard that cancels a blow's recovery (`melee.rs`, from `Phase::Blow` after the hit frame or `Phase::Recover`) is movable: the guard clips play as an `ActionMove::Control(1.0)` action (run speed, no walk animation); an emote key plays the emote clip while sliding (no cancel by walking); dash and jump leave it as before (the guard action is cancellable at once) | `tech: butterfly`, `tech: slide`, `tech: slide emote` |
-| Air butterfly, double / triple BF | The same guard also cancels an air slash (`attack_Jump`, `jump_slash1`) in the air once its hit frame is past (`air_bf`): the guard clips play as a movable action in the air, the actor keeps its momentum and may air-dash (the slash gave the dash back), kick a wall or slash again (a click with the air guard up is another air slash, not an uppercut); the guard goes on as the normal slide guard after landing while the button is held. JUMP, DASH, SLASH, BLOCK and JUMP, SLASH, BLOCK, DASH, SLASH, BLOCK repeat as long as the slash delay allows | `tech: air butterfly` |
+| Butterfly | The guard that cancels a blow's recovery (`melee.rs`, from `Phase::Blow` after the hit frame or `Phase::Recover`) is an ordinary rooted guard (`ActionMove::Locked`): holding it on the ground does not move the actor (it was a movable `Control(1.0)` "slide" guard that kept running in the guard pose, a user-reported glitch after mashing attack and guard); dash and jump leave it as before (the guard action is cancellable at once) | `tech: butterfly`, `tech: recovery cancel` |
+| Air butterfly, double / triple BF | The same guard also cancels an air slash (`attack_Jump`, `jump_slash1`) in the air once its hit frame is past (`air_bf`): the guard clips play as a rooted action (no steering), the actor keeps its momentum in the air and may air-dash (the slash gave the dash back), kick a wall or slash again (a click with the air guard up is another air slash, not an uppercut); the guard goes on as the normal guard after landing while the button is held. JUMP, DASH, SLASH, BLOCK and JUMP, SLASH, BLOCK, DASH, SLASH, BLOCK repeat as long as the slash delay allows | `tech: air butterfly` |
 | Quick launch | The same guard cancel after an uppercut | `tech: quick launch` |
 | Insta-kill | After the hit frame of an uppercut (`Acting::cancel_from`) a weapon switch is accepted on the ground as well and cancels the launch recovery (the gun still has the 0.3 s draw delay: the launched actor is airborne for about 0.5 s) | `tech: insta-kill`, `tech: insta-kill shot` |
 | Light step / silent jump | A dash that comes out of a slash (the actor is in a blow action) starts its tumble clip without the clip's `fx_dash` cue (`Tech::silent`) | `tech: light step` |
@@ -1776,17 +1793,39 @@ faces a wall 7 m ahead). Observed lines:
 - `2:0.1;wait:0.5;attack:0.1;reload:0.1;3:0.1;attack:0.5` -> `reload: ... (mag 6+24)`, `tech: reload cancel`, `tech: reload shot` 0.1 s later.
 - `wait:0.2;w:0.5;w+jump:0.25;w+guard:0.4;w+guard+jump:0.8` (at the wall) -> `tech: wall hang`, then `runW` climbing to the
   ceiling (`.local/moves/hang1.png`, `hang2.png`).
+- Wall hang held and released (`W`, per-frame temporary log of the player's height, sheets `.local/MeleeWall/sheet_hang.png`,
+  `sheet_fall.png`): `w:0.5;w+jump:0.25;w:0.6;guard:8;wait:1.5` -> `tech: wall hang` at 2.85 s, `State::Hang` until 10.83 s with
+  y = 3.646 m in every frame (before: it crept up 0.03 m in 8 s, the capsule pressed into the slightly leaning wall), then
+  `jumpD` and the landing at 11.40 s. The same with a gun first (`2:0.1;wait:0.5;...`): hang 3.45-11.43 s, y = 3.646 m (before:
+  Shift did nothing, the actor slid down). Side wall run in the corridor (`--at 1391,1300,2 --yaw 0`,
+  `d+w:0.2;d+w+jump:0.1;w:0.3;guard:4`): hang at y = 1.055 m for 4 s, katana or gun. Forward released before the guard
+  (`w:0.5;w+jump:0.25;wait:0.3;guard:2`, also with 0.1 s, and `w:0.3;wait:0.3`): hang (before: none unless the wall was touched
+  in the last 0.1 s). `...;guard:1.0;guard+jump:0.1` -> `jumpwallF` (3 m/s away from the wall; before: the jump did nothing in
+  a hang). An air slash against the wall, then the guard (`w:0.5;w+jump:0.1;attack:0.05;wait:0.06;guard:2`): hang (before: none).
 - `wait:0.2;w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.1;wait:0.25;jump:0.1` -> `jumpwallF`, `tech: wall slash cancel`,
   `tech: wall flying` (a second kick off the same wall).
 - `--at 1391,1460,6000` (60 m up) with `w+dash:0.15` taps -> `tech: air dash` at 1.62 s, `tech: super dash` at 2.08 s.
 - `wait:0.3;jump:0.15;w+dash:0.15;w+attack:0.05;wait:0.2;guard:0.35` -> `tech: air dash`, `tech: dash cancel`, then
-  `melee: tech: air butterfly (guard cancels the recovery, may move)`, `guard Hold` in the air, `guard Release`.
+  `melee: tech: air butterfly (guard cancels the recovery)`, `guard Hold` in the air, `guard Release`.
 - `wait:0.3;jump:0.1;attack:0.05;wait:0.2;guard:0.1;w+dash:0.12;w+attack:0.05;wait:0.2;guard:0.1;w+dash:0.12;
   w+attack:0.05;wait:0.2;guard:0.3` (jump slash, block, dash, slash, block, dash, slash, block) -> `air butterfly` at 2.15 s,
   `air dash` + `dash cancel` + `gravity cancel`, `light step` (a dash right after a slash), `air butterfly` again at 3.22 s.
 - `wait:0.2;guard:0.2;guard+attack:0.05;wait:0.4;2:0.1;wait:0.2;attack:0.3` with `--bots 1 --bots-ahead 1.8 --skill 0` ->
   `uppercut hits Pyon` at 2.18 s, `t=2.37 tech: insta-kill`, `t=2.67 tech: insta-kill shot` (the target is still in the air).
-- `attack:0.05;wait:0.2;guard+w:0.5;guard+w+wave:0.6` -> `tech: butterfly`, then `tech: slide emote (wave)`.
+- `attack:0.05;wait:0.2;guard+w:0.5;guard+w+wave:0.6` -> `tech: butterfly`, the actor stays put (rooted guard) and the emote key is
+  ignored while it is up.
+- Guard mash (user report: after hitting attack and guard alternately the character stays in the guard pose and slides over the
+  floor; `.local/MeleeWall/mash.py`, per-frame temporary logs of melee's `Phase`, the controller's state and played clip). Random
+  scripts of 40-60 pulses (attack, guard, both, nothing; w, a, s, d, w+a, w+d held, jump and dash now and then) in the Mansion
+  corridor, counting (A) runs of two frames or more with a guard clip playing on the ground while the actor moves at 10 m/s and (B)
+  frames in which melee was in a guard phase but the controller's action had ended and the body ran free (the `guard_start` to
+  `guard_idle` hand-over), before / after: 24 scripts of 0.02-0.12 s pulses 88 / 46 -> 0 / 0; the same against two skill-1 bots
+  (`--bots 2 --bots-ahead 1.8 --skill 1`) 45 / 24 -> 0 / 0; 12 scripts of 0.02-0.08 s pulses with w held 96 / 36 -> 0 / 0; 12
+  of 0.1-0.5 s pulses with w held 146 / 87 -> 0 / 0 (before, the longest run was 82 frames = 1.4 s: the movable "slide" guard of a
+  butterfly stays up and runs at full speed while the button is held). `w+attack:0.05;w+guard:1.0` with `GUNZ_SEQ`: the corridor
+  scrolls past the guard pose before (`.local/MeleeWall/sheet_before.png`), the scenery stands still after (`sheet_after.png`).
+  `.local/tech/all.sh` before and after: the player's `tech:` lines of all 15 techniques are identical (`qbf` only differs in bot
+  hits: the player's later butterfly slashes now connect, they used to slide out of reach).
 - `guard:0.2;guard+attack:0.1;guard:0.3;...` with `--bots 1 --bots-ahead 1.8 --skill 0` -> `tech: quick launch`.
 - `gunz-play Mansion --mode tdm --bots 8 --skill 1 --script wait:60 --time 60` (bots only fight each other): `bot X: reload shot`,
   `swapshot`, `slash shot` (+ `tech: slash shot`), `insta-kill (switch to slot 1)` (+ `tech: insta-kill`, `tech: insta-kill shot`),
@@ -2543,8 +2582,7 @@ No game file format; **observed** = read from a named Steam file on the developm
   `~/.local/share/Steam`, `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` (Flatpak) and
   `~/Library/Application Support/Steam` (macOS), and for each the root and every `path` library.
   The Windows and macOS root locations are **inferred** (Steam's defaults, not checked here).
-- Restarting into a match or back to the menu (`relaunch`) `exec`s on Unix; elsewhere it spawns
-  the new process and exits (**inferred** to be equivalent: the old window is gone either way).
+- Going back to the menu or to a new match is in-process (`phase::Leave`); there is no re-exec.
 - `Vfs::mount` keys archives by lowercased, `/`-normalised relative paths, so Windows `\` separators
   and case-insensitive file systems need no special handling.
 

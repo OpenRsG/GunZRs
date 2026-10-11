@@ -17,6 +17,7 @@ use crate::{
     },
     level::{self, Level},
     map, modes,
+    phase::{MatchPostStart, MatchSystems},
     pickup::{ItemKind, WorldItem},
     props,
     session::{Clock, HOLD, Rules, freeze},
@@ -1075,6 +1076,10 @@ pub struct Quest {
     /// Rental drops (shop item id, `rent_period` hours), one entry per pickup.
     rented: Vec<(u32, u32)>,
     swap: bool,
+    /// `start` has run (a sector swap reruns `MatchPostStart`).
+    started: bool,
+    /// The stage and phase `wait_room` last placed the player for.
+    seen: Option<(usize, Phase)>,
     rng: u32,
     banner: String,
     /// Player plus allied bots (challenge HP balancing).
@@ -1145,6 +1150,8 @@ impl Quest {
             loot: Vec::new(),
             rented: Vec::new(),
             swap: false,
+            started: false,
+            seen: None,
             rng: seed | 1,
             banner: String::new(),
             party: 1 + bots as u32,
@@ -1287,32 +1294,29 @@ pub struct QuestPlugin;
 impl Plugin for QuestPlugin {
     fn build(&self, app: &mut App) {
         let on = resource_exists::<Quest>;
-        app.add_systems(PostStartup, start.run_if(on)).add_systems(
-            Update,
-            (
-                allies,
-                kills,
-                drive,
-                collect,
-                banner,
-                change_sector,
-                wait_room,
-            )
-                .chain()
-                .run_if(on),
-        );
+        app.add_systems(MatchPostStart, start.run_if(on))
+            .add_systems(
+                Update,
+                (
+                    allies,
+                    kills,
+                    drive,
+                    collect,
+                    banner,
+                    change_sector,
+                    wait_room,
+                )
+                    .chain()
+                    .run_if(on)
+                    .in_set(MatchSystems),
+            );
     }
 }
 
 /// Dead actors stay dead for the sector; the first map's NPCs are queued once the map exists
-/// (`change_sector` reruns `PostStartup`, hence the guard).
-fn start(
-    mut quest: ResMut<Quest>,
-    mut rules: ResMut<Rules>,
-    level: Res<Level>,
-    mut done: Local<bool>,
-) {
-    if std::mem::replace(&mut *done, true) {
+/// (`change_sector` reruns `MatchPostStart`, hence the guard).
+fn start(mut quest: ResMut<Quest>, mut rules: ResMut<Rules>, level: Res<Level>) {
+    if std::mem::replace(&mut quest.started, true) {
         return;
     }
     rules.respawn = HOLD;
@@ -1823,20 +1827,19 @@ fn banner(
 /// *inferred* from the name) and drops to the first `spawn_solo` when the NPCs start to come.
 /// A `--at` / `--yaw` start is left alone.
 fn wait_room(
-    quest: Res<Quest>,
+    mut quest: ResMut<Quest>,
     level: Res<Level>,
     setup: Option<Res<PlayerSetup>>,
     mut player: Query<(&mut Transform, &mut Intent, &mut Motor), With<Player>>,
-    mut seen: Local<Option<(usize, Phase)>>,
 ) {
     let now = (quest.stage, quest.phase);
-    if *seen == Some(now) || setup.is_some_and(|s| s.at.is_some() || s.yaw.is_some()) {
+    if quest.seen == Some(now) || setup.is_some_and(|s| s.at.is_some() || s.yaw.is_some()) {
         return;
     }
     let Ok((mut tf, mut intent, mut motor)) = player.single_mut() else {
         return;
     };
-    *seen = Some(now);
+    quest.seen = Some(now);
     let spot = match now.1 {
         Phase::Intro => level
             .map
@@ -1859,7 +1862,7 @@ fn wait_room(
 
 /// Swaps the map for the next sector: drop everything of the old one, load the new `Level` and
 /// `MapCollision`, rerun the map-dependent startup systems (level, props, spawn table, then
-/// the whole `PostStartup`: allied bots, nav, items), stand the player on the first spawn.
+/// the whole `MatchPostStart`: allied bots, nav, items), stand the player on the first spawn.
 fn change_sector(world: &mut World) {
     if !world.resource::<Quest>().swap {
         return;
@@ -1905,7 +1908,7 @@ fn change_sector(world: &mut World) {
     let _ = world.run_system_cached(level::spawn_level);
     let _ = world.run_system_cached(props::spawn_props);
     let _ = world.run_system_cached(modes::spawn_table);
-    world.run_schedule(PostStartup);
+    world.run_schedule(MatchPostStart);
     let spawn = world.resource::<Level>().spawn_points().first().copied();
     if let (Some((pos, dir)), Ok((mut tf, mut intent, mut motor))) = (
         spawn,
@@ -2201,6 +2204,8 @@ mod tests {
             loot: vec![],
             rented: vec![],
             swap: false,
+            started: false,
+            seen: None,
             rng: 1,
             banner: String::new(),
             party: 1,

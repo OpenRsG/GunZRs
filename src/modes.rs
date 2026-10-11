@@ -18,6 +18,7 @@ use crate::{
     level::Level,
     menu::Mode,
     mrs::Vfs,
+    phase::{MatchApp, MatchPostStart, MatchStart, MatchSystems},
     session::{Clock, HOLD, ROUND_SECS, Rules},
     ui::{self, ACCENT, DANGER, DIM, INK, PLATE},
     view::{SCALE, to_bevy},
@@ -73,68 +74,65 @@ pub struct ModesPlugin;
 
 impl Plugin for ModesPlugin {
     fn build(&self, app: &mut App) {
+        // (a system's own conditions are evaluated even while its set's one is false)
+        use bevy::ecs::system::If;
         let mode = |m: Mode| resource_exists::<Rules>.and_then(move |r: Res<Rules>| r.mode == m);
-        app.init_resource::<Round>()
-            .init_resource::<Spectate>()
+        app.init_match_resource::<Round>()
+            .init_match_resource::<Spectate>()
+            .init_match_resource::<GunmanSeed>()
+            .init_match_resource::<infected::Picks>()
+            .init_match_resource::<dynduel::Running>()
             .add_message::<NewRound>()
-            .add_systems(Startup, spawn_table.run_if(resource_exists::<Rules>))
-            .add_systems(Startup, spy_setup.run_if(mode(Mode::Spy)))
-            .add_systems(PostStartup, dummies.run_if(mode(Mode::Training)))
+            .add_systems(MatchStart, spawn_table.run_if(resource_exists::<Rules>))
+            .add_systems(MatchStart, spy_setup.run_if(mode(Mode::Spy)))
+            .add_systems(MatchPostStart, dummies.run_if(mode(Mode::Training)))
             .add_systems(
                 Update,
                 (
                     gladiator,
                     dead_added,
-                    rounds.run_if(|r: Res<Rules>| r.mode.rounds()),
+                    rounds.run_if(|r: If<Res<Rules>>| r.mode.rounds()),
                     respawn_spots
-                        .run_if(|r: Res<Rules>| !r.mode.rounds() && r.mode != Mode::DynDuel),
+                        .run_if(|r: If<Res<Rules>>| !r.mode.rounds() && r.mode != Mode::DynDuel),
                     die_at.run_if(resource_exists::<DieAt>),
                     protect,
-                    spectate.run_if(|r: Res<Rules>| r.mode.rounds()),
-                    overlay.run_if(|r: Res<Rules>| r.mode.rounds()),
-                    duel_damage.run_if(|r: Res<Rules>| r.mode == Mode::DuelTournament),
-                    berserker.run_if(|r: Res<Rules>| r.mode == Mode::Berserker),
-                    gunman.run_if(|r: Res<Rules>| r.mode == Mode::Gunman),
-                    gungame::gungame.run_if(|r: Res<Rules>| r.mode == Mode::GunGame),
-                    infected::spread.run_if(|r: Res<Rules>| r.mode == Mode::Infected),
-                    infected::upkeep.run_if(|r: Res<Rules>| r.mode == Mode::Infected),
-                    dynduel::dynduel.run_if(|r: Res<Rules>| r.mode == Mode::DynDuel),
+                    spectate.run_if(|r: If<Res<Rules>>| r.mode.rounds()),
+                    overlay.run_if(|r: If<Res<Rules>>| r.mode.rounds()),
+                    duel_damage.run_if(|r: If<Res<Rules>>| r.mode == Mode::DuelTournament),
+                    berserker.run_if(|r: If<Res<Rules>>| r.mode == Mode::Berserker),
+                    gunman.run_if(|r: If<Res<Rules>>| r.mode == Mode::Gunman),
+                    gungame::gungame.run_if(|r: If<Res<Rules>>| r.mode == Mode::GunGame),
+                    infected::spread.run_if(|r: If<Res<Rules>>| r.mode == Mode::Infected),
+                    infected::upkeep.run_if(|r: If<Res<Rules>>| r.mode == Mode::Infected),
+                    dynduel::dynduel.run_if(|r: If<Res<Rules>>| r.mode == Mode::DynDuel),
                 )
                     .chain()
-                    .run_if(resource_exists::<Rules>),
+                    .run_if(resource_exists::<Rules>)
+                    .in_set(MatchSystems),
             );
     }
+}
 
-    /// Gunman and Spy spawn every actor with their whole weapon pool; the mode then equips
-    /// the part an actor carries ([`Equip`]).
-    fn finish(&self, app: &mut App) {
-        let pool = {
-            let world = app.world();
-            let (Some(rules), Some(data)) = (
-                world.get_resource::<Rules>(),
-                world.get_resource::<ActorData>(),
-            ) else {
-                return;
-            };
-            match rules.mode {
-                Mode::Gunman => BLADES
-                    .iter()
-                    .chain(&GUNS)
-                    .filter_map(|k| kind_item(&data.items, *k))
-                    .collect(),
-                Mode::Spy => [
-                    DEFAULT_LOADOUT.as_slice(),
-                    &[FLASHBANG, SMOKE, SPY_BAG, SPY_ICE, SPY_STUN, SPY_MINE],
-                ]
-                .concat(),
-                Mode::Blitzkrieg => crate::blitz::arsenal(&data.items),
-                Mode::GunGame => gungame::ladder(&data.items),
-                _ => return,
-            }
-        };
-        info!("arsenal: {pool:?}");
-        app.insert_resource(Arsenal(pool));
-    }
+/// Gunman and Spy spawn every actor with their whole weapon pool; the mode then equips the part
+/// an actor carries ([`Equip`]). `None` for the modes that use the chosen loadout.
+pub fn arsenal(rules: &Rules, data: &ActorData) -> Option<Arsenal> {
+    let pool = match rules.mode {
+        Mode::Gunman => BLADES
+            .iter()
+            .chain(&GUNS)
+            .filter_map(|k| kind_item(&data.items, *k))
+            .collect(),
+        Mode::Spy => [
+            DEFAULT_LOADOUT.as_slice(),
+            &[FLASHBANG, SMOKE, SPY_BAG, SPY_ICE, SPY_STUN, SPY_MINE],
+        ]
+        .concat(),
+        Mode::Blitzkrieg => crate::blitz::arsenal(&data.items),
+        Mode::GunGame => gungame::ladder(&data.items),
+        _ => return None,
+    };
+    info!("arsenal: {pool:?}");
+    Some(Arsenal(pool))
 }
 
 /// Headless runs: the player dies when the match clock reaches this many seconds.
@@ -1338,9 +1336,13 @@ fn kind_item(items: &Items, kind: WeaponKind) -> Option<u32> {
         .map(|i| i.id)
 }
 
+/// Gunman's random-weapon stream of the match (seeded on first use).
+#[derive(Resource, Default)]
+struct GunmanSeed(u32);
+
 /// Gunman: a random melee weapon and gun for every actor on spawn and on every respawn.
 fn gunman(
-    mut seed: Local<u32>,
+    mut seed: ResMut<GunmanSeed>,
     arsenal: Res<Arsenal>,
     data: Res<ActorData>,
     mut revived: RemovedComponents<Dead>,
@@ -1352,8 +1354,8 @@ fn gunman(
     if who.is_empty() {
         return;
     }
-    if *seed == 0 {
-        *seed = 0x9e37_79b9;
+    if seed.0 == 0 {
+        seed.0 = 0x9e37_79b9;
     }
     let blade = |id: u32| {
         data.items
@@ -1372,8 +1374,8 @@ fn gunman(
             .unwrap_or("?")
     };
     for e in who {
-        let b = blades[(rnd(&mut seed) * blades.len() as f32) as usize % blades.len()];
-        let g = guns[(rnd(&mut seed) * guns.len() as f32) as usize % guns.len()];
+        let b = blades[(rnd(&mut seed.0) * blades.len() as f32) as usize % blades.len()];
+        let g = guns[(rnd(&mut seed.0) * guns.len() as f32) as usize % guns.len()];
         info!(
             "gunman: {} gets {} + {}",
             names.get(e).map_or("?", |n| n.as_str()),

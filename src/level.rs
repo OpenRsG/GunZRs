@@ -4,11 +4,13 @@
 use crate::{
     map,
     mrs::Vfs,
+    phase::MatchSystems,
     props,
     view::{self, SCALE, decode, to_bevy},
 };
 use bevy::{
     asset::{RenderAssetUsages, embedded_asset},
+    ecs::schedule::InternedScheduleLabel,
     image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology},
     pbr::{MaterialPipeline, MaterialPipelineKey},
@@ -56,17 +58,18 @@ impl Level {
     }
 }
 
-/// Registers the map material and its embedded shader.
-pub struct LevelPlugin;
+/// Registers the map material and its embedded shader. The map and its props are spawned by
+/// systems in `.0`: `Startup` in the viewer, [`MatchStart`](crate::phase::MatchStart) in a match.
+pub struct LevelPlugin(pub InternedScheduleLabel);
 
 impl Plugin for LevelPlugin {
     /// Needs [`crate::effect::FxPlugin`] (props use its clock, `txa` and animation systems) and
-    /// a [`Level`] resource inserted before the app runs.
+    /// a [`Level`] resource inserted before `.0` runs.
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<MapMaterial>::default());
         embedded_asset!(app, "map.wgsl");
-        app.add_systems(Startup, (spawn_level, props::spawn_props))
-            .add_systems(Update, props::flutter);
+        app.add_systems(self.0, (spawn_level, props::spawn_props))
+            .add_systems(Update, props::flutter.in_set(MatchSystems));
     }
 }
 

@@ -11,6 +11,7 @@ use crate::{
     col::MapCollision,
     combat::{Vfx, rnd},
     game::{Dead, HitShape, Intent, Killed, Player, Settings, Spectate},
+    phase::{MatchApp, MatchStart, MatchSystems},
     ui::{self, ACCENT, INK},
 };
 use bevy::{
@@ -63,12 +64,17 @@ struct Cam {
     seen: bool,
 }
 
+/// The kill camera in flight, if any.
+#[derive(Resource, Default)]
+struct Active(Option<Cam>);
+
 pub struct KillcamPlugin;
 
 impl Plugin for KillcamPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, make_splat)
-            .add_systems(Update, killcam.after(ActorSet::Camera));
+        app.init_match_resource::<Active>()
+            .add_systems(MatchStart, make_splat)
+            .add_systems(Update, killcam.after(ActorSet::Camera).in_set(MatchSystems));
     }
 }
 
@@ -137,7 +143,7 @@ fn killcam(
     actors: Query<(&GlobalTransform, Option<&HitShape>, Option<&Name>), Without<Camera3d>>,
     mut camera: Single<(Entity, &Camera, &mut Transform), With<Camera3d>>,
     mut tag: Query<(&mut Node, &mut Visibility), With<Tag>>,
-    mut cam: Local<Option<Cam>>,
+    mut cam: ResMut<Active>,
     mut seed: Local<u32>,
     ui: Res<UiScale>,
 ) {
@@ -156,7 +162,7 @@ fn killcam(
         ) else {
             continue;
         };
-        if let Some(old) = cam.take() {
+        if let Some(old) = cam.0.take() {
             commands.entity(old.tag).despawn();
         }
         let chest = v.translation() + Vec3::Y * height(vs) * 0.5;
@@ -210,7 +216,7 @@ fn killcam(
             ))
             .id();
         info!("killcam: {name} killed the player");
-        *cam = Some(Cam {
+        cam.0 = Some(Cam {
             killer: k.killer,
             tag,
             t: 0.0,
@@ -225,19 +231,19 @@ fn killcam(
             seen: false,
         });
     }
-    let Some(c) = cam.as_mut() else { return };
+    let Some(c) = cam.0.as_mut() else { return };
     c.seen |= dead;
     let over = (!dead && (c.seen || c.t > 0.5))
         || !settings.killcam
         || (c.t >= KILLCAM_SECS && spectate.is_some_and(|s| s.0.is_some()));
     let Ok((g, shape, _)) = actors.get(c.killer) else {
         commands.entity(c.tag).despawn();
-        *cam = None;
+        cam.0 = None;
         return;
     };
     if over {
         commands.entity(c.tag).despawn();
-        *cam = None;
+        cam.0 = None;
         return;
     }
     c.t += time.delta_secs();

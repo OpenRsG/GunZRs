@@ -7,7 +7,8 @@ publish = false
 default-run = "gunz"
 
 [dependencies]
-bevy = { version = "0.19", features = ["dds", "bmp", "tga", "jpeg", "wav", "mp3"] }
+# `debug` keeps type names: `phase::end_match` tells the game's resources from Bevy's by name
+bevy = { version = "0.19", features = ["debug", "dds", "bmp", "tga", "jpeg", "wav", "mp3"] }
 flate2 = "1"
 roxmltree = "0.21"
 

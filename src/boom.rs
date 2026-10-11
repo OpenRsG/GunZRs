@@ -20,6 +20,7 @@ use crate::{
     gfx::Knob,
     gore::{paint, smooth},
     light::knob,
+    phase::{MatchStart, MatchSystems},
     profile::Profile,
 };
 use bevy::{mesh::VertexAttributeValues, prelude::*};
@@ -51,12 +52,13 @@ pub struct BoomPlugin;
 impl Plugin for BoomPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Boom>()
-            .add_systems(Startup, setup)
+            .add_systems(MatchStart, setup)
             .add_systems(
                 Update,
                 (burst, puffs, rings, sparks, chunks)
                     .run_if(resource_exists::<Look>)
-                    .run_if(resource_exists::<MapCollision>),
+                    .run_if(resource_exists::<MapCollision>)
+                    .in_set(MatchSystems),
             );
     }
 }

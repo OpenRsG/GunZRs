@@ -1,8 +1,9 @@
 //! `gunz-play [GAME_DIR] [MAP] [OPTIONS]`: play a retail map as a GunZ character. Without
 //! GAME_DIR the Steam install is found through `libraryfolders.vdf` (`src/steam.rs`). Without MAP the
 //! main menu opens (map, mode and limits, bots, character and clothes, loadout, controls);
-//! Start re-executes this binary with the chosen options, and "Main menu" in the pause or
-//! match-end screen re-executes it back into the menu.
+//! Start shows a loading screen (the map is read off the main thread) and then plays the match,
+//! and "Main menu" / "Play again" in the pause or match-end screen come back through the same
+//! window: the whole run is one process and one window (`src/phase.rs`).
 //!
 //! Default controls: WASD move, Space jump (in the air next to a wall: wall kick), double-tap
 //! a direction or C to tumble, mouse look, left mouse (or left Ctrl) attack, right mouse (or
@@ -73,6 +74,13 @@
 //! the player then (the match clock starts with the first frame, 1.5 s before the script).
 //! Without MAP, `--shot` saves the main menu instead: `--menu-page match|player|shop|inventory|clan|controls|graphics` picks the
 //! screen and the options above set what it shows.
+//! `GUNZ_MENU_START=SECS[,SECS..]` (headless, with no MAP) presses the menu's START that many
+//! seconds after it opens, one value per opening, and `GUNZ_LEAVE=SECS:menu|again[,..]` presses
+//! MAIN MENU / PLAY AGAIN when the match clock reaches SECS, one value per match, so one run can
+//! go menu -> loading -> match -> menu -> ... in a single process: the options above (script,
+//! `--at`, `--hp`, ...) apply to every match of the run and `--time` counts from each match's
+//! start; `GUNZ_SEQ=SECS` with a `%` in the `--shot` path saves the frames of the loading
+//! screens too.
 //! `--gfx original|enhanced|ultra` takes that graphics preset for this run (it also lands in the profile
 //! file the next time the profile is saved; the in-game GRAPHICS panel edits them for good).
 //! `--npc NAME[,NAME..]` spawns quest monsters (`system/npc.xml` ids such as `11`, `16`, or
@@ -87,94 +95,18 @@
 //! Example: `"w:1.0;jump:0.3;2:0.1;attack:0.5;w:0.05;wait:0.05;w:0.4"` runs, jumps, draws the
 //! revolver, fires, then double-taps W (tumble forward).
 
-use bevy::{prelude::*, time::TimeUpdateStrategy};
+use bevy::{ecs::schedule::ScheduleLabel, prelude::*, time::TimeUpdateStrategy};
 use gunz::{
-    actor::{ActorData, PlayerSetup, Script},
-    bot::{BotAhead, BotCount, BotSkill},
-    col::MapCollision,
+    actor::Script,
     effect::{self, FxPlugin},
-    game::{GamePlugin, Settings},
-    level::{Level, LevelPlugin},
-    map,
-    menu::{self, Config, Mode, Net, Page, take_arg},
-    modes::DieAt,
-    mrs::Vfs,
-    net::{self, Host, Lan},
-    profile::{OPTS, Profile, opt_mut},
-    quest::{Catalog, Quest},
-    session::{EXIT_AGAIN, EXIT_MENU, PauseAt, Rules, StartVitals},
+    game::GamePlugin,
+    level::LevelPlugin,
+    menu::{Config, MenuPlugin, Mode, Net, Page, take_arg},
+    phase::{Launch, MatchStart, Mount, Opts, PhasePlugin, Screen},
+    profile::OPTS,
     view::{self, SCALE, Shot, to_bevy},
 };
-use std::{process::Command, time::Duration};
-
-/// Simulated seconds before a headless script starts, so pipelines compile and actors land.
-const LEAD: f32 = 1.5;
-
-/// Replaces this process with a fresh `gunz-play` (a new window, so no state carries over):
-/// the match described by `config` (`menu == false`) or the main menu with its choices.
-fn relaunch(game: &str, config: &Config, menu: bool) -> AppExit {
-    let exe = std::env::current_exe().expect("own executable path");
-    let mut cmd = Command::new(exe);
-    cmd.arg(game);
-    // back in the menu, hosting or joining is chosen again
-    let config = &Config {
-        net: config.net.clone().filter(|_| !menu),
-        ..config.clone()
-    };
-    match (&config.map, menu) {
-        (Some(map), true) => cmd.args(["--map", map]),
-        (Some(map), false) => cmd.arg(map),
-        (None, _) => &mut cmd,
-    };
-    let cmd = cmd.args(config.flags());
-    // A fresh process: exec replaces this one on Unix; elsewhere spawn it and exit.
-    #[cfg(unix)]
-    let err = std::os::unix::process::CommandExt::exec(cmd);
-    #[cfg(not(unix))]
-    let err = match cmd.spawn() {
-        Ok(_) => return AppExit::Success,
-        Err(e) => e,
-    };
-    eprintln!("cannot restart gunz-play: {err}");
-    AppExit::from_code(1)
-}
-
-/// Admits and plans the scenario `config` names, spends its sacrifice from the profile and
-/// returns the quest; `config.scenario` becomes the scenario actually played.
-fn start_quest(vfs: &Vfs, config: &mut Config, headless: bool) -> Result<Quest, String> {
-    let cat = Catalog::load(vfs).map_err(|e| format!("quest data: {e}"))?;
-    let mut profile = Profile::open(headless);
-    let name = config.scenario.as_deref();
-    let ok = cat.admit(
-        name,
-        config.sacrifice,
-        &profile.quest_items,
-        profile.level(),
-    )?;
-    if !ok.spend.is_empty() {
-        let names: Vec<_> = ok.spend.iter().map(|&i| cat.items.name(i)).collect();
-        println!("quest: sacrificed {}", names.join(" + "));
-        profile.spend_quest_items(&ok.spend);
-        profile.save();
-    }
-    let seed = seed(headless);
-    let plan = cat.plan(&ok.scenario, config.dice, seed)?;
-    config.scenario = Some(ok.scenario);
-    Quest::new(vfs, &cat, plan, config.bots, seed)
-}
-
-/// Seed of a match's random choices (quest plan, bots' clothes): the clock, but 1 in headless
-/// runs so they stay reproducible; `GUNZ_SEED` overrides both.
-fn seed(headless: bool) -> u32 {
-    std::env::var("GUNZ_SEED")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(if headless {
-            1
-        } else {
-            gunz::profile::wall().subsec_nanos().max(1)
-        })
-}
+use std::time::Duration;
 
 fn main() -> AppExit {
     // In the browser the page chose the match; the packs it downloaded are the game files.
@@ -221,10 +153,9 @@ fn main() -> AppExit {
         return usage();
     };
     // `--npc NAME[,NAME..]`: quest monsters (npc.xml ids or npc2.xml names) ahead of the player.
-    let npc = take_arg::<String>(&mut args, "--npc");
-    if npc.is_err() {
+    let Ok(npc) = take_arg::<String>(&mut args, "--npc") else {
         return usage();
-    }
+    };
     let (Ok(respawn), Ok(protect), Ok(round_time), Ok(ready)) = (
         take_arg::<f32>(&mut args, "--respawn"),
         take_arg::<f32>(&mut args, "--protect"),
@@ -244,22 +175,22 @@ fn main() -> AppExit {
             }
         }
     }
-    let mut config = match Config::parse(&mut args, shot.is_some()) {
+    let config = match Config::parse(&mut args, shot.is_some()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{e}");
             return usage();
         }
     };
-    let script = match script.as_deref().map(Script::parse).transpose() {
-        Ok(s) => s,
+    let secs = match script.as_deref().map(Script::parse).transpose() {
+        Ok(s) => time.unwrap_or_else(|| s.as_ref().map_or(0.5, |s| s.secs() + 0.3)),
         Err(e) => {
             eprintln!("--script: {e}");
             return usage();
         }
     };
     #[cfg(target_arch = "wasm32")]
-    let (game, vfs) = (String::new(), gunz::web::vfs().expect("game packs"));
+    let (_game, vfs) = (String::new(), gunz::web::vfs().expect("game packs"));
     // GAME_DIR is the first argument when it is a directory (or looks like a path, so a typo
     // is reported as a bad directory); otherwise find the Steam install.
     #[cfg(not(target_arch = "wasm32"))]
@@ -277,188 +208,58 @@ fn main() -> AppExit {
         },
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let vfs = Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
-    let name = Profile::open(shot.is_some()).name;
-    // A LAN client plays the host's map, mode and limits.
-    let client = match config.net.clone() {
-        Some(Net::Join(addr)) => {
-            match net::join(&addr, &name, config.woman, &config.look, &config.loadout) {
-                Ok((w, c)) => {
-                    println!("lan: joined {} ({})", w.map, w.mode.arg());
-                    (config.mode, config.time_limit, config.kill_limit) =
-                        (w.mode, w.time_limit, w.kill_limit);
-                    Some((w, c))
-                }
-                Err(e) => {
-                    eprintln!("--join: {e}");
-                    if shot.is_some() {
-                        return AppExit::from_code(2);
-                    }
-                    config.net = None;
-                    return match menu::run(vfs, config, Page::Match, None) {
-                        Some(chosen) => relaunch(&game, &chosen, false),
-                        None => AppExit::Success,
-                    };
-                }
-            }
-        }
-        _ => None,
-    };
-    // Quest mode plays a scenario's sectors in turn: its first sector is the map. Without a
-    // scenario (or MAP) the menu picks one; `--menu-page` always shows the menu.
-    let wanted = page.is_none()
+    let vfs = gunz::mrs::Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
+    // A MAP, a quest scenario or a LAN game to join starts a match at once (a quest with
+    // `--menu-page` shows the menu); without one the main menu opens.
+    let quest = config.mode == Mode::Quest
+        && page.is_none()
         && (config.scenario.is_some() || config.sacrifice != [0; 2] || !args.is_empty());
-    let quest = if config.mode == Mode::Quest && wanted {
-        match start_quest(&vfs, &mut config, shot.is_some()) {
-            Ok(q) => Some(q),
-            Err(e) => {
-                eprintln!("{e}");
-                if shot.is_some() {
-                    return AppExit::from_code(2);
-                }
-                // e.g. "Play again" without the offering left: the menu says what is missing
-                return match menu::run(vfs, config, Page::Match, None) {
-                    Some(chosen) => relaunch(&game, &chosen, false),
-                    None => AppExit::Success,
-                };
-            }
-        }
-    } else {
-        None
+    let direct = quest || matches!(config.net, Some(Net::Join(_))) || !args.is_empty();
+    let mut config = config;
+    config.map = args.first().map(|m| m.to_ascii_lowercase()).or(config.map);
+    let launch = Launch {
+        config,
+        page,
+        opts: Opts {
+            script,
+            at: at.map(|p| Vec3::from(to_bevy(p)) * SCALE),
+            yaw: yaw.map(f32::to_radians),
+            ahead,
+            npc,
+            pause_at: pause_at.map(|s| (s, pause_page)),
+            die_at,
+            hp,
+            ap,
+            respawn,
+            protect,
+            round_time,
+            ready,
+            toggles,
+            gfx,
+            secs,
+        },
     };
-    let first = quest.as_ref().map(|q| q.first_map().to_owned());
-    let joined = client.as_ref().map(|(w, _)| w.map.clone());
-    let Some(map_name) = (first.clone().or(joined)).or_else(|| args.first().cloned()) else {
-        // No MAP: the main menu; Start leaves the choice behind, then the game starts.
-        return match menu::run(vfs, config, page.unwrap_or(Page::Match), shot) {
-            Some(chosen) => relaunch(&game, &chosen, false),
-            None => AppExit::Success,
-        };
-    };
-    // A quest restarts from its scenario, not from a map.
-    config.map = first.is_none().then(|| map_name.to_ascii_lowercase());
-    if config.mode == Mode::Blitzkrieg && !map_name.eq_ignore_ascii_case("blitzkrieg") {
-        eprintln!("--mode blitzkrieg is played on the map blitzkrieg");
-        return AppExit::from_code(2);
-    }
-    let rs = map::find_rs(&vfs, &map_name).unwrap_or_else(|| panic!("no map named {map_name}"));
-    let col = MapCollision::load(&vfs, &rs).unwrap_or_else(|e| panic!("{rs} collision: {e}"));
-    let map = map::load(&vfs, &rs).unwrap_or_else(|e| panic!("{rs}: {e}"));
-    let level = Level { vfs, map };
-    let mut data = ActorData::new(&level).unwrap_or_else(|e| panic!("items/characters: {e}"));
-    data.seed = seed(shot.is_some()) as u64;
-
-    let secs = time.unwrap_or_else(|| script.as_ref().map_or(0.5, |s| s.secs() + 0.3));
-    let mut app = view::app_plain(&format!("gunz-play {map_name}"), shot);
-    let headless = app.world().contains_resource::<Shot>();
-    if headless {
-        app.world_mut().resource_mut::<Shot>().capture = ((LEAD + secs) * 60.0).round() as u32;
+    let mut app = view::app_plain("gunz-play", shot);
+    if app.world().contains_resource::<Shot>() {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
         )));
     }
-    if let Some(mut script) = script {
-        if headless {
-            script.lead = LEAD;
-        }
-        app.insert_resource(script);
-    }
-    if let Some(ahead) = ahead {
-        app.insert_resource(BotAhead(ahead));
-    }
-    if let Ok(Some(names)) = npc {
-        app.insert_resource(gunz::npc::NpcDemo {
-            names: names.split(',').map(str::to_string).collect(),
-            ahead: ahead.unwrap_or(8.0),
-        });
-    }
-    if let Some(s) = pause_at {
-        app.insert_resource(PauseAt(s, pause_page));
-    }
-    if let Some(s) = die_at {
-        app.insert_resource(DieAt(s));
-    }
-    if let Some(q) = quest {
-        app.insert_resource(q);
-    }
-    let mut rules = Rules::new(config.mode, config.time_limit, config.kill_limit);
-    rules.respawn = respawn.unwrap_or(rules.respawn);
-    rules.protect = protect.unwrap_or(rules.protect);
-    rules.round_secs = round_time.unwrap_or(rules.round_secs);
-    rules.ready = ready.unwrap_or(rules.ready);
-    // The training range has no bots, only dummies; a clan war is 4 against 4 with the player.
-    let mut bots = match config.mode {
-        Mode::Training => 0,
-        Mode::ClanWar => 2 * gunz::clan::WAR_SIZE - 1,
-        _ => config.bots,
-    };
-    let mut start = (
-        at.map(|p| Vec3::from(to_bevy(p)) * SCALE),
-        yaw.map(f32::to_radians),
-    );
-    match (client, &config.net) {
-        // The host's bots and rules; its spawn point unless `--at`/`--yaw` say otherwise.
-        (Some((w, c)), _) => {
-            (rules.respawn, rules.protect, bots) = (w.respawn, w.protect, 0);
-            start = (start.0.or(Some(w.at)), start.1.or(Some(w.yaw)));
-            app.insert_resource(c).insert_resource(Lan);
-        }
-        (None, Some(Net::Host)) => match Host::bind(&map_name) {
-            Ok(h) => {
-                println!("lan: hosting {map_name} on port {}", net::PORT);
-                app.insert_resource(h).insert_resource(Lan);
-            }
-            Err(e) => {
-                eprintln!("--host: port {}: {e}", net::PORT);
-                return AppExit::from_code(2);
-            }
-        },
-        _ => {}
-    }
-    if hp.is_some() || ap.is_some() {
-        app.insert_resource(StartVitals { hp, ap });
-    }
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(gunz::web::WebPlugin);
-    app.add_plugins((
-        LevelPlugin,
-        FxPlugin(None),
-        GamePlugin,
-        effect::WarmFxPlugin,
-    ))
-    .insert_resource(PlayerSetup {
-        at: start.0,
-        yaw: start.1,
-        woman: config.woman,
-        loadout: config.loadout.clone(),
-        look: config.look,
-        name: if config.net.is_some() {
-            name
-        } else {
-            String::new()
-        },
-    })
-    .insert_resource({
-        let mut s = Settings::default();
-        Profile::open(headless).apply(&mut s);
-        for &(i, on) in &toggles {
-            *opt_mut(&mut s, i) = on;
-        }
-        s
-    })
-    .insert_resource(rules)
-    .insert_resource(BotCount(bots))
-    .insert_resource(BotSkill(config.skill))
-    .insert_resource(col)
-    .insert_resource(data)
-    .insert_resource(level);
-    if let Some(p) = gfx {
-        app.world_mut().resource_mut::<Profile>().graphics.preset(p);
-    }
-    let exit = app.run();
-    match exit {
-        AppExit::Error(c) if c.get() == EXIT_MENU => relaunch(&game, &config, true),
-        AppExit::Error(c) if c.get() == EXIT_AGAIN => relaunch(&game, &config, false),
-        other => other,
-    }
+    app.insert_resource(Mount(vfs))
+        .insert_resource(launch)
+        .add_plugins((
+            PhasePlugin(if direct {
+                Screen::Loading
+            } else {
+                Screen::Menu
+            }),
+            LevelPlugin(MatchStart.intern()),
+            FxPlugin(None),
+            GamePlugin,
+            effect::WarmFxPlugin,
+            MenuPlugin,
+        ))
+        .run()
 }

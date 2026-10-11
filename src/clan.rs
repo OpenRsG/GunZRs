@@ -10,6 +10,7 @@ use crate::{
     level::Level,
     menu::{Mode, Page, State},
     mrs::Vfs,
+    phase::{MatchStart, MatchSystems, MenuSystems},
     profile::{MatchGain, Profile},
     session::{Clock, Rules},
     ui::{
@@ -720,7 +721,7 @@ impl Plugin for ClanMenuPlugin {
         let draft = draft.map(|c| c.name.clone()).unwrap_or_default();
         app.insert_resource(Ui { draft, ..default() })
             // `shop::ShopPlugin`'s system saves the profile after any change
-            .add_systems(Update, (act, typing, refresh).chain());
+            .add_systems(Update, (act, typing, refresh).chain().in_set(MenuSystems));
     }
 }
 
@@ -834,8 +835,13 @@ fn refresh(
     mut preview: Query<(&mut ImageNode, &Children), With<Preview>>,
     mut icons: Query<&mut ImageNode, Without<Preview>>,
     table: Query<Entity, With<Table>>,
+    fresh: Query<(), Added<Table>>,
     mut last: Local<Option<(Option<Clan>, Ui)>>,
 ) {
+    // the menu page was rebuilt (a new visit): the cached key no longer describes it
+    if !fresh.is_empty() {
+        *last = None;
+    }
     let key = (profile.clan.clone(), ui.clone());
     if last.as_ref() == Some(&key) {
         return;
@@ -1010,7 +1016,7 @@ pub struct ClanPlugin;
 impl Plugin for ClanPlugin {
     fn build(&self, app: &mut App) {
         let war = |rules: Option<Res<Rules>>| rules.is_some_and(|r| r.mode == Mode::ClanWar);
-        app.add_systems(Startup, setup.run_if(war)).add_systems(
+        app.add_systems(MatchStart, setup.run_if(war)).add_systems(
             Update,
             (
                 tag,
@@ -1018,7 +1024,8 @@ impl Plugin for ClanPlugin {
                 strip,
                 settle,
             )
-                .run_if(resource_exists::<ClanWar>),
+                .run_if(resource_exists::<ClanWar>)
+                .in_set(MatchSystems),
         );
     }
 }

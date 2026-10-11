@@ -8,6 +8,7 @@ use crate::{
     item::{Item, Items},
     menu::{Page, State},
     mrs::Vfs,
+    phase::MenuSystems,
     profile::{self, Profile, SLOTS},
     quest::QItems,
     ui::{
@@ -699,8 +700,10 @@ impl Plugin for ShopPlugin {
                 c.spawn((ShopAct::Sell, Interaction::Pressed));
             });
         }
-        app.insert_resource(ss)
-            .add_systems(Update, (act, refresh, profile::save).chain());
+        app.insert_resource(ss).add_systems(
+            Update,
+            (act, refresh, profile::save).chain().in_set(MenuSystems),
+        );
     }
 }
 

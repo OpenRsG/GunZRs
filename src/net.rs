@@ -17,6 +17,7 @@ use crate::{
     combat::Wounded,
     game::{Bot, Dead, Intent, Killed, Loadout, Player, Remote, Score, Team, Vitals},
     menu::Mode,
+    phase::MatchSystems,
     session::{Clock, Rules, freeze},
 };
 use bevy::prelude::*;
@@ -73,14 +74,16 @@ impl Plugin for NetPlugin {
             (
                 host_recv.run_if(resource_exists::<Host>),
                 client_recv.run_if(resource_exists::<Client>),
-            ),
+            )
+                .in_set(MatchSystems),
         )
         .add_systems(
             PostUpdate,
             (
                 host_send.run_if(resource_exists::<Host>),
                 client_send.run_if(resource_exists::<Client>),
-            ),
+            )
+                .in_set(MatchSystems),
         );
     }
 }

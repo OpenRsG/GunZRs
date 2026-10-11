@@ -6,6 +6,7 @@
 //! applies. A child of `hud.rs`.
 
 use super::{Root, try_image};
+use crate::phase::MatchSystems;
 use crate::{
     actor::ActorData,
     clan::{ClanArt, ClanWar, Member, mark},
@@ -23,7 +24,8 @@ pub(super) fn plugin(app: &mut App) {
         (
             spawn.run_if(any_with_component::<Root>.and_then(not(any_with_component::<FeedBox>))),
             (add, animate).chain().run_if(resource_exists::<FeedArt>),
-        ),
+        )
+            .in_set(MatchSystems),
     );
 }
 

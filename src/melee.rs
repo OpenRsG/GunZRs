@@ -15,6 +15,7 @@ use crate::{
     col::MapCollision,
     combat::{HIT_RADIUS, SWITCH_DELAY, Vfx, is_melee, rnd},
     game::*,
+    phase::MatchSystems,
 };
 use bevy::prelude::*;
 
@@ -120,7 +121,8 @@ impl Plugin for MeleePlugin {
             (init, drive, resolve)
                 .chain()
                 .after(ActorSet::Input)
-                .before(ActorSet::Drive),
+                .before(ActorSet::Drive)
+                .in_set(MatchSystems),
         );
     }
 }
@@ -260,9 +262,7 @@ pub struct Melee {
     alt: bool,
     /// Until when drawing the blade again after an air slash was switch-cancelled is instant.
     flash: f32,
-    /// The guard came out of a blow (butterfly / slide): the actor may move while it is up.
-    slide: bool,
-    /// That guard went up in the air (air butterfly): it may stay up there until the actor lands.
+    /// The guard went up in the air (air butterfly): it may stay up there until the actor lands.
     air_guard: bool,
     /// Air hits taken since landing.
     juggle: u8,
@@ -338,7 +338,7 @@ fn drive(
         Option<&Name>,
     )>,
 ) {
-    let now = time.elapsed_secs();
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
     for (e, mut m, intent, load, motor, tf, acting, dead, bot, has_guard, name) in &mut actors {
         let m = &mut *m;
         let who = name.map_or("?", |n| n.as_str());
@@ -563,6 +563,7 @@ fn drive(
                 }
             }
             Phase::Guard(stage) => {
+                let over = clip_over(t, dt, m.secs, acting.is_none());
                 if stage == Stage::Release {
                     if queued && now >= m.ready {
                         blow_from(m, 0.0)
@@ -587,13 +588,13 @@ fn drive(
                         power: 0.0,
                     })
                 } else if stage == Stage::Block
-                    && t >= m.secs
+                    && over
                     && m.alt
                     && secs("guard_block1_ret").is_some()
                 {
                     // `alt` is set right after a block1 pose (see `resolve`)
                     Some(Next::Guard(Stage::BlockRet))
-                } else if stage != Stage::Hold && t >= m.secs {
+                } else if stage != Stage::Hold && over {
                     Some(Next::Guard(Stage::Hold))
                 } else {
                     None
@@ -702,23 +703,19 @@ fn drive(
                     }
                 };
                 if stage == Stage::Start {
-                    m.slide = matches!(m.phase, Phase::Blow { .. } | Phase::Recover { .. });
                     m.air_guard = !grounded;
-                    if m.slide {
-                        let what = match m.phase {
-                            Phase::Blow { .. } if !grounded => "air butterfly",
-                            Phase::Blow { blow, .. } if blow.effect == Effect::Launch => {
-                                "quick launch"
-                            }
-                            Phase::Blow { .. } => "butterfly",
-                            _ => "slide",
-                        };
-                        debug!(
-                            "t={now:.2} melee {who}: tech: {what} (guard cancels the recovery, may move)"
-                        );
+                    let what = match m.phase {
+                        Phase::Blow { .. } if !grounded => Some("air butterfly"),
+                        Phase::Blow { blow, .. } if blow.effect == Effect::Launch => {
+                            Some("quick launch")
+                        }
+                        Phase::Blow { .. } => Some("butterfly"),
+                        Phase::Recover { .. } => Some("recovery cancel"),
+                        _ => None,
+                    };
+                    if let Some(what) = what {
+                        debug!("t={now:.2} melee {who}: tech: {what} (guard cancels the recovery)");
                     }
-                } else if stage == Stage::Release {
-                    m.slide = false;
                 }
                 debug!("t={now:.2} melee {who}: guard {stage:?} ({clip})");
                 let len = if clip == "guard_idle" {
@@ -730,12 +727,7 @@ fn drive(
                 if stage == Stage::Release {
                     m.combo_until = now + CANCEL_COMBO;
                 }
-                let moving = if m.slide {
-                    ActionMove::Control(1.0)
-                } else {
-                    ActionMove::Locked
-                };
-                go(m, &mut req, clip, len, moving, 0.0);
+                go(m, &mut req, clip, len, ActionMove::Locked, 0.0);
             }
             Next::Charge => {
                 let Some(len) = secs("charge") else {
@@ -766,6 +758,15 @@ fn drive(
             }
         }
     }
+}
+
+/// Whether a clip of `secs` that began `t` seconds ago is over by the actor controller's turn.
+/// That runs after this system, and its own action clock is one frame ahead of ours: a clip that
+/// ends in it must already have its successor requested now, or the body runs free for a frame
+/// between `guard_start` and `guard_idle` (a millisecond of slack for the two clocks' rounding).
+/// An action that is already gone (`gone`) is over whatever the clock says.
+fn clip_over(t: f32, dt: f32, secs: f32, gone: bool) -> bool {
+    gone || t + dt + 0.001 >= secs
 }
 
 /// `Guarding` is on the actor exactly while its guard is up.
@@ -1097,5 +1098,17 @@ mod tests {
         assert!((strike_secs(1, "damage", 1.0) - 0.45).abs() < 1e-6);
         // never later than the clip itself
         assert_eq!(strike_secs(1, "attack1", 0.1), 0.1);
+    }
+
+    #[test]
+    fn guard_clip_chains_a_frame_early() {
+        // `guard_start` (0.10 s) at 60 fps: the actor controller ends it in the frame where this
+        // clock reads 5/60 s (the guard glitch: the body ran free for that frame).
+        let dt = 1.0 / 60.0;
+        assert!(!clip_over(4.0 * dt, dt, 0.1, false));
+        assert!(clip_over(5.0 * dt, dt, 0.1, false));
+        // a vanished action ends it at once; a looping clip (`guard_idle`) never ends
+        assert!(clip_over(0.01, dt, 0.1, true));
+        assert!(!clip_over(100.0, dt, f32::INFINITY, false));
     }
 }

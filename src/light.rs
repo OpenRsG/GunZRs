@@ -11,6 +11,7 @@ use crate::{
     game::{Blast, Dead, Motor, Settings},
     gfx::Knob,
     level::{LIGHTMAP_SCALE, Level},
+    phase::{MatchStart, MatchSystems},
     profile::Profile,
     view::{SCALE, decode, to_bevy},
 };
@@ -28,12 +29,14 @@ pub struct LightPlugin;
 
 impl Plugin for LightPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (probes, blob_assets)).add_systems(
-            Update,
-            (rig, actor_materials, fills, flashes, blobs)
-                .chain()
-                .run_if(resource_exists::<Settings>),
-        );
+        app.add_systems(MatchStart, (probes, blob_assets))
+            .add_systems(
+                Update,
+                (rig, actor_materials, fills, flashes, blobs)
+                    .chain()
+                    .run_if(resource_exists::<Settings>)
+                    .in_set(MatchSystems),
+            );
     }
 }
 

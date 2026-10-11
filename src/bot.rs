@@ -14,6 +14,7 @@ use crate::{
     item::{Items, Weapon, WeaponKind},
     level::Level,
     nav::{Kick, Kind, Nav, PDT, Search, Step, walkable},
+    phase::{MatchPostStart, MatchSystems},
     pickup::{ItemKind, WorldItem},
     projectile::{
         BOUNCE, FRAG_RADIUS, FRICTION, FUSE, Flashed, GRAVITY, SmokeCloud, THROW_DELAY, THROW_LIFT,
@@ -58,8 +59,8 @@ pub struct BotPlugin;
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, spawn_bots)
-            .add_systems(PreUpdate, bot_ai);
+        app.add_systems(MatchPostStart, spawn_bots)
+            .add_systems(PreUpdate, bot_ai.in_set(MatchSystems));
     }
 }
 

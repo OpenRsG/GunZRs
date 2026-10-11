@@ -1,13 +1,13 @@
 //! `gunz-play` main menu (Bevy UI over a 3D character preview) and the run configuration it
-//! edits. The menu is its own `App`: [`run`] returns the chosen [`Config`], and the binary
-//! re-executes itself with the matching flags (see `src/bin/gunz-play.rs`). Art comes from
-//! `interface/default/` (lobby background, logo); the type and widgets are `ui.rs`'s. Notes:
-//! `docs/formats.md` (menu).
+//! edits. The menu is the [`Screen::Menu`] of the one app: START hands the chosen [`Config`] to
+//! the loading screen (`phase.rs`); in the browser the page starts the match instead. Art comes
+//! from `interface/default/` (lobby background, logo); the type and widgets are `ui.rs`'s.
+//! Notes: `docs/formats.md` (menu).
 
 use crate::{
     actor::DEFAULT_LOADOUT,
     ani::Ani,
-    anim::{AnimPlugin, Animator, Loop},
+    anim::{Animator, Loop},
     character::{self, Character, Look, Slot, TINTS, Wardrobe},
     clan::{self, ClanArt},
     dashfx::{self, HUES, Hue, STYLES, Style, Trail},
@@ -16,6 +16,7 @@ use crate::{
     item::{Items, WeaponKind},
     model::{self, Textures},
     mrs::Vfs,
+    phase::{Hooks, Launch, MenuSystems, Mount, Screen},
     profile::{Profile, Ranks, progress},
     shop::{self, ShopData},
     slashfx::{self, Slash},
@@ -29,17 +30,10 @@ use bevy::{
     mesh::skinning::SkinnedMeshInverseBindposes,
     prelude::*,
     text::{Justify, LineBreak},
-    time::TimeUpdateStrategy,
     ui::{RelativeCursorPosition, UiTargetCamera},
     window::PrimaryWindow,
 };
-use std::{
-    collections::HashMap,
-    f32::consts::TAU,
-    str::FromStr,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::HashMap, f32::consts::TAU, str::FromStr, sync::Arc};
 
 /// Removes `flag VALUE` from `args` and parses the value; `Err` if the value is missing/bad.
 pub fn take_arg<T: FromStr>(args: &mut Vec<String>, flag: &str) -> Result<Option<T>, ()> {
@@ -716,9 +710,9 @@ pub(crate) struct State {
     pub(crate) page: Page,
 }
 
-/// Where [`run`] leaves the choice when Start is pressed.
-#[derive(Resource)]
-struct Pick(Arc<Mutex<Option<Config>>>);
+/// What the character preview was built for (sex, clothes, sword): it is rebuilt when that changes.
+#[derive(Resource, Default)]
+struct Shown(Option<(bool, Look, u32)>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
@@ -1101,84 +1095,125 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
     }
 }
 
-/// Opens the menu window and returns the config chosen with Start (`None`: closed/Esc/Quit).
-/// Headless (`shot`), the menu shows `page` and the run ends with the screenshot.
-pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Option<Config> {
-    let cat = Catalog::load(vfs).unwrap_or_else(|e| panic!("menu data: {e}"));
-    let data = ShopData::load(&cat.vfs, &cat.items).unwrap_or_else(|e| panic!("shop data: {e}"));
-    let ranks = Ranks::load(&cat.vfs).unwrap_or_else(|e| panic!("menu data: {e}"));
-    println!(
-        "menu: {} maps, {} items for sale",
-        cat.maps.len(),
-        data.sale.len()
-    );
-    let mut profile = Profile::open(shot.is_some());
-    // The menu edits the profile's character and equipment; Start launches with them.
-    (profile.woman, profile.look) = (cfg.woman, cfg.look);
-    cfg.loadout.resize(4, 0);
+/// The main menu: its screen is built when [`Screen::Menu`] is entered, from the [`Launch`]'s config.
+pub struct MenuPlugin;
+
+impl Plugin for MenuPlugin {
+    /// Needs `ProfilePlugin` (the clan tab reads the profile) built before.
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Clips>()
+            .add_plugins((shop::ShopPlugin, clan::ClanMenuPlugin))
+            .add_systems(OnEnter(Screen::Menu), (prepare, build).chain())
+            .add_systems(
+                Update,
+                (
+                    auto_start, act, refresh, hover, tab_look, quiet_look, preview, demo, orbit,
+                    fit,
+                )
+                    .chain()
+                    .in_set(MenuSystems),
+            )
+            .add_systems(Update, fx_panel.in_set(MenuSystems));
+    }
+}
+
+/// Loads the menu's data (once) and starts a visit with the page and choices of the [`Launch`].
+/// Headless (a `Shot`), the picture is taken `GUNZ_MENU_AT=SECS` into the page (default 2, the
+/// clock steps 1/60 s a frame, so the idle pose and the demo are the same on every run) unless
+/// `GUNZ_MENU_START` presses START first; `GUNZ_MENU_TAB=slash` opens the EFFECTS panel on its
+/// SLASH tab.
+fn prepare(world: &mut World) {
+    if !world.contains_resource::<Catalog>() {
+        let vfs = world.resource::<Mount>().0.clone();
+        let cat = Catalog::load(vfs).unwrap_or_else(|e| panic!("menu data: {e}"));
+        let data =
+            ShopData::load(&cat.vfs, &cat.items).unwrap_or_else(|e| panic!("shop data: {e}"));
+        let ranks = Ranks::load(&cat.vfs).unwrap_or_else(|e| panic!("menu data: {e}"));
+        println!(
+            "menu: {} maps, {} items for sale",
+            cat.maps.len(),
+            data.sale.len()
+        );
+        world.insert_resource(cat);
+        world.insert_resource(data);
+        world.insert_resource(ranks);
+    }
+    let page = world
+        .resource_mut::<Launch>()
+        .page
+        .take()
+        .unwrap_or(Page::Match);
+    let mut cfg = world.resource::<Launch>().config.clone();
+    let cat = world.resource::<Catalog>();
     let default_map = cat
         .maps
         .iter()
         .find(|m| *m == "mansion")
         .or(cat.maps.first())
         .cloned();
+    cfg.loadout.resize(4, 0);
     cfg.map = cfg.map.filter(|m| cat.maps.contains(m)).or(default_map);
-    let pick = Arc::new(Mutex::new(None));
-    let headless = shot.is_some();
-    let mut app = view::app_plain("gunz-play", shot);
-    crate::music::menu(&mut app, &cat.vfs);
-    app.insert_resource(ClearColor(Color::srgb(0.05, 0.05, 0.07)))
-        .insert_resource(cat)
-        .insert_resource(data)
-        .insert_resource(ranks)
-        .insert_resource(profile)
-        .insert_resource(State { cfg, page })
-        .insert_resource(Pick(pick.clone()))
-        .insert_resource(Orbit {
-            focus: 0,
-            zoom: 1.0,
-        })
-        .insert_resource(Demo::default())
-        .insert_resource(Fx(Tab::Dash))
-        .init_resource::<Clips>()
-        .add_plugins(AnimPlugin)
-        .add_plugins(dashfx::DashFxPlugin)
-        .add_plugins(slashfx::SlashFxPlugin)
-        .add_plugins(shop::ShopPlugin)
-        .add_plugins(clan::ClanMenuPlugin)
-        .add_plugins(crate::controls::ControlsPlugin)
-        .add_plugins(crate::gfx::GfxPlugin)
-        .add_systems(Startup, build)
-        .add_systems(
-            Update,
-            (
-                act, refresh, hover, tab_look, quiet_look, preview, demo, orbit, fit,
-            )
-                .chain(),
-        )
-        .add_systems(Update, fx_panel);
-    if headless {
-        // Headless shots step the clock 1/60 s a frame, so the idle pose and the demo are the
-        // same on every run; `GUNZ_MENU_AT=SECS` takes the picture SECS into the page (default 2),
-        // `GUNZ_MENU_TAB=slash` opens the EFFECTS panel on its SLASH tab.
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
-            1.0 / 60.0,
-        )));
-        if let Some(s) = std::env::var("GUNZ_MENU_AT")
-            .ok()
-            .and_then(|s| s.parse::<f32>().ok())
-        {
-            app.world_mut().resource_mut::<Shot>().capture = (s * 60.0).round() as u32;
+    // The menu edits the profile's character and equipment; Start launches with them.
+    let mut profile = world.resource_mut::<Profile>();
+    if (profile.woman, profile.look) != (cfg.woman, cfg.look) {
+        (profile.woman, profile.look) = (cfg.woman, cfg.look);
+    }
+    let tab = if std::env::var("GUNZ_MENU_TAB").is_ok_and(|t| t == "slash") {
+        Tab::Slash
+    } else {
+        Tab::Dash
+    };
+    world.insert_resource(State { cfg, page });
+    world.insert_resource(Orbit {
+        focus: 0,
+        zoom: 1.0,
+    });
+    world.insert_resource(Demo::default());
+    world.insert_resource(Fx(tab));
+    world.insert_resource(Shown::default());
+    world.insert_resource(ClearColor(crate::phase::BACKDROP));
+    world.resource_scope(|world, cat: Mut<Catalog>| crate::music::menu(world, &cat.vfs));
+    let start_first = world
+        .get_resource::<Hooks>()
+        .is_some_and(|h| !h.start.is_empty());
+    let secs = std::env::var("GUNZ_MENU_AT")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(2.0);
+    if let Some(mut shot) = world.get_resource_mut::<Shot>() {
+        if start_first {
+            shot.pending();
+        } else {
+            shot.capture_in((secs * 60.0).round() as u32);
         }
-        if std::env::var("GUNZ_MENU_TAB").is_ok_and(|t| t == "slash") {
-            app.world_mut().resource_mut::<Fx>().0 = Tab::Slash;
+        let frame = shot.frame();
+        if let Some(mut hooks) = world.get_resource_mut::<Hooks>() {
+            hooks.opened = frame;
         }
     }
-    // in the browser the page takes over when the menu ends (`web::play`, `gunzExit`)
-    #[cfg(target_arch = "wasm32")]
-    app.add_plugins(crate::web::WebPlugin);
-    app.run();
-    pick.lock().unwrap().take()
+}
+
+/// Headless `GUNZ_MENU_START`: presses START that many seconds after the menu opened.
+fn auto_start(
+    hooks: Option<ResMut<Hooks>>,
+    shot: Option<Res<Shot>>,
+    mut buttons: Query<(&Act, &mut Interaction)>,
+) {
+    let (Some(mut hooks), Some(shot)) = (hooks, shot) else {
+        return;
+    };
+    let Some(&secs) = hooks.start.front() else {
+        return;
+    };
+    if ((shot.frame() - hooks.opened) as f32) < secs * 60.0 {
+        return;
+    }
+    hooks.start.pop_front();
+    for (a, mut i) in &mut buttons {
+        if matches!(a, Act::Start) {
+            *i = Interaction::Pressed;
+        }
+    }
 }
 
 fn build(
@@ -1666,6 +1701,7 @@ fn build(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_mut))]
 fn act(
     clicks: Query<(&Interaction, &Act), Changed<Interaction>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1676,7 +1712,8 @@ fn act(
     mut orbit: ResMut<Orbit>,
     mut demo: ResMut<Demo>,
     mut fx: ResMut<Fx>,
-    pick: Res<Pick>,
+    mut launch: ResMut<Launch>,
+    mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
@@ -1802,13 +1839,17 @@ fn act(
                     .take_while(|&i| i != 0)
                     .collect();
                 profile.save();
-                if let Ok(mut p) = pick.0.lock() {
-                    *p = Some(state.cfg.clone());
-                }
-                // the browser page starts the match (the binary relaunches itself elsewhere)
+                // the browser page loads the map and starts the match (`web::play`, `gunzExit`)
                 #[cfg(target_arch = "wasm32")]
-                crate::web::play(&state.cfg);
-                exit.write(AppExit::Success);
+                {
+                    crate::web::play(&state.cfg);
+                    exit.write(AppExit::Success);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    launch.config = state.cfg.clone();
+                    next.set(Screen::Loading);
+                }
             }
             Act::Quit => {
                 exit.write(AppExit::Success);
@@ -1901,7 +1942,7 @@ fn preview(
     cat: Res<Catalog>,
     mut clips: ResMut<Clips>,
     root: Single<(Entity, &mut Visibility), With<Preview>>,
-    mut shown: Local<Option<(bool, Look, u32)>>,
+    mut shown: ResMut<Shown>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut images: ResMut<Assets<Image>>,
@@ -1926,10 +1967,10 @@ fn preview(
             w.is_some_and(|w| matches!(w.kind, WeaponKind::Katana))
         })
         .unwrap_or(DEFAULT_LOADOUT[0]);
-    if *shown == Some((cfg.woman, cfg.look, katana)) {
+    if shown.0 == Some((cfg.woman, cfg.look, katana)) {
         return;
     }
-    *shown = Some((cfg.woman, cfg.look, katana));
+    shown.0 = Some((cfg.woman, cfg.look, katana));
     commands.entity(parent).despawn_children();
     let ch = cat.character(cfg.woman);
     let mut textures = Textures::new(&cat.vfs, "model/");
@@ -2443,7 +2484,7 @@ fn orbit(
 mod tests {
     use super::*;
 
-    /// The game is started by re-executing with the menu's flags, so they must parse back.
+    /// The browser page starts a match with the menu's flags (`web::play`), so they must parse back.
     #[test]
     fn flags_round_trip() {
         let mut args: Vec<String> = [

@@ -1,15 +1,15 @@
 //! `gunz-play` match flow: rules (mode, time and kill/round limit, respawn and protection
 //! times), the match clock and its top-line text, the end-of-match scoreboard, the Esc pause
-//! menu and the mouse grab. Round modes, spectating, spawns and training are `modes.rs`. The
-//! binary maps the exit codes below to "back to the main menu" / "play again" (re-executing
-//! itself). Pausing pauses `Time<Virtual>` and inserts [`Frozen`]; actors ignore input while
-//! frozen.
+//! menu and the mouse grab. Round modes, spectating, spawns and training are `modes.rs`. MAIN MENU
+//! and PLAY AGAIN send a [`Leave`] (`phase.rs` switches the screen). Pausing pauses
+//! `Time<Virtual>` and inserts [`Frozen`]; actors ignore input while frozen.
 
 use crate::{
     game::{Frozen, Hold, Player, Score, Settings, Team, Vitals},
     menu::{Mode, Page},
     modes::{Berserker, ModesPlugin, Phase, Round},
     net::Lan,
+    phase::{Leave, MatchApp, MatchSystems},
     profile::{OPTS, Profile, opt_mut},
     ui::{
         ACCENT, Chosen, DANGER, DIM, INK, LINE, RAISED, SCRIM, SURFACE, button, compact, digits,
@@ -23,11 +23,6 @@ use bevy::{
     ui::{GlobalZIndex, UiTargetCamera},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
-
-/// Exit code of `gunz-play` asking its launcher to show the main menu again.
-pub const EXIT_MENU: u8 = 3;
-/// Exit code asking for the same match once more.
-pub const EXIT_AGAIN: u8 = 4;
 
 /// Seconds a dead actor waits before it respawns in the deathmatch modes (*inferred*; the
 /// retail Blitzkrieg mode lists `RESPAWN baseTime="8"` in `system/blitzkrieg.xml`).
@@ -111,8 +106,7 @@ pub struct SessionPlugin;
 
 impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Settings>()
-            .init_resource::<Clock>()
+        app.init_match_resource::<Clock>()
             .add_plugins(ModesPlugin)
             .add_systems(
                 Update,
@@ -122,7 +116,8 @@ impl Plugin for SessionPlugin {
                         .chain()
                         .run_if(resource_exists::<Rules>),
                     hover,
-                ),
+                )
+                    .in_set(MatchSystems),
             );
     }
 }
@@ -602,6 +597,7 @@ fn buttons(
     mut profile: Option<ResMut<Profile>>,
     mut commands: Commands,
     mut vtime: ResMut<Time<Virtual>>,
+    mut leave: MessageWriter<Leave>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for (i, a) in &clicks {
@@ -619,8 +615,8 @@ fn buttons(
             }
             Act::Controls => commands.insert_resource(crate::controls::Overlay),
             Act::Graphics => commands.insert_resource(crate::gfx::Overlay),
-            Act::Menu => drop(exit.write(AppExit::from_code(EXIT_MENU))),
-            Act::Again => drop(exit.write(AppExit::from_code(EXIT_AGAIN))),
+            Act::Menu => drop(leave.write(Leave::Menu)),
+            Act::Again => drop(leave.write(Leave::Again)),
             Act::Quit => drop(exit.write(AppExit::Success)),
         }
     }

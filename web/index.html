@@ -1175,8 +1175,8 @@
      report(`ready: ${map || "menu"} after ${(performance.now() / 1000).toFixed(1)} s`);
      if (map && touch) {playing = true; showControls();}
     };
-    // a match: 4 = play again, anything else = back to the main menu (as the desktop build
-    // relaunches); the main menu: its START left the match to play (`gunzPlay`)
+    // a match: 4 = play again, anything else = back to the main menu (the desktop build does both
+    // in-process, `phase::Leave`); the main menu: its START left the match to play (`gunzPlay`)
     globalThis.gunzExit = code => {
      sessionStorage.setItem("gunzAgain", map && code === 4 ? "1" : "");
      // 1: the match gave up after GPU errors (`src/gfx.rs` `gpu_failed`); the menu says so

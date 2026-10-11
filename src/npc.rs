@@ -27,6 +27,7 @@ use crate::{
     level::Level,
     model::{self, Textures},
     nav::{Nav, walkable},
+    phase::{MatchApp, MatchStart, MatchSystems},
 };
 use bevy::{ecs::system::SystemParam, mesh::skinning::SkinnedMeshInverseBindposes, prelude::*};
 use data::{Action, ActorDef, Data, Ev, Fsm, Func, ModelDef, Next, NpcDef, Skill};
@@ -98,12 +99,14 @@ pub struct NpcPlugin;
 impl Plugin for NpcPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Summon>()
-            .add_systems(Startup, init)
+            .init_match_resource::<DemoDone>()
+            .add_systems(MatchStart, init)
             .add_systems(
                 Update,
                 (demo, spawn, command, intake, run, fly, corpses)
                     .chain()
-                    .run_if(resource_exists::<Roster>.and_then(resource_exists::<ActorData>)),
+                    .run_if(resource_exists::<Roster>.and_then(resource_exists::<ActorData>))
+                    .in_set(MatchSystems),
             );
     }
 }
@@ -115,6 +118,10 @@ pub struct NpcDemo {
     pub names: Vec<String>,
     pub ahead: f32,
 }
+
+/// Whether [`demo`] has spawned its monsters in this match.
+#[derive(Resource, Default)]
+struct DemoDone(bool);
 
 // ---------------------------------------------------------------------------------------------
 // Data
@@ -679,17 +686,17 @@ impl Brain {
 
 fn demo(
     demo: Option<Res<NpcDemo>>,
-    mut done: Local<bool>,
+    mut done: ResMut<DemoDone>,
     player: Query<(&Transform, &Motor), With<Player>>,
     col: Res<MapCollision>,
     mut spawn: MessageWriter<SpawnNpc>,
 ) {
     let Some(d) = demo else { return };
     let Ok((p, m)) = player.single() else { return };
-    if *done || !m.grounded {
+    if done.0 || !m.grounded {
         return;
     }
-    *done = true;
+    done.0 = true;
     debug!("npc demo: player at {:?}", p.translation);
     let n = d.names.len() as f32;
     for (i, name) in d.names.iter().enumerate() {

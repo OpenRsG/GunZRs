@@ -32,6 +32,7 @@ pub mod nav;
 pub mod net;
 pub mod npc;
 pub mod perf;
+pub mod phase;
 pub mod pickup;
 pub mod profile;
 pub mod projectile;

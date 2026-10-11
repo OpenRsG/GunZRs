@@ -16,6 +16,7 @@ use crate::{
     item::{SPY_ICE, WeaponKind},
     level::Level,
     mrs::Vfs,
+    phase::{MatchStart, MatchSystems},
     projectile, spy, view,
 };
 use bevy::{image::ImageSampler, prelude::*};
@@ -81,7 +82,7 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Vfx>()
             .add_message::<Wounded>()
-            .add_systems(Startup, (init_fx, projectile::init))
+            .add_systems(MatchStart, (init_fx, projectile::init))
             .add_systems(
                 Update,
                 (
@@ -98,7 +99,8 @@ impl Plugin for CombatPlugin {
                     projectile::flash_overlay,
                     expire,
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(MatchSystems),
             );
     }
 }

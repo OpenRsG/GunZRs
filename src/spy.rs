@@ -6,6 +6,7 @@ use crate::{
     game::{Afflict, Bot, Dead, NewRound, Player, Team, Vitals, friendly},
     item::{SPY_MINE, WeaponKind},
     modes::{Located, Spy},
+    phase::{MatchApp, MatchSystems},
     projectile::Projectile,
     ui::{DANGER, shadow, strong},
 };
@@ -72,9 +73,22 @@ pub struct SpyPlugin;
 
 impl Plugin for SpyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (trigger, show, clear, ping, test_afflict));
+        app.init_match_resource::<AfflictTodo>()
+            .init_match_resource::<Seen>()
+            .add_systems(
+                Update,
+                (trigger, show, clear, ping, test_afflict).in_set(MatchSystems),
+            );
     }
 }
+
+/// Pending `GUNZ_AFFLICT` entries, read from the environment on first use.
+#[derive(Resource, Default)]
+struct AfflictTodo(Option<Vec<(f32, String)>>);
+
+/// Time to the next spy ping and the positions it showed.
+#[derive(Resource, Default)]
+struct Seen(f32, HashMap<Entity, Vec3>);
 
 type Sides<'w, 's> = Query<'w, 's, (Option<&'static Team>, Has<Bot>)>;
 
@@ -138,11 +152,11 @@ fn show(
 /// match second SECS with KIND `stun`, `slow` (frost bullet), `root` or `burn` (5 s, 10 damage).
 fn test_afflict(
     time: Res<Time>,
-    mut todo: Local<Option<Vec<(f32, String)>>>,
+    mut todo: ResMut<AfflictTodo>,
     player: Query<Entity, With<Player>>,
     mut out: MessageWriter<Afflict>,
 ) {
-    let list = todo.get_or_insert_with(|| {
+    let list = todo.0.get_or_insert_with(|| {
         std::env::var("GUNZ_AFFLICT")
             .unwrap_or_default()
             .split(',')
@@ -189,7 +203,7 @@ fn ping(
     player: Query<Has<Spy>, With<Player>>,
     spies: Query<(Entity, &GlobalTransform, &Name), (With<Located>, Without<Dead>)>,
     mut blips: Query<(Entity, &Blip, &mut Node, &mut Text)>,
-    mut seen: Local<(f32, HashMap<Entity, Vec3>)>,
+    mut seen: ResMut<Seen>,
     ui: Res<UiScale>,
 ) {
     let (Ok((cam_e, cam, view)), Ok(false)) = (camera.single(), player.single()) else {
@@ -199,7 +213,7 @@ fn ping(
         return;
     };
     if spies.is_empty() {
-        *seen = (0.0, HashMap::new());
+        *seen = Seen::default();
         for (e, ..) in &blips {
             commands.entity(e).despawn();
         }

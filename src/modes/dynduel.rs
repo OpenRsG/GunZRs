@@ -109,6 +109,10 @@ fn start(commands: &mut Commands, spawns: &Spawns, a: usize, arena: &mut Arena) 
     arena.stage = Stage::Fight(0.0);
 }
 
+/// The duels of the running match (`None` until two actors exist).
+#[derive(Resource, Default)]
+pub(super) struct Running(Option<Duels>);
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn dynduel(
     time: Res<Time>,
@@ -117,7 +121,7 @@ pub(super) fn dynduel(
     rules: Res<Rules>,
     spawns: Res<Spawns>,
     mut commands: Commands,
-    mut state: Local<Option<Duels>>,
+    mut running: ResMut<Running>,
     mut clock: ResMut<Clock>,
     mut spec: ResMut<Spectate>,
     names: Query<&Name>,
@@ -136,6 +140,7 @@ pub(super) fn dynduel(
         With<Score>,
     >,
 ) {
+    let state = &mut running.0;
     let name = |e| names.get(e).map_or("?", |n| n.as_str());
     if state.is_none() {
         let mut ids: Vec<(bool, Entity)> = actors.iter().map(|a| (!a.2, a.0)).collect();

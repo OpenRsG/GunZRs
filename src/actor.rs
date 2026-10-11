@@ -33,6 +33,7 @@ use crate::{
     level::Level,
     model::{self, Textures},
     mrs::Vfs,
+    phase::{MatchApp, MatchStart, MatchSystems},
     view::{self, Shot},
 };
 use bevy::{
@@ -107,6 +108,9 @@ const SUPER_FALL: f32 = 1.5;
 const FLY_WINDOW: f32 = 0.5;
 /// Climb speed (m/s) of a wall hang with forward + jump held.
 const HANG_CLIMB: f32 = 4.0;
+/// How far (m) from the capsule's side the wall touched last may be for a guard to still cling to
+/// it: the hang presses into it at 1 m/s, well inside `WALL_LOSE`.
+const HANG_REACH: f32 = 0.1;
 /// Gravity felt during a dash in the air.
 const AIR_TUMBLE_GRAVITY: f32 = 0.25;
 /// A reload started within this many seconds of a shot is a reload shot.
@@ -159,10 +163,13 @@ pub struct ActorPlugin;
 impl Plugin for ActorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerSetup>()
-            .add_systems(Startup, (spawn_player, spawn_camera))
+            .init_match_resource::<AimLast>()
+            .add_systems(MatchStart, (spawn_player, spawn_camera))
             .configure_sets(
                 Update,
-                (ActorSet::Input, ActorSet::Drive, ActorSet::Camera).chain(),
+                (ActorSet::Input, ActorSet::Drive, ActorSet::Camera)
+                    .chain()
+                    .in_set(MatchSystems),
             )
             .add_systems(
                 Update,
@@ -173,9 +180,9 @@ impl Plugin for ActorPlugin {
                     aim_assist
                         .in_set(ActorSet::Input)
                         .after(player_input)
-                        .run_if(|s: Res<Settings>| s.aim_assist > 0.0),
+                        .run_if(|s: bevy::ecs::system::If<Res<Settings>>| s.aim_assist > 0.0),
                     drive.in_set(ActorSet::Drive),
-                    dash_trail.after(drive),
+                    dash_trail.after(drive).in_set(MatchSystems),
                     follow_camera.in_set(ActorSet::Camera),
                 ),
             );
@@ -370,7 +377,8 @@ enum State {
         side: f32,
         left: f32,
     },
-    /// Clinging to the wall behind normal `n` (melee weapon, guard held in the air).
+    /// Clinging to the wall behind normal `n` (guard held in the air, any weapon that allows wall
+    /// moves) for as long as the guard is held.
     Hang {
         n: Vec3,
     },
@@ -1182,10 +1190,10 @@ fn aim_assist(
             Without<Protected>,
         ),
     >,
-    mut last: Local<Option<(f32, f32)>>,
+    mut last: ResMut<AimLast>,
 ) {
     if frozen.is_some() {
-        *last = None;
+        last.0 = None;
         return;
     }
     let s = settings.aim_assist.min(1.0);
@@ -1207,6 +1215,7 @@ fn aim_assist(
         .min_by(|a, b| a.0.total_cmp(&b.0));
     // the player's own turn this frame (a respawn or a script resets the view: not a turn)
     let turn = last
+        .0
         .map(|l| (intent.yaw - l.0, intent.pitch - l.1))
         .filter(|t| t.0.abs() < 0.5 && t.1.abs() < 0.5)
         .unwrap_or_default();
@@ -1219,8 +1228,12 @@ fn aim_assist(
         }
         (intent.yaw, intent.pitch) = (look.0, look.1.clamp(-1.3, 1.3));
     }
-    *last = Some((intent.yaw, intent.pitch));
+    last.0 = Some((intent.yaw, intent.pitch));
 }
+
+/// The player's yaw and pitch at the last [`aim_assist`] run, to tell their own turn.
+#[derive(Resource, Default)]
+struct AimLast(Option<(f32, f32)>);
 
 /// Seconds the player's camera takes for one turn around the corpse (on top of the mouse).
 const DEATH_ORBIT_PERIOD: f32 = 14.0;
@@ -1929,7 +1942,9 @@ fn drive(
                 || matches!(
                     a.state,
                     State::WallRun { .. } | State::Tumble { .. } | State::Wall { .. }
-                ))
+                )
+                // a hang with forward held climbs instead
+                || matches!(a.state, State::Hang { .. }) && walk.y <= 0.5)
             && !a.grounded
             && let Some((n, t)) = a.wall
             && g.wall
@@ -1982,10 +1997,10 @@ fn drive(
             });
         }
 
-        // Wall hang: a melee weapon, guard held in the air against a wall (also ends a wall run
-        // or the flight of a kick). Forward + jump held while hanging climbs.
+        // Wall hang: guard held in the air against a wall, with any weapon that allows wall moves
+        // (also ends a wall run or the flight of a kick). Forward + jump held while hanging climbs;
+        // jump alone kicks off.
         if alive
-            && g.melee
             && g.wall
             && intent.guard
             && !a.grounded
@@ -1995,7 +2010,11 @@ fn drive(
                     State::Wall { .. } | State::WallRun { .. } | State::Tumble { .. }
                 ))
             && let Some((n, t)) = a.wall
-            && now - t < 0.1
+            // touched within 0.1 s, or still right there (forward released since)
+            && (now - t < 0.1
+                || col
+                    .raycast(tf.translation + Vec3::Y * 0.9, -n, RADIUS + HANG_REACH)
+                    .is_some())
             && col
                 .raycast(
                     tf.translation + Vec3::Y * 0.05,
@@ -2013,6 +2032,7 @@ fn drive(
                 }
             );
             a.state = State::Hang { n };
+            a.wall = Some((n, now));
             a.vel = Vec3::ZERO;
             a.restart = true;
         }
@@ -2070,29 +2090,18 @@ fn drive(
         }
 
         // Taunt and emotes: the weapon's clip of that name, standing.
-        let sliding = matches!(
-            a.state,
-            State::Action { clip, moving: ActionMove::Control(_), .. } if clip.starts_with("guard")
-        );
         if let Some(clip) = emote_edge
             && a.grounded
-            && (sliding || matches!(a.state, State::Free))
+            && matches!(a.state, State::Free)
             && let Some(c) = data.clip(woman, g.motion, clip)
         {
-            if sliding {
-                debug!("t={now:.2} tech: slide emote {who} ({clip})");
-            }
             a.state = State::Action {
                 clip,
                 t: 0.0,
                 total: c.secs,
                 speed: 1.0,
-                moving: if sliding {
-                    ActionMove::Control(1.0)
-                } else {
-                    ActionMove::Locked
-                },
-                cancel_from: if sliding { f32::INFINITY } else { TAUNT_CANCEL },
+                moving: ActionMove::Locked,
+                cancel_from: TAUNT_CANCEL,
             };
             a.restart = true;
         }
@@ -2278,7 +2287,11 @@ fn drive(
         if a.grounded && a.vel.y <= 0.0 {
             delta.y = delta.y.min(-0.05);
         }
-        let mv = col.slide_move(tf.translation, delta, RADIUS, HEIGHT);
+        let mut mv = col.slide_move(tf.translation, delta, RADIUS, HEIGHT);
+        // Pressing into a leaning wall slides the capsule up or down it: a hang stays put.
+        if matches!(a.state, State::Hang { .. }) && a.vel.y == 0.0 {
+            mv.pos.y = tf.translation.y;
+        }
         let moved_up = mv.pos.y - tf.translation.y;
         tf.translation = mv.pos;
         if alive {

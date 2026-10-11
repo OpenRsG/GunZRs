@@ -5,6 +5,7 @@
 //! keys: `docs/formats.md` "Controls".
 
 use crate::{
+    phase::MatchApp,
     profile::Profile,
     ui::{
         ACCENT, DIM, INK, LINE, ON_ACCENT, RAISED, SCRIM, body, button, compact, digits, heading,
@@ -602,7 +603,7 @@ pub struct ControlsPlugin;
 
 impl Plugin for ControlsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Pad>()
+        app.init_match_resource::<Pad>()
             .init_resource::<Panel>()
             .add_systems(
                 PreUpdate,

@@ -3,6 +3,7 @@
 //! rewritten afterwards.
 
 use super::{HP_TIERS, LOW_HP, Root, rand, sfx_image, shake_camera, tier};
+use crate::phase::{MatchApp, MatchSystems};
 use crate::{
     actor::ActorData,
     col::MapCollision,
@@ -15,7 +16,8 @@ use crate::{
 use bevy::{prelude::*, transform::TransformSystems, ui::UiSystems};
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Taken>()
+    app.init_match_resource::<Taken>()
+        .init_match_resource::<Blood>()
         .add_systems(
             Update,
             (
@@ -28,7 +30,8 @@ pub(super) fn plugin(app: &mut App) {
                 spawn_lens
                     .run_if(any_with_component::<Root>.and_then(not(any_with_component::<Lens>))),
                 lens.run_if(resource_exists::<LensArt>),
-            ),
+            )
+                .in_set(MatchSystems),
         )
         // After propagation and the camera shake, so the bars follow the frame as rendered.
         .add_systems(
@@ -36,7 +39,8 @@ pub(super) fn plugin(app: &mut App) {
             mate_bars
                 .after(TransformSystems::Propagate)
                 .after(shake_camera)
-                .before(UiSystems::Layout),
+                .before(UiSystems::Layout)
+                .in_set(MatchSystems),
         );
 }
 
@@ -378,6 +382,16 @@ fn spawn_pools(
     }
 }
 
+/// Slot cursors, screen-lens flash and random seeds of [`splat`] and [`lens`] (0 = unseeded).
+#[derive(Resource, Default)]
+struct Blood {
+    splat_next: usize,
+    splat_seed: u32,
+    lens_next: usize,
+    flash: f32,
+    lens_seed: u32,
+}
+
 /// A hit that cost the player HP drops a splatter near a random screen edge, sized by the damage,
 /// fading out over [`SPLAT_LIFE`].
 fn splat(
@@ -395,9 +409,10 @@ fn splat(
         ),
         Without<Corner>,
     >,
-    mut next: Local<usize>,
-    mut seed: Local<u32>,
+    mut blood: ResMut<Blood>,
 ) {
+    let blood = &mut *blood;
+    let (next, mut seed) = (&mut blood.splat_next, &mut blood.splat_seed);
     let dt = real.delta_secs();
     for (mut s, _, _, mut img, mut vis) in &mut pool {
         if s.age >= SPLAT_LIFE {
@@ -732,10 +747,10 @@ fn lens(
         (&mut ImageNode, &mut Visibility),
         (With<Vignette>, Without<Lens>, Without<Trail>),
     >,
-    mut next: Local<usize>,
-    mut flash: Local<f32>,
-    mut seed: Local<u32>,
+    mut blood: ResMut<Blood>,
 ) {
+    let blood = &mut *blood;
+    let (next, flash, mut seed) = (&mut blood.lens_next, &mut blood.flash, &mut blood.lens_seed);
     let dt = real.delta_secs();
     let on = settings.screen_blood && settings.realistic_blood;
     if *seed == 0 {

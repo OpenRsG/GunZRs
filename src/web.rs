@@ -95,7 +95,7 @@ pub fn play(cfg: &crate::menu::Config) {
 
 /// Tells the page when the match is on screen (`globalThis.gunzReady()`, it hides its loading
 /// screen) and hands the end of a match to it (`globalThis.gunzExit(code)`): it starts the same
-/// match again or goes back to its menu, as `relaunch` does on the desktop. Also asks for the
+/// match again or goes back to its menu (`phase::Leave` on the desktop). Also asks for the
 /// pointer lock again on a click while playing: browsers grant it only right after a user
 /// gesture, and Esc releases it without telling the game. On a touch screen it feeds the page's
 /// on-screen controls into the game instead (`touch`).
@@ -104,7 +104,8 @@ pub struct WebPlugin;
 impl Plugin for WebPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, (touch.after(InputSystems), gpu_errors))
-            .add_systems(Update, (ready, relock, raw_input))
+            .add_systems(Update, (ready, raw_input))
+            .add_systems(Update, relock.run_if(in_state(crate::phase::Screen::Match)))
             .add_systems(Last, exit);
     }
 }
@@ -230,13 +231,11 @@ fn ready(mut frames: Local<u32>) {
 fn relock(
     mouse: Res<ButtonInput<MouseButton>>,
     frozen: Option<Res<Frozen>>,
-    clock: Option<Res<crate::session::Clock>>,
     mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    // only in a match (the menu keeps its cursor), and never on a touch screen: the fire
+    // the menu keeps its cursor (a match only), and a touch screen never locks it: the fire
     // button is a left click there
-    if clock.is_some()
-        && frozen.is_none()
+    if frozen.is_none()
         && mouse.get_just_pressed().next().is_some()
         && !global("gunzTouch").is_object()
     {

@@ -13,6 +13,7 @@ use crate::{
     level::Level,
     menu::Mode,
     mrs::Vfs,
+    phase::{MatchSystems, Persist},
     session::{Clock, Rules},
     view::Shot,
 };
@@ -55,7 +56,7 @@ impl Plugin for MusicPlugin {
         app.init_resource::<Want>().add_systems(
             Update,
             (
-                choose.run_if(resource_exists::<Level>),
+                choose.run_if(resource_exists::<Level>).in_set(MatchSystems),
                 play.run_if(resource_changed::<Want>),
                 fade,
             )
@@ -79,10 +80,10 @@ struct Voice {
     target: f32,
 }
 
-/// Menu music: the menu app has no `Level`, so it hands its archive over once.
-pub fn menu(app: &mut App, vfs: &Vfs) {
-    app.add_plugins(MusicPlugin)
-        .insert_resource(Want::new(vfs, MENU, false));
+/// The menu's track: there is no `Level` to choose from, so the menu hands over its archive
+/// whenever it opens (`play` crossfades from whatever the last match played).
+pub fn menu(world: &mut World, vfs: &Vfs) {
+    world.insert_resource(Want::new(vfs, MENU, false));
 }
 
 impl Want {
@@ -220,6 +221,7 @@ fn play(
         PlaybackSettings::LOOP
     };
     commands.spawn((
+        Persist,
         Voice {
             level: 0.0,
             target: 1.0,

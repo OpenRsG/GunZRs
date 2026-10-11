@@ -13,6 +13,7 @@ use crate::{
     col::MapCollision,
     combat::{Vfx, rnd},
     game::{Dead, MapEntity, Npc, Player, Settings, Vitals},
+    phase::{MatchStart, MatchSystems},
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -70,12 +71,13 @@ pub struct GorePlugin;
 
 impl Plugin for GorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup).add_systems(
+        app.add_systems(MatchStart, setup).add_systems(
             Update,
             (spray, fly, mist, drips, pools, bleed, age)
                 .chain()
                 .run_if(resource_exists::<Gore>)
-                .run_if(resource_exists::<MapCollision>),
+                .run_if(resource_exists::<MapCollision>)
+                .in_set(MatchSystems),
         );
     }
 }

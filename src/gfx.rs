@@ -10,6 +10,7 @@ use crate::{
     controls,
     game::{Damage, Dead, Motor, Player, Settings, Vitals},
     level::MapMaterial,
+    phase::MatchApp,
     profile::Profile,
     ui::{
         ACCENT, Chosen, DIM, INK, LINE, SCRIM, body, button, compact, digits, heading, panel,
@@ -484,6 +485,7 @@ impl Plugin for GfxPlugin {
         app.add_message::<Damage>()
             .insert_resource(RenderErrorHandler(render_error))
             .add_plugins(FullscreenMaterialPlugin::<Fx>::default())
+            .init_match_resource::<Live>()
             .init_resource::<Panel>()
             .add_systems(
                 PreUpdate,
@@ -791,7 +793,7 @@ fn limit(
 }
 
 /// What the player's state asks of the effects.
-#[derive(Default)]
+#[derive(Resource, Default)]
 struct Live {
     hurt: f32,
     low: f32,
@@ -821,7 +823,7 @@ fn drive(
         With<Camera3d>,
     >,
     mut commands: Commands,
-    mut live: Local<Live>,
+    mut live: ResMut<Live>,
 ) {
     let Ok((e, transform, mut projection, fx, aberration)) = camera.single_mut() else {
         return;

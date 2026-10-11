@@ -16,6 +16,7 @@ use crate::{
     level::Level,
     map::Map,
     mrs::Vfs,
+    phase::{MatchApp, MatchSystems},
     pickup::{Picked, SOUND as PICKUP_SOUND},
     profile::Profile,
     view::{SCALE, Shot, to_bevy},
@@ -44,7 +45,7 @@ pub struct AudioPlugin;
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Later>().add_systems(
+        app.init_match_resource::<Later>().add_systems(
             Update,
             (
                 load.run_if(resource_exists::<Level>.and_then(resource_exists::<ActorData>))
@@ -59,7 +60,8 @@ impl Plugin for AudioPlugin {
                     reap,
                 )
                     .run_if(resource_exists::<Sounds>),
-            ),
+            )
+                .in_set(MatchSystems),
         );
     }
 }
@@ -801,8 +803,9 @@ fn actor_sounds(
     mut respawned: RemovedComponents<Dead>,
     transforms: Query<&GlobalTransform>,
     players: Query<(), With<Player>>,
-    player: Query<(&Loadout, Has<Dead>), With<Player>>,
-    mut current: Local<Option<usize>>,
+    player: Query<(Entity, &Loadout, Has<Dead>), With<Player>>,
+    // the player it was seen on and its weapon (a new match has a new player entity)
+    mut current: Local<Option<(Entity, usize)>>,
     mut sfx: Sfx,
 ) {
     let at = |e: Entity| {
@@ -845,11 +848,11 @@ fn actor_sounds(
         }
     }
     // Weapon switch: `we_weapon_rdy` (a short 2D click, **inferred** from the name).
-    if let Ok((l, dead)) = player.single() {
-        if current.is_some_and(|c| c != l.current) && !dead {
+    if let Ok((e, l, dead)) = player.single() {
+        if current.is_some_and(|(pe, c)| pe == e && c != l.current) && !dead {
             sfx.play("we_weapon_rdy", true, Vec3::ZERO);
         }
-        *current = Some(l.current);
+        *current = Some((e, l.current));
     }
 }
 

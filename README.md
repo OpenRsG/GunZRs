@@ -10,13 +10,13 @@ It loads the maps, characters, weapons and effects straight from your Steam inst
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Get the game on Steam](https://img.shields.io/badge/Steam-GunZ%3A%20The%20Duel-1b2838?logo=steam)](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
 
-<img src="docs/media/demo.gif" alt="Third-person fight against three bots in Mansion" width="720">
+<img src="docs/media/demo.webp" alt="A dash with afterimages, a wall run and kick, a fight against three bots, the killcam, a rifle kill with the ELIMINATED confirmation, and the main menu, in Mansion" width="800">
 
-<sub>Mansion against three bots, recorded headlessly with <code>--shot</code> and <code>GUNZ_SEQ</code>.</sub>
+<sub>Mansion, recorded headlessly with <code>--shot</code> and <code>GUNZ_SEQ</code>: dash, wall run, three skill-1 bots, killcam, a kill, the menu.</sub>
 
 </div>
 
-No game files are included (the demo GIF is a capture for illustration). You need your own copy
+No game files are included (the demo animation is a capture for illustration). You need your own copy
 of the game; the port only reads its `.mrs` archives and never runs `Gunz.exe`.
 
 ## Quick start
@@ -51,8 +51,8 @@ Defaults follow the original game's `config.xml`; C, T, F5-F9, `[` and `]` are t
 | Key | Action |
 |---|---|
 | Mouse | Aim (cursor is grabbed) |
-| W A S D | Run; double-tap a direction to tumble |
-| C | Dash: tumble the held direction (forward if none) |
+| W A S D | Run (full speed at once, stops at once); double-tap a direction to dash |
+| C | Dash: a 16 m/s burst in the held direction (forward if none) |
 | Space | Jump; near a wall in the air: wall kick; along a wall with W held: wall run |
 | Left mouse, left Ctrl | Attack (hold for automatic guns, chain slashes into a combo) |
 | Right mouse, left Shift | Guard (melee) |
@@ -77,8 +77,10 @@ GRAPHICS (a main-menu tab, and in the Esc menu) has three presets and every sett
 ORIGINAL draws the image exactly as the game always did (no tonemapping, no effects, 4x MSAA);
 ENHANCED (the default) and ULTRA add HDR with tonemapping, bloom, SMAA, sharpening, anisotropic
 filtering, distance fog, vignette, film grain, chromatic aberration and camera-turn motion blur;
-every screen effect has its own strength (OFF costs nothing): speed streaks while tumbling or
-falling, a hit flash, and a drained, throbbing screen at low health. LIGHTING lights the characters
+every screen effect has its own strength (OFF costs nothing): speed effects (light rays and radial
+blur while dashing or falling, a dash that widens the view for a moment and leaves glowing
+afterimages of the character), a hit flash, and a drained, throbbing screen at low health. Dust
+rings from the game's own effects mark ground dashes, wall kicks and hard landings. LIGHTING lights the characters
 from the map's own lightmap colours (with a rim light), lights up the walls, floor and characters
 around muzzle flashes and explosions, and puts a soft contact shadow under every character.
 Also field of view, vsync and a frame limit (not in the browser). Changes show in the match at once
@@ -94,12 +96,13 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 
 The original game's bug-born movement tech works as ordinary features, always on, for you and the
 bots (timings are estimates, see `docs/formats.md` "K-style techniques"). With the default
-loadout (katana, revolver, rifle) and the keys above:
+loadout (katana, revolver, rifle) and the keys above, every technique of the usual guide works;
+each input sequence was played headless and its log checked (the juggle's last hit only by bots):
 
 | Technique | How |
 |---|---|
-| Air dash | Jump, then dash (C or double-tap): one per jump; a slash out of a dash, a wall kick or a jump gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
-| Dash cancel, wall cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
+| Dash, air dash | C or a double tap: a 16 m/s burst with the game's dash effect; one in the air per jump; a slash out of a dash, a wall kick or a jump gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
+| Dash cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
 | Flying / wall climbing | Wall kick, slash, jump off the wall again, repeat (flash climb: slash, switch to a gun and back, jump) |
 | Switch cancel | Switch weapons during an air slash: slash shot (jump, slash, switch to a gun, shoot), flash step (slash, gun, back to the blade: no draw delay) |
 | Reload shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon |
@@ -107,13 +110,20 @@ loadout (katana, revolver, rifle) and the keys above:
 | Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump |
 | Wall hang | In the air against a wall with a blade, hold guard; forward + jump while hanging climbs |
 | Butterfly, slide | Slash, then guard before the recovery ends: you can move while the guard is up, and emote (slide); jump or dash out of it |
-| Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block, repeat; or jump, slash, block, dash, slash, block |
-| Quick launch, juggle | Uppercut (guard + attack), guard to cancel its recovery; an uppercut on an airborne launched enemy keeps them up |
+| Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block; jump, slash, block, dash, slash, block; or jump, slash, block three times (a jump pressed just before landing is kept) |
+| Block cancel (quadruple BF) | Guard during a slash lands the hit at once and goes straight to the guard; press guard with the next direction for the glitch rhythm |
+| Quick launch, juggle | Uppercut (guard + attack), guard to cancel its recovery; an uppercut on an airborne launched enemy keeps them up; flip, block, jump, dash, slash, block |
+| Extended flip | Dash right out of the uppercut |
+| Half step, reload half step, forbidden step | A shot during a dash fires and ends the dash; mix with slashes, switches and reloads |
+| Wall cancel, advanced wall cancel | Dash back into a wall and kick off it again (with a switch cancel in between for the advanced one) |
+| Multi wall run | Dash at a wall at about 45 degrees and jump twice: a second kick off another wall |
+| Wall hang cancel | Guard against a wall ends a wall run or a kick's flight in a hang |
 | Insta-kill | Uppercut, then switch to a gun right after it hits and shoot the airborne enemy |
 | Light step | A dash right after a slash makes no dash sound |
 
-Bots of higher skill use air dashes, dash breaks, air butterflies, slash shots, insta-kills, reload shots,
-swapshots, launches and juggles, and climb a wall with a hang to reach an enemy on a ledge.
+Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly, up to the quadruple
+butterfly and forbidden step from 0.85; the better the bot, the more often it tries them. They also
+climb a wall with a hang to reach an enemy on a ledge.
 
 ## Status
 
@@ -137,7 +147,7 @@ swapshots, launches and juggles, and climb a wall with a hang to reach an enemy 
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
 | Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall hang climbs), grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
-| Menus and HUD | Modern flat UI (rounded cards, accent colour, hover / pressed / selected states): main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, quest picker) with 3D character preview; HUD with health and armour bars that trail behind damage, a weapon strip with item icons and an ammo counter with low-ammo and RELOAD warnings, a crosshair that opens with running, jumping and shots, hit and kill markers, animated notices, a ranked scoreboard with K/D, damage indicators, status effect timers, decals, end-of-match screen with XP and bounty earned; a sliding kill feed at the top right with the retail kill-log weapon icons, a HEADSHOT tag (and the retail HEAD SHOT banner for your own) and clan emblems in a clan war; a damage report on death (who hurt you and how much), teammates' HP / AP / ammo over their heads, blood splatter on screen when hurt (retail blood decals) |
+| Menus and HUD | One look throughout (`src/ui.rs`, rules in [`DESIGN.md`](DESIGN.md)): Barlow type, amber accent, sharp plates. Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS, quest picker) with tabs, a player strip (level, XP bar, bounty, medals) and a 3D character preview; pause menu as a side panel. HUD: health and armour bottom left (the bar trails behind damage), weapon and ammo bottom right with low-ammo and RELOAD warnings, clock and team scores top centre, KILLS / DEATHS top left, a crosshair that opens with running, jumping and shots, hit and kill markers, damage direction arcs, status effect timers, a ranked scoreboard with K/D; a sliding kill feed at the top right with the retail kill-log weapon icons, HEADSHOT tags and clan emblems in a clan war; ELIMINATED and the victim's name under the crosshair when you kill; a KILLED BY screen with the damage each attacker dealt and a respawn bar; round banners; end-of-match screen with XP and bounty earned |
 | Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; a rising kill-streak sound and your own hit sound (`custom/hitsound.wav` next to the profile) |
 | Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars, screen blood and realistic blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
 | Blood | Simulated gore (on by default, `--no-realistic-blood` / the pause menu for the retail sprites and marks): droplet sprays scaled by damage that fly with gravity, splatter walls and floors by impact angle, run down walls in drips, pool under corpses, trail from hurt bots, and splash drops and a dark vignette on your screen |
@@ -153,7 +163,7 @@ swapshots, launches and juggles, and climb a wall with a hang to reach an enemy 
 | Quest extras | The challenge quest's gacha reward item (3000xxx) is not in the item data, so it cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon's skeletons follow the data's id scheme and a public wiki, but its XP, bounty and drops are not in the data |
 | Music choice | Neither the data nor public sources say which track belongs to which map; the port picks one of the nine in-game tracks per map (fixed, by name) |
 | Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
-| Exact feel | Movement constants come from replays of older clients, so parity with the Steam client is unproven; tumble speed and the wall-climb height are still estimates (listed as **inferred** in `docs/formats.md`) |
+| Exact feel | Movement constants come from replays of older clients, so parity with the Steam client is unproven; the dash speed, the cancel windows and the wall-climb height are estimates (listed as **inferred** in `docs/formats.md`) |
 
 ## In the browser (WebGPU)
 
@@ -218,9 +228,11 @@ kill/round limit (defaults per mode from `gametypecfg.xml`) with victory, defeat
 
 Testing without a window: every viewer accepts `--shot OUT.png` to render one 1280x720 frame
 headlessly. `gunz-play` adds `--script`, `--time`, `--hp`, `--ap`, `--at`, `--die-at`,
-`--npc NAME,..` (spawn quest monsters) and `--menu-page match|player|shop|inventory` for
+`--npc NAME,..` (spawn quest monsters), `--menu-page match|player|shop|inventory|clan|controls|graphics`
+and `--pause-at S [--pause-page controls|graphics]` for
 reproducible runs (syntax in `src/bin/gunz-play.rs`). With `GUNZ_SEQ=SECS` and a `%` in the shot
-path it also saves the last SECS seconds at 20 fps, which is how the GIF above was made.
+path it also saves the last SECS seconds at 20 fps, which is how the demo above was made (the
+clips were captioned and joined with Pillow, then encoded to animated WebP with `ffmpeg`).
 `GUNZ_PROFILE=PATH` uses another profile file. `RUST_LOG=gunz::bot=debug` logs bot decisions;
 `GUNZ_FRAMETIMES=1` logs frame times (add `GUNZ_NOVSYNC=1` for uncapped frames).
 

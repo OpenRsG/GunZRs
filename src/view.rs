@@ -6,8 +6,8 @@ use bevy::{
     app::ScheduleRunnerPlugin,
     asset::RenderAssetUsages,
     camera::{
-        RenderTarget,
         visibility::{InheritedVisibility, ViewVisibility},
+        RenderTarget,
     },
     core_pipeline::tonemapping::Tonemapping,
     image::{CompressedImageFormats, ImageSampler, ImageType},
@@ -17,8 +17,8 @@ use bevy::{
     render::{
         render_resource::TextureFormat,
         view::{
+            screenshot::{save_to_disk, Screenshot},
             NoIndirectDrawing,
-            screenshot::{Screenshot, save_to_disk},
         },
     },
     window::{ExitCondition, PresentMode},
@@ -144,7 +144,7 @@ fn take_shot(
         return;
     };
     // `GUNZ_SEQ=SECS` with a `%` in the path: also save every 3rd frame (20 fps) of the SECS
-    // before the capture frame, `%` replaced by the frame number (for demo GIFs).
+    // before the capture frame, `%` replaced by the frame number (for the README demo).
     let span = std::env::var("GUNZ_SEQ")
         .ok()
         .and_then(|s| s.parse::<f32>().ok())

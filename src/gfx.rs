@@ -582,8 +582,7 @@ fn put<C: Component>(c: &mut EntityCommands, v: Option<C>) {
     };
 }
 
-/// The vertical field of view of the settings: the knob is horizontal at 16:9, the game's way of
-/// saying it.
+/// Vertical field of view in radians for Bevy; the `Fov` knob is the horizontal one at 16:9.
 fn base_fov(g: &Graphics) -> f32 {
     2.0 * ((g.get(Knob::Fov).to_radians() / 2.0).tan() * 9.0 / 16.0).atan()
 }

@@ -19,6 +19,7 @@ use crate::{
     menu::Mode,
     mrs::Vfs,
     session::{Clock, HOLD, ROUND_SECS, Rules},
+    ui::{self, ACCENT, DANGER, DIM, INK, PLATE},
     view::{SCALE, to_bevy},
 };
 use bevy::{
@@ -972,6 +973,10 @@ struct Overlay;
 #[derive(Component)]
 struct Backdrop;
 
+/// The thin bar under the title, shown whenever the title is.
+#[derive(Component)]
+struct AccentBar;
+
 #[derive(Component, Clone, Copy, PartialEq)]
 enum Line {
     Title,
@@ -979,10 +984,14 @@ enum Line {
     Spectate,
 }
 
+/// Seconds the banner's pop-in takes when its title changes.
+const BANNER_POP: f32 = 0.12;
+
 /// Round banner (countdown, FIGHT!, round-win screen) and the spectator line.
 #[allow(clippy::too_many_arguments)]
 fn overlay(
     mut commands: Commands,
+    time: Res<Time>,
     camera: Query<Entity, With<Camera3d>>,
     round: Res<Round>,
     clock: Res<Clock>,
@@ -994,7 +1003,9 @@ fn overlay(
     spy_player: Query<Has<Spy>, With<Player>>,
     shown: Query<(), With<Overlay>>,
     mut lines: Query<(&Line, &mut Text, &mut TextColor)>,
-    mut backdrop: Query<&mut BackgroundColor, With<Backdrop>>,
+    mut backdrop: Query<(&mut BackgroundColor, &mut UiTransform)>,
+    mut bar: Query<&mut Visibility, With<AccentBar>>,
+    mut pop: Local<(String, f32)>,
 ) {
     if shown.is_empty() {
         let Ok(camera) = camera.single() else { return };
@@ -1021,6 +1032,7 @@ fn overlay(
             .with_children(|r| {
                 r.spawn((
                     Backdrop,
+                    UiTransform::default(),
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
@@ -1030,35 +1042,54 @@ fn overlay(
                     BackgroundColor(Color::NONE),
                 ))
                 .with_children(|b| {
-                    for (line, size) in [(Line::Title, 56.0), (Line::Sub, 24.0)] {
-                        b.spawn((
-                            line,
-                            Text::new(""),
-                            TextFont::from_font_size(size),
-                            TextColor(Color::WHITE),
-                            TextShadow::default(),
-                            TextLayout {
-                                justify: Justify::Center,
-                                ..default()
-                            },
-                        ));
-                    }
+                    b.spawn((
+                        Line::Title,
+                        Text::new(""),
+                        ui::display(48.0),
+                        TextColor(INK),
+                        ui::shadow(),
+                        TextLayout {
+                            justify: Justify::Center,
+                            ..default()
+                        },
+                    ));
+                    b.spawn((
+                        AccentBar,
+                        Visibility::Hidden,
+                        Node {
+                            width: px(64),
+                            height: px(2),
+                            margin: UiRect::vertical(px(8)),
+                            ..default()
+                        },
+                        BackgroundColor(ACCENT),
+                    ));
+                    b.spawn((
+                        Line::Sub,
+                        Text::new(""),
+                        ui::strong(20.0),
+                        TextColor(INK),
+                        ui::shadow(),
+                        TextLayout {
+                            justify: Justify::Center,
+                            ..default()
+                        },
+                    ));
                 });
                 r.spawn((
                     Line::Spectate,
                     Text::new(""),
-                    TextFont::from_font_size(22.0),
-                    TextColor(Color::WHITE),
-                    TextShadow::default(),
+                    ui::compact(20.0),
+                    TextColor(DIM),
+                    ui::shadow(),
                 ));
             });
         return;
     }
     let name = |e: Entity| names.get(e).map_or("?", |n| n.as_str()).to_owned();
-    let gold = Color::srgb(1.0, 0.85, 0.3);
     let (title, sub, color, back) = match round.phase {
         // The end screen has its own headline.
-        _ if clock.over.is_some() => (String::new(), String::new(), Color::WHITE, Color::NONE),
+        _ if clock.over.is_some() => (String::new(), String::new(), INK, Color::NONE),
         Phase::Ready if round.n > 0 => {
             let mine = player.single().ok().flatten();
             let intro = match rules.mode {
@@ -1099,8 +1130,8 @@ fn overlay(
                 } else {
                     format!("ROUND {}", round.n)
                 },
-                format!("{intro}\n{left}"),
-                Color::WHITE,
+                format!("{intro}\nSTARTS IN {left:.0}"),
+                INK,
                 Color::NONE,
             )
         }
@@ -1111,38 +1142,48 @@ fn overlay(
             } else {
                 round.notice.2.clone()
             },
-            Color::srgb(1.0, 0.4, 0.3),
+            DANGER,
             Color::NONE,
         ),
-        Phase::Live if round.t < FIGHT_SECS => (
-            "FIGHT!".into(),
-            String::new(),
-            Color::srgb(1.0, 0.4, 0.3),
-            Color::NONE,
-        ),
+        Phase::Live if round.t < FIGHT_SECS => {
+            ("FIGHT!".into(), String::new(), DANGER, Color::NONE)
+        }
         Phase::Over | Phase::Done if round.n > 0 => {
             let color = match round.title.as_str() {
-                "ROUND WON" => gold,
-                "ROUND LOST" => Color::srgb(0.9, 0.25, 0.2),
-                _ => Color::WHITE,
+                "ROUND WON" => ACCENT,
+                "ROUND LOST" => DANGER,
+                _ => INK,
             };
-            (
-                round.title.clone(),
-                round.detail.clone(),
-                color,
-                Color::srgba(0.0, 0.0, 0.0, 0.55),
-            )
+            (round.title.clone(), round.detail.clone(), color, PLATE)
         }
-        _ => (String::new(), String::new(), Color::WHITE, Color::NONE),
+        _ => (String::new(), String::new(), INK, Color::NONE),
     };
     let watching = spec.0.map_or(String::new(), |e| {
         format!("SPECTATING  {}     Space / click: next", name(e))
     });
+    let want_bar = !title.is_empty();
+    for mut v in &mut bar {
+        let w = if want_bar {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *v != w {
+            *v = w;
+        }
+    }
+    if pop.0 != title {
+        pop.0 = title.clone();
+        pop.1 = time.elapsed_secs();
+    }
+    let age = time.elapsed_secs() - pop.1;
+    let scale = 0.94 + 0.06 * crate::ui::ease_out(age / BANNER_POP);
+    let sub_upper = sub.to_uppercase();
     for (line, mut text, mut tc) in &mut lines {
         let (s, c) = match line {
             Line::Title => (&title, color),
-            Line::Sub => (&sub, Color::WHITE),
-            Line::Spectate => (&watching, Color::WHITE),
+            Line::Sub => (&sub_upper, INK),
+            Line::Spectate => (&watching, DIM),
         };
         if text.0 != *s {
             text.0.clone_from(s);
@@ -1151,9 +1192,13 @@ fn overlay(
             tc.0 = c;
         }
     }
-    for mut bg in &mut backdrop {
+    for (mut bg, mut tf) in &mut backdrop {
         if bg.0 != back {
             bg.0 = back;
+        }
+        let want = Vec2::splat(scale);
+        if tf.scale != want {
+            tf.scale = want;
         }
     }
 }

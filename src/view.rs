@@ -105,7 +105,8 @@ pub fn app_plain(title: &str, shot: Option<String>) -> App {
             .add_systems(Update, take_shot),
         None => app.add_plugins(plugins),
     };
-    app.insert_resource(ClearColor(Color::BLACK));
+    app.insert_resource(ClearColor(Color::BLACK))
+        .add_plugins(crate::ui::UiPlugin);
     // No lights anywhere: the GPU light-clustering passes only cost render-thread time
     // (Castle 1.26 -> 1.10 ms). `ClusterConfig::None` is not an option, Bevy 0.19 then
     // creates a zero-sized texture.

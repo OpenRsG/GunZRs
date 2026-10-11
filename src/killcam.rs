@@ -11,6 +11,7 @@ use crate::{
     col::MapCollision,
     combat::{Vfx, rnd},
     game::{Dead, HitShape, Intent, Killed, Player, Settings, Spectate},
+    ui::{self, ACCENT, INK},
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -194,16 +195,16 @@ fn killcam(
                 },
                 children![
                     (
-                        Text::new(format!("{name} killed")),
-                        TextFont::from_font_size(24.0),
-                        TextColor(Color::WHITE),
-                        TextShadow::default(),
+                        Text::new(name.to_string()),
+                        ui::strong(22.0),
+                        TextColor(INK),
+                        ui::shadow(),
                     ),
                     (
                         Text::new("YOU"),
-                        TextFont::from_font_size(64.0),
-                        TextColor(Color::srgb(1.0, 0.9, 0.2)),
-                        TextShadow::default(),
+                        ui::display(60.0),
+                        TextColor(ACCENT),
+                        ui::shadow(),
                     ),
                 ],
             ))

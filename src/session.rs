@@ -7,10 +7,14 @@
 
 use crate::{
     game::{Frozen, Hold, Player, Score, Settings, Team, Vitals},
-    menu::{ACCENT, Chosen, DIM, Mode, Page, button, heading, hover, panel, primary},
+    menu::{Mode, Page},
     modes::{Berserker, ModesPlugin, Phase, Round},
     net::Lan,
     profile::{OPTS, Profile, opt_mut},
+    ui::{
+        ACCENT, Chosen, DANGER, DIM, INK, LINE, RAISED, SCRIM, SURFACE, button, compact, digits,
+        display, hover, primary, strong,
+    },
     view::Shot,
 };
 use bevy::{
@@ -81,11 +85,13 @@ impl Rules {
 pub struct Clock {
     pub elapsed: f32,
     pub over: Option<String>,
-    /// The HUD's mode line under the timer: score, round and leader for the current mode (may
-    /// be empty), and the timer above it.
+    /// The HUD's mode line under the timer: round and leader for the current mode (may be
+    /// empty), and the timer above it.
     pub header: String,
     pub timer: String,
-    /// Extra HUD text of the mode (the quest's sector and NPC count), written by its plugin.
+    /// RED/BLUE score for team-based modes (Team, TeamGladiator, Elimination, Assassinate),
+    /// shown either side of the clock; `None` for modes with no two-team score.
+    pub team_score: Option<(u32, u32)>,
     pub note: String,
 }
 
@@ -198,7 +204,9 @@ fn standing(
     (me, other)
 }
 
-/// The HUD's top lines: the mode line (score, round, who leads; may be empty) and the timer.
+/// The HUD's top lines: the caps mode line (round/leader, may be empty), the timer, and the
+/// RED/BLUE score for two-team modes (rendered as separate score blocks either side of the
+/// clock instead of baked into the line).
 fn header(
     rules: &Rules,
     round: &Round,
@@ -206,7 +214,7 @@ fn header(
     (mine, theirs): (u32, u32),
     names: &Query<&Name>,
     boss: Option<&str>,
-) -> (String, String) {
+) -> (String, String, Option<(u32, u32)>) {
     let mmss = |s: u32| format!("{}:{:02}", s / 60, s % 60);
     let left = |limit: f32, used: f32| mmss((limit - used).max(0.0).ceil() as u32);
     let total = match rules.time_limit {
@@ -222,11 +230,12 @@ fn header(
             0.0
         },
     );
-    match rules.mode {
-        Mode::Team | Mode::TeamGladiator => (format!("RED {mine} : {theirs} BLUE"), total),
+    let (line, timer, score) = match rules.mode {
+        Mode::Team | Mode::TeamGladiator => (String::new(), total, Some((mine, theirs))),
         Mode::Elimination | Mode::Assassinate => (
-            format!("RED {mine} : {theirs} BLUE   ROUND {}", round.n.max(1)),
+            format!("ROUND {}", round.n.max(1)),
             round_t,
+            Some((mine, theirs)),
         ),
         Mode::Duel | Mode::DuelTournament => {
             let name = |e| names.get(e).map_or("?", |n| n.as_str());
@@ -234,42 +243,49 @@ fn header(
                 Some((a, b)) if in_round && rules.mode == Mode::DuelTournament => (
                     format!("{}   {} vs {}", round.stage(), name(a), name(b)),
                     round_t,
+                    None,
                 ),
                 Some((a, b)) if in_round => (
                     format!("ROUND {}   {} vs {}", round.n, name(a), name(b)),
                     round_t,
+                    None,
                 ),
-                _ => (String::new(), total),
+                _ => (String::new(), total, None),
             }
         }
         Mode::Spy => (
             format!("YOU {mine} : {theirs} THEM   ROUND {}", round.n.max(1)),
             round_t,
+            None,
         ),
         Mode::ClanWar => (
             format!("{mine} : {theirs}   ROUND {}", round.n.max(1)),
             round_t,
+            None,
         ),
         Mode::Infected => (
             format!("{}   YOU {mine} : {theirs} THEM", clock.note),
             round_t,
+            None,
         ),
         Mode::Berserker => match rules.kill_limit {
             Some(k) => (
                 format!("BERSERKER {}   first to {k}", boss.unwrap_or("-")),
                 total,
+                None,
             ),
-            None => (format!("BERSERKER {}", boss.unwrap_or("-")), total),
+            None => (format!("BERSERKER {}", boss.unwrap_or("-")), total, None),
         },
         Mode::Deathmatch | Mode::Gladiator | Mode::Gunman => match rules.kill_limit {
-            Some(k) => (format!("first to {k}"), total),
-            None => (String::new(), total),
+            Some(k) => (format!("first to {k}"), total, None),
+            None => (String::new(), total, None),
         },
         Mode::Quest | Mode::Blitzkrieg | Mode::GunGame | Mode::DynDuel => {
-            (clock.note.clone(), total)
+            (clock.note.clone(), total, None)
         }
-        Mode::Training => (String::new(), total),
-    }
+        Mode::Training => (String::new(), total, None),
+    };
+    (line.to_uppercase(), timer, score)
 }
 
 fn clock(
@@ -292,12 +308,15 @@ fn clock(
         .single()
         .ok()
         .and_then(|n| n.as_str().split(" [").next());
-    let (line, timer) = header(&rules, &round, &clock, (mine, theirs), &names, boss);
+    let (line, timer, score) = header(&rules, &round, &clock, (mine, theirs), &names, boss);
     if clock.header != line {
         clock.header = line;
     }
     if clock.timer != timer {
         clock.timer = timer;
+    }
+    if clock.team_score != score {
+        clock.team_score = score;
     }
     // The tournament bracket decides the match by itself, once its last screen has shown.
     if let (Some(v), Phase::Done) = (round.verdict, round.phase) {
@@ -392,7 +411,7 @@ fn panels(
     pause: Query<Entity, With<PauseUi>>,
     end: Query<Entity, With<EndUi>>,
     opts: Query<(Entity, &Act, &Children, Has<Chosen>)>,
-    mut texts: Query<&mut Text>,
+    mut texts: Query<(&mut Text, &mut TextColor)>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
@@ -417,8 +436,9 @@ fn panels(
         for (e, a, kids, chosen) in &opts {
             if let (Act::Opt(i), Some(&k)) = (a, kids.first()) {
                 let on = *opt_mut(&mut s, *i);
-                if let Ok(mut t) = texts.get_mut(k) {
+                if let Ok((mut t, mut c)) = texts.get_mut(k) {
                     t.0 = on_off(on).into();
+                    c.0 = if on { ACCENT } else { DIM };
                 }
                 match (on, chosen) {
                     (true, false) => drop(commands.entity(e).insert(Chosen)),
@@ -449,82 +469,93 @@ fn root(camera: Entity) -> impl Bundle {
 
 fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
     commands
-        .spawn((
-            PauseUi,
-            root(camera),
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-        ))
+        .spawn((PauseUi, root(camera), BackgroundColor(SCRIM)))
         .with_children(|r| {
-            r.spawn(panel(470.0, AlignItems::Center))
-                .with_children(|p| {
-                    p.spawn(heading("PAUSED"));
-                    p.spawn(primary(438.0, 48.0, "RESUME", 22.0, Act::Resume));
-                    p.spawn(Node {
-                        column_gap: px(8),
+            // a full-height side panel, so the column never sits over the HUD's vitals
+            r.spawn((
+                Node {
+                    width: px(560),
+                    height: percent(100),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_self: AlignSelf::FlexStart,
+                    padding: UiRect::horizontal(px(70)),
+                    row_gap: px(8),
+                    ..default()
+                },
+                BackgroundColor(SURFACE),
+            ))
+            .with_children(|p| {
+                p.spawn((Text::new("PAUSED"), display(36.0), TextColor(INK)));
+                p.spawn(primary(420.0, 46.0, "RESUME", 20.0, Act::Resume));
+                for (label, act) in [
+                    ("CONTROLS", Act::Controls),
+                    ("GRAPHICS", Act::Graphics),
+                    ("MAIN MENU", Act::Menu),
+                ] {
+                    p.spawn(button(420.0, 38.0, label, 16.0, act));
+                }
+                // in the browser MAIN MENU is the page itself: nothing else to quit to
+                if !cfg!(target_arch = "wasm32") {
+                    p.spawn(button(420.0, 38.0, "QUIT", 16.0, Act::Quit));
+                }
+                p.spawn((
+                    Text::new("OPTIONS"),
+                    strong(13.0),
+                    TextColor(DIM),
+                    Node {
+                        margin: UiRect::top(px(6)),
                         ..default()
-                    })
-                    .with_children(|b| {
-                        b.spawn(button(215.0, 40.0, "CONTROLS", 17.0, Act::Controls));
-                        b.spawn(button(215.0, 40.0, "GRAPHICS", 17.0, Act::Graphics));
-                    });
+                    },
+                ));
+                let mut s = settings.clone();
+                for (i, (_, label)) in OPTS.iter().enumerate() {
+                    let on = *opt_mut(&mut s, i);
                     p.spawn((
-                        Text::new("OPTIONS"),
-                        TextFont::from_font_size(13.0),
-                        TextColor(DIM),
                         Node {
-                            margin: UiRect::top(px(6)),
-                            align_self: AlignSelf::FlexStart,
+                            width: px(420),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::SpaceBetween,
+                            padding: UiRect::vertical(px(3)),
+                            border: UiRect::bottom(px(1)),
                             ..default()
                         },
-                    ));
-                    p.spawn(Node {
-                        flex_wrap: FlexWrap::Wrap,
-                        width: px(438),
-                        column_gap: px(8),
-                        row_gap: px(6),
-                        ..default()
-                    })
-                    .with_children(|g| {
-                        let mut s = settings.clone();
-                        for (i, (_, label)) in OPTS.iter().enumerate() {
-                            let on = *opt_mut(&mut s, i);
-                            g.spawn(Node {
-                                width: px(215),
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::SpaceBetween,
+                        BorderColor::all(LINE),
+                    ))
+                    .with_children(|row| {
+                        row.spawn((
+                            Text::new(*label),
+                            compact(16.0),
+                            TextColor(INK),
+                            TextLayout {
+                                linebreak: LineBreak::NoWrap,
                                 ..default()
-                            })
-                            .with_children(|c| {
-                                c.spawn((
-                                    Text::new(*label),
-                                    TextFont::from_font_size(15.0),
-                                    TextColor(Color::WHITE),
-                                    TextLayout {
-                                        linebreak: LineBreak::NoWrap,
-                                        ..default()
-                                    },
-                                ));
-                                let mut b =
-                                    c.spawn(button(52.0, 26.0, on_off(on), 13.0, Act::Opt(i)));
-                                if on {
-                                    b.insert(Chosen);
-                                }
-                            });
+                            },
+                        ));
+                        let mut tag = row.spawn((
+                            Act::Opt(i),
+                            Button,
+                            Node {
+                                width: px(60),
+                                height: px(24),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(px(12)),
+                                ..default()
+                            },
+                            BackgroundColor(RAISED),
+                            children![(
+                                Text::new(on_off(on)),
+                                digits(14.0),
+                                TextColor(if on { ACCENT } else { DIM }),
+                            )],
+                        ));
+                        if on {
+                            tag.insert(Chosen);
                         }
                     });
-                    p.spawn(Node {
-                        column_gap: px(8),
-                        margin: UiRect::top(px(8)),
-                        ..default()
-                    })
-                    .with_children(|b| {
-                        b.spawn(button(215.0, 40.0, "MAIN MENU", 17.0, Act::Menu));
-                        // in the browser MAIN MENU is the page itself: nothing else to quit to
-                        if !cfg!(target_arch = "wasm32") {
-                            b.spawn(button(215.0, 40.0, "QUIT", 17.0, Act::Quit));
-                        }
-                    });
-                });
+                }
+            });
         });
 }
 
@@ -533,8 +564,8 @@ fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
 fn spawn_end(commands: &mut Commands, camera: Entity, headline: &str) {
     let color = match headline {
         "VICTORY" => ACCENT,
-        "DEFEAT" => Color::srgb(0.95, 0.3, 0.25),
-        _ => Color::WHITE,
+        "DEFEAT" => DANGER,
+        _ => INK,
     };
     commands.spawn((EndUi, root(camera))).with_children(|r| {
         r.spawn((

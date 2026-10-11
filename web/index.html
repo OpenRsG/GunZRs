@@ -8,13 +8,60 @@
  <title>GunZRs</title>
  <link rel="modulepreload" href="pkg/gunz-play.js?v=__BUILD__">
  <style>
+  /* Barlow / Barlow Condensed, shipped from assets/fonts (web/build.sh copies them to
+     dist/fonts; served plain at web/fonts when opened without a build). Mirrors src/ui.rs:
+     one weight per cut, no faux-bold synthesis. */
+  @font-face {
+   font-family: "Barlow";
+   font-weight: 500;
+   src: url("fonts/Barlow-Medium.ttf") format("truetype")
+  }
+
+  @font-face {
+   font-family: "Barlow Condensed";
+   font-weight: 500;
+   src: url("fonts/BarlowCondensed-Medium.ttf") format("truetype")
+  }
+
+  @font-face {
+   font-family: "Barlow Condensed";
+   font-weight: 600;
+   src: url("fonts/BarlowCondensed-SemiBold.ttf") format("truetype")
+  }
+
+  @font-face {
+   font-family: "Barlow Condensed";
+   font-weight: 700;
+   src: url("fonts/BarlowCondensed-Bold.ttf") format("truetype")
+  }
+
+  /* Tokens mirrored from src/ui.rs (INK/DIM/ACCENT/ON_ACCENT/DANGER/OK/SURFACE/RAISED/PLATE/
+     LINE/SCRIM/SHADOW). Only this page's own dark page-backdrop (--bg) is not a shared token. */
+  :root {
+   --bg: #07080a;
+   --ink: #f0ede6;
+   --dim: #9ea8b8;
+   --accent: #ffc74d;
+   --on-accent: #171205;
+   --danger: #f24538;
+   --ok: #73d980;
+   --surface: rgba(6, 8, 10, .86);
+   --raised: rgba(255, 255, 255, .05);
+   --plate: rgba(5, 6, 8, .6);
+   --line: rgba(255, 255, 255, .1);
+   --scrim: rgba(0, 0, 0, .55);
+   --shadow: rgba(0, 0, 0, .65);
+   --f-body: "Barlow", sans-serif;
+   --f-cond: "Barlow Condensed", sans-serif
+  }
+
   html,
   body {
    margin: 0;
    height: 100%;
-   background: #0b0c10;
-   color: #ddd;
-   font: 15px system-ui, sans-serif;
+   background: var(--bg);
+   color: var(--ink);
+   font: 500 15px/1.4 var(--f-body);
    overflow: hidden;
    /* no pinch or double-tap zoom anywhere (the controls panel scrolls on its own) */
    touch-action: none;
@@ -40,7 +87,7 @@
    inset: 0;
    display: grid;
    place-items: center;
-   background: radial-gradient(ellipse at 50% 30%, #241b11 0%, #0d0e12 55%, #060708 100%)
+   background: radial-gradient(ellipse at 50% 26%, color-mix(in srgb, var(--accent) 7%, var(--bg)) 0%, var(--bg) 60%, #000 120%)
   }
 
   /* every line keeps its height (status cut to one line, numbers in fixed-width digits), so
@@ -52,48 +99,52 @@
 
   .logo {
    text-align: center;
-   font: 900 64px/1 system-ui, sans-serif;
-   letter-spacing: 12px;
-   padding-left: 12px;
-   background: linear-gradient(#ffe7a3, #e8c46a 55%, #9c7128);
-   -webkit-background-clip: text;
-   background-clip: text;
-   color: transparent;
-   filter: drop-shadow(0 4px 20px rgba(232, 196, 106, .22))
+   font: 700 64px/1 var(--f-cond);
+   letter-spacing: 10px;
+   padding-left: 10px;
+   color: var(--accent);
+   text-shadow: 0 2px 0 var(--shadow)
   }
 
   .sub {
    text-align: center;
    margin-top: 8px;
-   padding-left: 9px;
-   font-size: 12px;
-   font-weight: 600;
-   letter-spacing: 9px;
-   color: #7d828e
+   padding-left: 8px;
+   font: 600 12px var(--f-cond);
+   letter-spacing: 8px;
+   color: var(--dim)
   }
 
   input {
-   background: #0f1115;
-   color: #ddd;
-   border: 1px solid #444;
+   background: var(--plate);
+   color: var(--ink);
+   border: 1px solid var(--line);
    padding: 5px;
-   border-radius: 3px
+   border-radius: 2px
   }
 
   button {
    margin-top: 14px;
    width: 100%;
    padding: 10px;
-   font-size: 17px;
-   background: #e8c46a;
-   color: #111;
+   font: 600 15px var(--f-cond);
+   text-transform: uppercase;
+   letter-spacing: .6px;
+   background: var(--accent);
+   color: var(--on-accent);
    border: 0;
-   border-radius: 4px;
-   cursor: pointer
+   border-radius: 2px;
+   cursor: pointer;
+   transition: filter .08s, transform .08s
+  }
+
+  button:active {
+   filter: brightness(.9);
+   transform: scale(.98)
   }
 
   .err {
-   color: #f77 !important
+   color: var(--danger) !important
   }
 
   .head {
@@ -112,7 +163,7 @@
    flex: 1;
    min-width: 0;
    font-size: 14px;
-   color: #c9ccd4;
+   color: var(--dim);
    white-space: nowrap;
    overflow: hidden;
    text-overflow: ellipsis
@@ -123,15 +174,13 @@
   }
 
   #pct {
-   font-size: 15px;
-   font-weight: 700;
-   color: #e8c46a
+   font: 700 16px var(--f-cond);
+   color: var(--accent)
   }
 
   .bar {
-   height: 4px;
-   background: rgba(255, 255, 255, .08);
-   border-radius: 2px;
+   height: 3px;
+   background: var(--raised);
    overflow: hidden;
    position: relative
   }
@@ -140,18 +189,12 @@
    display: block;
    height: 100%;
    width: 0;
-   background: #e8c46a;
+   background: var(--accent);
    transition: width .2s
   }
 
   #total {
-   height: 8px;
-   border-radius: 4px
-  }
-
-  #total i {
-   background: linear-gradient(90deg, #a87b2c, #ffd77a);
-   box-shadow: 0 0 14px rgba(255, 215, 122, .45)
+   height: 5px
   }
 
   #items {
@@ -165,8 +208,8 @@
    grid-template-columns: 1fr 72px 96px;
    align-items: center;
    gap: 12px;
-   font-size: 12.5px;
-   color: #8a8f9c
+   font: 500 12.5px var(--f-cond);
+   color: var(--dim)
   }
 
   .item b {
@@ -182,20 +225,20 @@
   }
 
   .item.active b {
-   color: #ece6d6
+   color: var(--ink)
   }
 
   .item.done {
-   color: #6c717c
+   color: #585e69
   }
 
   .item.done span::after {
    content: " \2713";
-   color: #8c8
+   color: var(--ok)
   }
 
   .item.done .bar i {
-   background: #7fbf7f
+   background: var(--ok)
   }
 
   /* an endless stripe for steps without a byte count; transform keeps it moving on the
@@ -251,6 +294,7 @@
    display: none
   }
 
+  /* square translucent plates, not circles: caps labels, a hairline edge, a flat pressed state */
   .ctl {
    position: absolute;
    left: 0;
@@ -263,17 +307,18 @@
    flex-direction: column;
    align-items: center;
    justify-content: center;
-   gap: 1px;
-   border-radius: 50%;
-   background: rgba(16, 18, 24, .38);
-   border: 2px solid rgba(255, 255, 255, .5);
-   box-shadow: 0 2px 10px rgba(0, 0, 0, .35), inset 0 0 12px rgba(255, 255, 255, .06);
-   color: #fff;
-   font: 700 9px system-ui, sans-serif;
+   gap: 2px;
+   border-radius: 3px;
+   background: var(--plate);
+   border: 1px solid var(--line);
+   box-shadow: 0 2px 6px var(--shadow);
+   color: var(--ink);
+   font: 600 9px var(--f-cond);
+   text-transform: uppercase;
    letter-spacing: .8px;
    opacity: var(--a);
    cursor: default;
-   transition: background .06s, border-color .06s
+   transition: background .06s, border-color .06s, transform .06s
   }
 
   .ctl svg {
@@ -292,15 +337,16 @@
   }
 
   .ctl.on {
-   background: rgba(232, 196, 106, .55);
-   border-color: #e8c46a;
-   opacity: 1
+   background: color-mix(in srgb, var(--accent) 55%, transparent);
+   border-color: var(--accent);
+   opacity: 1;
+   transform: scale(.95)
   }
 
   #fire {
    width: 96px;
    height: 96px;
-   border-color: rgba(255, 128, 96, .85);
+   border-color: var(--danger);
    font-size: 11px
   }
 
@@ -320,7 +366,7 @@
   #gear {
    width: 44px;
    height: 44px;
-   border-radius: 12px;
+   border-radius: 2px;
    font-size: 18px;
    letter-spacing: 0
   }
@@ -332,8 +378,8 @@
    width: 130px;
    height: 130px;
    border-radius: 50%;
-   background: radial-gradient(circle, rgba(255, 255, 255, .03) 40%, rgba(255, 255, 255, .13));
-   border: 2px solid rgba(255, 255, 255, .4);
+   background: var(--plate);
+   border: 2px solid var(--line);
    opacity: var(--a);
    pointer-events: none;
    visibility: hidden
@@ -351,31 +397,33 @@
    width: 56px;
    height: 56px;
    border-radius: 50%;
-   background: rgba(255, 255, 255, .5);
-   box-shadow: 0 2px 8px rgba(0, 0, 0, .4)
+   background: var(--raised);
+   border: 1px solid var(--line);
+   box-shadow: 0 2px 8px var(--shadow)
   }
 
   #stick.go i {
-   background: rgba(232, 196, 106, .85)
+   background: var(--accent);
+   border-color: var(--accent)
   }
 
   /* layout editor: every control can be dragged; the picked one can be resized */
   #touch.edit {
-   background: rgba(0, 0, 0, .45)
+   background: var(--scrim)
   }
 
   #touch.edit .ctl,
   #touch.edit #stick.fixed {
    opacity: 1;
-   outline: 2px dashed rgba(232, 196, 106, .8);
+   outline: 2px dashed var(--accent);
    outline-offset: 4px;
    pointer-events: auto
   }
 
   #touch.edit .sel {
    outline-style: solid !important;
-   outline-color: #e8c46a !important;
-   background: rgba(232, 196, 106, .3)
+   outline-color: var(--accent) !important;
+   background: color-mix(in srgb, var(--accent) 30%, transparent)
   }
 
   #editbar {
@@ -388,11 +436,13 @@
    align-items: center;
    gap: 8px;
    padding: 8px 10px 8px 16px;
-   background: rgba(18, 20, 26, .92);
-   border: 1px solid #e8c46a;
-   border-radius: 12px;
-   box-shadow: 0 6px 24px rgba(0, 0, 0, .5);
-   font-size: 13px;
+   background: var(--surface);
+   border: 1px solid var(--line);
+   border-top: 2px solid var(--accent);
+   border-radius: 3px;
+   box-shadow: 0 6px 24px var(--shadow);
+   font: 500 13px var(--f-cond);
+   color: var(--dim);
    white-space: nowrap
   }
 
@@ -408,11 +458,10 @@
    transform: translateX(-50%);
    max-width: min(640px, 90vw);
    padding: 10px 16px;
-   background: rgba(60, 14, 14, .92);
-   border: 1px solid #c55;
-   border-radius: 8px;
-   color: #fdd;
-   font-size: 14px;
+   background: var(--surface);
+   border-left: 3px solid var(--danger);
+   color: var(--ink);
+   font: 500 14px var(--f-cond);
    z-index: 10
   }
 
@@ -425,15 +474,13 @@
    width: auto;
    margin: 0;
    padding: 8px 14px;
-   font-size: 14px;
-   font-weight: 700;
-   border-radius: 8px
+   font-size: 13px
   }
 
   button.ghost {
-   background: #262932;
-   color: #ddd;
-   border: 1px solid #444
+   background: var(--raised);
+   color: var(--ink);
+   border: 1px solid var(--line)
   }
 
   /* the controls settings sheet */
@@ -443,7 +490,7 @@
    inset: 0;
    display: grid;
    place-items: center;
-   background: rgba(0, 0, 0, .55);
+   background: var(--scrim);
    backdrop-filter: blur(3px)
   }
 
@@ -452,10 +499,11 @@
    max-height: 92vh;
    display: flex;
    flex-direction: column;
-   background: linear-gradient(#1a1d24, #121419);
-   border: 1px solid #3a3d46;
-   border-radius: 14px;
-   box-shadow: 0 10px 40px rgba(0, 0, 0, .6);
+   background: var(--surface);
+   border: 1px solid var(--line);
+   border-top: 2px solid var(--accent);
+   border-radius: 3px;
+   box-shadow: 0 10px 40px var(--shadow);
    overflow: hidden
   }
 
@@ -464,14 +512,14 @@
    align-items: center;
    justify-content: space-between;
    padding: 12px 14px 12px 20px;
-   border-bottom: 1px solid #2c2f37
+   border-bottom: 1px solid var(--line)
   }
 
   .sheet h2 {
    margin: 0;
-   font-size: 18px;
+   font: 700 19px var(--f-cond);
    letter-spacing: 2px;
-   color: #e8c46a
+   color: var(--accent)
   }
 
   .scroll {
@@ -482,10 +530,10 @@
 
   .sheet h3 {
    margin: 16px 0 6px;
-   font-size: 11px;
+   font: 600 11px var(--f-cond);
    letter-spacing: 1.5px;
    text-transform: uppercase;
-   color: #8a8f9c
+   color: var(--dim)
   }
 
   .opt {
@@ -494,19 +542,21 @@
    align-items: center;
    gap: 10px;
    min-height: 40px;
-   border-bottom: 1px solid #22252c
+   border-bottom: 1px solid var(--line);
+   font: 500 14px var(--f-body)
   }
 
   .opt output {
    text-align: right;
-   color: #e8c46a;
+   font: 700 14px var(--f-cond);
+   color: var(--accent);
    font-variant-numeric: tabular-nums
   }
 
   .hint {
    margin: 6px 0 0;
    font-size: 12px;
-   color: #8a8f9c;
+   color: var(--dim);
    line-height: 1.4
   }
 
@@ -515,22 +565,22 @@
    padding: 0;
    border: 0;
    background: transparent;
-   accent-color: #e8c46a;
+   accent-color: var(--accent);
    touch-action: none
   }
 
-  /* a switch: a checkbox drawn as a sliding pill */
+  /* a switch: a checkbox drawn as a sliding plate */
   input.sw {
    appearance: none;
    justify-self: end;
    grid-column: 2 / 4;
-   width: 46px;
-   height: 26px;
+   width: 44px;
+   height: 24px;
    margin: 0;
    padding: 0;
-   border-radius: 13px;
-   background: #3a3d46;
-   border: 0;
+   border-radius: 2px;
+   background: var(--raised);
+   border: 1px solid var(--line);
    position: relative;
    transition: background .15s
   }
@@ -538,28 +588,30 @@
   input.sw::after {
    content: "";
    position: absolute;
-   left: 3px;
-   top: 3px;
-   width: 20px;
-   height: 20px;
-   border-radius: 50%;
-   background: #ddd;
+   left: 2px;
+   top: 2px;
+   width: 18px;
+   height: 18px;
+   border-radius: 1px;
+   background: var(--dim);
    transition: transform .15s
   }
 
   input.sw:checked {
-   background: #e8c46a
+   background: color-mix(in srgb, var(--accent) 35%, transparent);
+   border-color: var(--accent)
   }
 
   input.sw:checked::after {
+   background: var(--accent);
    transform: translateX(20px)
   }
 
   .seg {
    grid-column: 2 / 4;
    display: flex;
-   border: 1px solid #444;
-   border-radius: 8px;
+   border: 1px solid var(--line);
+   border-radius: 2px;
    overflow: hidden
   }
 
@@ -569,8 +621,8 @@
    margin: 0;
    padding: 7px 0;
    text-align: center;
-   font-size: 13px;
-   color: #aaa
+   font: 500 13px var(--f-cond);
+   color: var(--dim)
   }
 
   .seg input {
@@ -578,8 +630,8 @@
   }
 
   .seg label:has(input:checked) {
-   background: #e8c46a;
-   color: #111;
+   background: var(--accent);
+   color: var(--on-accent);
    font-weight: 700
   }
 
@@ -605,10 +657,24 @@
    padding: 0;
    font-size: 22px;
    line-height: 1;
-   background: rgba(0, 0, 0, .35);
-   color: #fff;
-   border: 2px solid rgba(255, 255, 255, .35);
-   border-radius: 8px
+   background: var(--plate);
+   color: var(--ink);
+   border: 1px solid var(--line);
+   border-radius: 2px
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+
+   *,
+   *::before,
+   *::after {
+    transition: none !important;
+    animation: none !important
+   }
+
+   .busy i {
+    width: 60% !important
+   }
   }
  </style>
 </head>

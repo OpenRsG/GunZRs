@@ -6,10 +6,14 @@
 use crate::{
     hud::try_image,
     item::{Item, Items},
-    menu::{Chosen, Flat, Page, State, button, heading, panel},
+    menu::{Page, State},
     mrs::Vfs,
-    profile::{self, Profile, Ranks, SLOTS, progress},
+    profile::{self, Profile, SLOTS},
     quest::QItems,
+    ui::{
+        ACCENT, Chosen, DIM, Flat, INK, LINE, RAISED, body, button, compact, digits, display,
+        heading, panel, primary, strong,
+    },
     view::decode,
 };
 use bevy::{image::ImageSampler, prelude::*, text::Justify};
@@ -45,6 +49,8 @@ const CATS: [(usize, &str); 8] = [
 /// The inventory's extra category after the equipment slots: quest items (`zquestitem.xml`).
 pub const QUEST_SLOT: usize = SLOTS;
 const ROWS: usize = 8;
+/// Rows the details panel always has room for (stats plus level/price/rent/restriction).
+const STAT_SLOTS: usize = 13;
 
 /// One item the profile can own: the zitem record plus its bounty price.
 #[derive(Clone, Debug)]
@@ -66,7 +72,10 @@ pub struct Entry {
     /// Armour bonus to maximum health / armour (`hp`, `ap`).
     pub hp: u32,
     pub ap: u32,
-    pub stats: Vec<String>,
+    /// Label/value stat rows (damage, magazine, health bonus, ...) for the details panel.
+    pub stats: Vec<(String, String)>,
+    /// Quest item description (`zquestitem.xml`); empty for every other entry.
+    pub desc: String,
 }
 
 impl Entry {
@@ -102,29 +111,27 @@ fn xml(vfs: &Vfs, path: &str) -> io::Result<String> {
     Ok(text.trim_start_matches('\u{feff}').to_owned())
 }
 
-fn stats(i: &Item, hp: u32, ap: u32) -> Vec<String> {
+fn stats(i: &Item, hp: u32, ap: u32) -> Vec<(String, String)> {
     let mut s = Vec::new();
     if let Some(w) = &i.weapon {
-        s.push(format!("Damage {}   Delay {} ms", w.damage, w.delay));
+        s.push(("DAMAGE".into(), w.damage.to_string()));
+        s.push(("DELAY".into(), format!("{} ms", w.delay)));
         if w.magazine > 0 {
-            s.push(format!(
-                "Magazine {}   Reserve {}",
-                w.magazine,
-                w.max_bullet.unwrap_or(0)
-            ));
+            s.push(("MAGAZINE".into(), w.magazine.to_string()));
+            s.push(("RESERVE".into(), w.max_bullet.unwrap_or(0).to_string()));
         }
         if let Some(r) = w.range {
-            s.push(format!("Reach {r}"));
+            s.push(("REACH".into(), r.to_string()));
         }
         if let (Some(p), Some(t), Some(k)) = (w.item_power, w.damage_time, &w.damage_type) {
-            s.push(format!("{k} {p} per second for {t} s"));
+            s.push((k.to_uppercase(), format!("{p}/s for {t}s")));
         }
     }
     if hp > 0 {
-        s.push(format!("Health +{hp}"));
+        s.push(("HEALTH".into(), format!("+{hp}")));
     }
     if ap > 0 {
-        s.push(format!("Armour +{ap}"));
+        s.push(("ARMOUR".into(), format!("+{ap}")));
     }
     s
 }
@@ -191,6 +198,7 @@ impl ShopData {
                     hp,
                     ap,
                     stats: stats(i, hp, ap),
+                    desc: String::new(),
                 },
             );
         }
@@ -209,13 +217,8 @@ impl ShopData {
                 sell: i.price,
                 hp: 0,
                 ap: 0,
-                stats: [
-                    i.desc.clone(),
-                    format!("Type {}   Sells for {}", i.kind, i.price),
-                ]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect(),
+                stats: Vec::new(),
+                desc: i.desc.clone(),
             };
             entries.insert(i.id, entry);
         }
@@ -401,13 +404,21 @@ pub enum ShopAct {
 /// Texts [`refresh`] rewrites.
 #[derive(Component, Clone, Copy)]
 enum Txt {
-    Row(Page, usize),
+    RowName(Page, usize),
+    RowLevel(Page, usize),
+    RowPrice(Page, usize),
     Cat(usize),
-    Detail(Page),
+    Name(Page),
+    Desc(Page),
+    StatLabel(Page, usize),
+    StatValue(Page, usize),
     Msg,
     PageNo(Page),
-    Card,
 }
+
+/// One row of the details panel's stat list, hidden past the item's row count.
+#[derive(Component, Clone, Copy)]
+struct StatRow(Page, usize);
 
 #[derive(Component, Clone, Copy)]
 enum Pic {
@@ -501,23 +512,19 @@ fn tile(w: f32, h: f32, act: ShopAct) -> impl Bundle {
             width: px(w),
             height: px(h),
             align_items: AlignItems::Center,
+            column_gap: px(10),
             padding: UiRect::horizontal(px(6)),
             border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(6)),
+            border_radius: BorderRadius::all(px(3)),
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.14)),
+        BackgroundColor(RAISED),
+        BorderColor::all(LINE),
     )
 }
 
-fn text(txt: Txt, size: f32) -> impl Bundle {
-    (
-        txt,
-        Text::new(""),
-        TextFont::from_font_size(size),
-        TextColor(Color::WHITE),
-    )
+fn text(txt: Txt, font: TextFont, color: Color) -> impl Bundle {
+    (txt, Text::new(""), font, TextColor(color))
 }
 
 fn pic(p: Pic, size: f32) -> impl Bundle {
@@ -549,7 +556,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, page: Page) {
             } else {
                 for slot in 0..=QUEST_SLOT {
                     m.spawn(tile(220.0, 34.0, ShopAct::Cat(page, slot)))
-                        .with_children(|t| drop(t.spawn(text(Txt::Cat(slot), 14.0))));
+                        .with_children(|t| drop(t.spawn(text(Txt::Cat(slot), compact(14.0), INK))));
                 }
             }
         });
@@ -560,7 +567,36 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, page: Page) {
                 m.spawn(tile(530.0, 40.0, ShopAct::Row(page, r)))
                     .with_children(|t| {
                         t.spawn(pic(Pic::Row(page, r), 32.0));
-                        t.spawn(text(Txt::Row(page, r), 16.0));
+                        t.spawn((
+                            text(Txt::RowName(page, r), strong(15.0), INK),
+                            Node {
+                                flex_grow: 1.0,
+                                flex_basis: px(0),
+                                ..default()
+                            },
+                        ));
+                        t.spawn((
+                            text(Txt::RowLevel(page, r), digits(13.0), DIM),
+                            TextLayout {
+                                justify: Justify::Right,
+                                ..default()
+                            },
+                            Node {
+                                width: px(50),
+                                ..default()
+                            },
+                        ));
+                        t.spawn((
+                            text(Txt::RowPrice(page, r), digits(15.0), ACCENT),
+                            TextLayout {
+                                justify: Justify::Right,
+                                ..default()
+                            },
+                            Node {
+                                width: px(80),
+                                ..default()
+                            },
+                        ));
                     });
             }
             m.spawn(Node {
@@ -571,7 +607,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, page: Page) {
             .with_children(|n| {
                 n.spawn(button(34.0, 30.0, "<", 16.0, ShopAct::Prev(page)));
                 n.spawn((
-                    text(Txt::PageNo(page), 16.0),
+                    text(Txt::PageNo(page), compact(16.0), DIM),
                     TextLayout {
                         justify: Justify::Center,
                         ..default()
@@ -589,47 +625,62 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, page: Page) {
             m.spawn(heading("DETAILS"));
             m.spawn(pic(Pic::Detail(page), 96.0));
             m.spawn((
-                text(Txt::Detail(page), 16.0),
+                text(Txt::Name(page), display(20.0), ACCENT),
                 Node {
                     width: px(350),
-                    min_height: px(150),
+                    margin: UiRect::top(px(8)),
                     ..default()
                 },
             ));
+            m.spawn((
+                text(Txt::Desc(page), compact(14.0), DIM),
+                Node {
+                    width: px(350),
+                    ..default()
+                },
+            ));
+            m.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                width: px(350),
+                row_gap: px(3),
+                margin: UiRect::vertical(px(8)),
+                ..default()
+            })
+            .with_children(|s| {
+                for i in 0..STAT_SLOTS {
+                    s.spawn((
+                        StatRow(page, i),
+                        Node {
+                            display: Display::None,
+                            justify_content: JustifyContent::SpaceBetween,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|row| {
+                        row.spawn(text(Txt::StatLabel(page, i), compact(14.0), DIM));
+                        row.spawn(text(Txt::StatValue(page, i), digits(14.0), INK));
+                    });
+                }
+            });
             m.spawn(Node {
                 column_gap: px(8),
                 ..default()
             })
             .with_children(|b| {
                 if shop {
-                    b.spawn(button(160.0, 40.0, "BUY", 20.0, ShopAct::Buy));
+                    b.spawn(primary(160.0, 40.0, "BUY", 20.0, ShopAct::Buy));
                 }
                 b.spawn(button(160.0, 40.0, "SELL", 20.0, ShopAct::Sell));
             });
             m.spawn((
-                Txt::Msg,
-                Text::new(""),
-                TextFont::from_font_size(16.0),
-                TextColor(Color::srgb(1.0, 0.85, 0.4)),
+                text(Txt::Msg, body(14.0), ACCENT),
                 Node {
                     width: px(350),
+                    margin: UiRect::top(px(6)),
                     ..default()
                 },
             ));
         });
-}
-
-/// The profile line shown at the top right of every page.
-pub(crate) fn card() -> impl Bundle {
-    (
-        text(Txt::Card, 18.0),
-        Node {
-            position_type: PositionType::Absolute,
-            right: px(24),
-            top: px(92),
-            ..default()
-        },
-    )
 }
 
 pub struct ShopPlugin;
@@ -742,6 +793,44 @@ fn left(profile: &Profile, id: u32) -> Option<String> {
     Some(format!("{}d {}h left", h / 24, h % 24))
 }
 
+/// Label/value rows and whether the value is numeric (digits font), for the details panel.
+fn detail_rows(
+    e: &Entry,
+    profile: &Profile,
+    quest_have: Option<u32>,
+) -> Vec<(String, String, bool)> {
+    let mut rows = Vec::new();
+    if let Some(have) = quest_have {
+        rows.push(("OWNED".into(), format!("x{have}"), true));
+        rows.push(("TYPE".into(), e.kind.to_uppercase(), false));
+        rows.push(("SELLS FOR".into(), e.sell.to_string(), true));
+        return rows;
+    }
+    for (label, value) in &e.stats {
+        rows.push((label.clone(), value.clone(), true));
+    }
+    rows.push(("LEVEL".into(), e.level.to_string(), true));
+    match e.sex {
+        'm' => rows.push(("RESTRICTION".into(), "MEN ONLY".into(), false)),
+        'f' => rows.push(("RESTRICTION".into(), "WOMEN ONLY".into(), false)),
+        _ => {}
+    }
+    match e.price {
+        Some(p) => {
+            rows.push(("PRICE".into(), p.to_string(), true));
+            rows.push(("SELLS FOR".into(), e.sell.to_string(), true));
+        }
+        None => {
+            rows.push(("STATUS".into(), "NOT SOLD".into(), false));
+            rows.push(("SELLS FOR".into(), e.sell.to_string(), true));
+        }
+    }
+    if let Some(l) = left(profile, e.id) {
+        rows.push(("RENTED".into(), l.to_uppercase(), false));
+    }
+    rows
+}
+
 fn set(t: &mut Text, s: String) {
     if t.0 != s {
         t.0 = s;
@@ -773,10 +862,10 @@ fn refresh(
     profile: Res<Profile>,
     data: Res<ShopData>,
     icons: Res<Icons>,
-    ranks: Res<Ranks>,
     mut texts: Query<(&Txt, &mut Text)>,
     mut pics: Query<(&Pic, &mut ImageNode)>,
     mut tiles: Query<(Entity, &ShopAct, &mut Node, Has<Chosen>)>,
+    mut stat_rows: Query<(&StatRow, &mut Node), Without<ShopAct>>,
 ) {
     if !(state.is_changed() || ss.is_changed() || profile.is_changed()) {
         return;
@@ -801,87 +890,69 @@ fn refresh(
         s.list.get(s.page * ROWS + r).copied()
     };
     let name = |id: u32| data.entries.get(&id).map_or("-", |e| e.name.as_str());
+    let rows = [Page::Shop, Page::Inventory].map(|p| {
+        of(p)
+            .sel
+            .and_then(|id| data.entries.get(&id))
+            .map(|e| {
+                let quest_have = (p == Page::Inventory && ss.view(p).slot == QUEST_SLOT)
+                    .then(|| profile.quest_items.get(&e.id).copied().unwrap_or(0));
+                detail_rows(e, &profile, quest_have)
+            })
+            .unwrap_or_default()
+    });
+    let rows_of = |p: Page| &rows[(p != Page::Shop) as usize];
     for (t, mut text) in &mut texts {
         let s = match *t {
-            Txt::Row(p, r) => match id_at(p, r) {
+            Txt::RowName(p, r) => match id_at(p, r) {
                 None => String::new(),
                 Some(0) => "- none -".into(),
+                Some(id) => data.entries[&id].name.clone(),
+            },
+            Txt::RowLevel(p, r) => match id_at(p, r) {
+                Some(id) if id != 0 && p == Page::Shop => data.entries[&id].level.to_string(),
+                _ => String::new(),
+            },
+            Txt::RowPrice(p, r) => match id_at(p, r) {
+                None | Some(0) => String::new(),
                 Some(id) => {
-                    let e = &data.entries[&id];
-                    if p == Page::Inventory && ss.view(p).slot == QUEST_SLOT {
-                        format!("{}   x{}", e.name, profile.quest_items[&id])
+                    let slot = ss.view(p).slot;
+                    if p == Page::Inventory && slot == QUEST_SLOT {
+                        format!("x{}", profile.quest_items[&id])
                     } else if p == Page::Shop && profile.owned.contains(&id) {
-                        format!("{}   (owned)", e.name)
+                        "OWNED".into()
                     } else if p == Page::Shop {
-                        format!("{}   Lv {}   {}", e.name, e.level, e.price.unwrap_or(0))
+                        data.entries[&id].price.unwrap_or(0).to_string()
+                    } else if profile.equipped[slot] == id {
+                        "EQUIPPED".into()
+                    } else if let Some(l) = left(&profile, id) {
+                        l.to_uppercase()
                     } else {
-                        let mut s = e.name.clone();
-                        if profile.equipped[ss.view(p).slot] == id {
-                            s += "   [equipped]";
-                        }
-                        if let Some(l) = left(&profile, id) {
-                            s += &format!("   [rented, {l}]");
-                        }
-                        s
+                        String::new()
                     }
                 }
             },
             Txt::Cat(QUEST_SLOT) => {
-                format!("Quest items: {}", profile.quest_items.values().sum::<u32>())
+                format!("QUEST ITEMS: {}", profile.quest_items.values().sum::<u32>())
             }
-            Txt::Cat(slot) => format!("{}: {}", SLOT_NAMES[slot], name(profile.equipped[slot])),
-            Txt::Detail(p) if ss.view(p).slot == QUEST_SLOT => {
-                match of(p).sel.and_then(|id| data.entries.get(&id)) {
-                    None => "Select an item".into(),
-                    Some(e) => {
-                        let have = profile.quest_items.get(&e.id).copied().unwrap_or(0);
-                        let mut s = vec![format!("{}   x{have}", e.name)];
-                        s.extend(e.stats.iter().cloned());
-                        s.join("\n")
-                    }
-                }
-            }
-            Txt::Detail(p) => match of(p).sel.and_then(|id| data.entries.get(&id)) {
-                None => "Select an item".into(),
-                Some(e) => {
-                    let mut s = vec![e.name.clone()];
-                    s.extend(e.stats.iter().cloned());
-                    s.push(format!(
-                        "Level {}{}",
-                        e.level,
-                        match e.sex {
-                            'm' => "   Men only",
-                            'f' => "   Women only",
-                            _ => "",
-                        }
-                    ));
-                    match e.price {
-                        Some(p) => s.push(format!("Price {p}   Sells for {}", e.sell)),
-                        None => s.push(format!("Not sold   Sells for {}", e.sell)),
-                    }
-                    if let Some(l) = left(&profile, e.id) {
-                        s.push(format!("Rented, {l}"));
-                    }
-                    s.join("\n")
-                }
+            Txt::Cat(slot) => format!(
+                "{}: {}",
+                SLOT_NAMES[slot].to_uppercase(),
+                name(profile.equipped[slot])
+            ),
+            Txt::Name(p) => match of(p).sel.and_then(|id| data.entries.get(&id)) {
+                None => "SELECT AN ITEM".into(),
+                Some(e) => e.name.clone(),
             },
+            Txt::Desc(p) => of(p)
+                .sel
+                .and_then(|id| data.entries.get(&id))
+                .map(|e| e.desc.clone())
+                .unwrap_or_default(),
+            Txt::StatLabel(p, i) => rows_of(p).get(i).map_or(String::new(), |r| r.0.clone()),
+            Txt::StatValue(p, i) => rows_of(p).get(i).map_or(String::new(), |r| r.1.clone()),
             Txt::Msg => ss.msg.clone(),
-            Txt::PageNo(p) => format!("Page {}/{}", of(p).page + 1, of(p).pages),
-            Txt::Card => {
-                let (level, into, need) = progress(profile.xp);
-                let xp = if need == 0 {
-                    format!("XP {}", profile.xp)
-                } else {
-                    format!("XP {into}/{need}")
-                };
-                format!(
-                    "{}  [{}]  Level {level}  {xp}  Bounty {}  Medals {}",
-                    profile.name,
-                    ranks.code(level),
-                    profile.bounty,
-                    profile.medals
-                )
-            }
+            Txt::PageNo(p) => format!("PAGE {}/{}", of(p).page + 1, of(p).pages),
         };
         set(&mut text, s);
     }
@@ -914,6 +985,16 @@ fn refresh(
             _ => {}
         }
     }
+    for (&StatRow(p, i), mut node) in &mut stat_rows {
+        let display = if rows_of(p).len() > i {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -933,6 +1014,7 @@ mod tests {
             hp: 0,
             ap: 0,
             stats: Vec::new(),
+            desc: String::new(),
         }
     }
 

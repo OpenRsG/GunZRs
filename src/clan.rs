@@ -8,16 +8,21 @@
 use crate::{
     game::{Player, Reward, Team},
     level::Level,
-    menu::{Mode, Page, State, button, heading, panel},
+    menu::{Mode, Page, State},
     mrs::Vfs,
     profile::{MatchGain, Profile},
     session::{Clock, Rules},
+    ui::{
+        ACCENT, DIM, INK, LINE, RAISED, body, button, compact, digits, display, heading, panel,
+        shadow, strong,
+    },
     view::decode,
 };
 use bevy::{
     image::ImageSampler,
     input::{ButtonState, keyboard::KeyboardInput},
     prelude::*,
+    text::Justify,
     ui::{GlobalZIndex, UiTargetCamera},
 };
 use std::{collections::HashMap, io};
@@ -485,16 +490,9 @@ pub fn mark(art: &ClanArt, emblem: u32, bg: u32, size: f32) -> impl Bundle + use
     )
 }
 
-fn line(s: impl Into<String>, size: f32, color: Color) -> (Text, TextFont, TextColor) {
-    (
-        Text::new(s),
-        TextFont::from_font_size(size),
-        TextColor(color),
-    )
+fn line(s: impl Into<String>, font: TextFont, color: Color) -> (Text, TextFont, TextColor) {
+    (Text::new(s), font, TextColor(color))
 }
-
-const GOLD: Color = Color::srgb(1.0, 0.85, 0.3);
-const GREY: Color = Color::srgb(0.85, 0.85, 0.85);
 
 // ---------------------------------------------------------------------------------------------
 // The menu's CLAN page.
@@ -556,7 +554,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
     };
     let cap = |s: &str, w: f32| {
         (
-            line(s, 18.0, GREY),
+            line(s.to_uppercase(), compact(14.0), DIM),
             Node {
                 width: px(w),
                 ..default()
@@ -566,7 +564,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
     let value = |t: Txt| {
         (
             t,
-            line("", 18.0, Color::WHITE),
+            line("", strong(16.0), INK),
             Node {
                 width: px(220),
                 ..default()
@@ -583,10 +581,27 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
                 ));
                 r.spawn(Node {
                     flex_direction: FlexDirection::Column,
-                    row_gap: px(8),
+                    row_gap: px(10),
                     ..default()
                 })
                 .with_children(|c| {
+                    // The header: the clan's name, click to rename (or type one while creating).
+                    c.spawn((
+                        Button,
+                        Act::Name,
+                        Node {
+                            width: px(320),
+                            height: px(42),
+                            align_items: AlignItems::Center,
+                            padding: UiRect::horizontal(px(10)),
+                            border: UiRect::all(px(1)),
+                            border_radius: BorderRadius::all(px(3)),
+                            ..default()
+                        },
+                        BackgroundColor(RAISED),
+                        BorderColor::all(LINE),
+                        children![(Txt::Name, line("", display(22.0), ACCENT))],
+                    ));
                     for (name, step, t) in [
                         ("Emblem", Act::Emblem as fn(i32) -> Act, Txt::Emblem),
                         ("Background", Act::Back, Txt::Back),
@@ -599,24 +614,6 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
                         });
                     }
                 });
-            });
-            m.spawn(row()).with_children(|r| {
-                r.spawn(cap("Name", 110.0));
-                r.spawn((
-                    Button,
-                    Act::Name,
-                    Node {
-                        width: px(250),
-                        height: px(30),
-                        align_items: AlignItems::Center,
-                        padding: UiRect::horizontal(px(8)),
-                        border: UiRect::all(px(1)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.3)),
-                    children![(Txt::Name, line("", 18.0, Color::WHITE))],
-                ));
             });
             m.spawn((
                 Show(false),
@@ -632,8 +629,8 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
                         format!(
                             "Clan creation requires level {CREATE_LEVEL} or higher and 20,000 BT, a unique name of up to {NAME_MAX} characters and {FOUNDERS} founding members (bots join for you). Click the name box and type."
                         ),
-                        16.0,
-                        GREY,
+                        body(14.0),
+                        DIM,
                     ),
                     Node {
                         width: px(500),
@@ -654,7 +651,7 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
             });
             m.spawn((
                 Txt::Msg,
-                line("", 16.0, GOLD),
+                line("", body(14.0), ACCENT),
                 Node {
                     width: px(500),
                     ..default()
@@ -664,13 +661,46 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
     p.spawn((Show(true), panel(290.0, AlignItems::FlexStart)))
         .with_children(|m| {
             m.spawn(heading("CLAN INFO"));
-            m.spawn((Txt::Info, line("", 18.0, Color::WHITE)));
+            m.spawn((Txt::Info, line("", compact(16.0), INK)));
             m.spawn(heading("MEMBERS"));
-            m.spawn((Txt::Members, line("", 18.0, Color::WHITE)));
+            m.spawn((Txt::Members, line("", compact(16.0), INK)));
         });
     p.spawn(panel(340.0, AlignItems::FlexStart))
         .with_children(|m| {
             m.spawn(heading("RANKING"));
+            m.spawn(Node {
+                column_gap: px(8),
+                padding: UiRect::bottom(px(4)),
+                ..default()
+            })
+            .with_children(|h| {
+                h.spawn((
+                    line("RANK", compact(12.0), DIM),
+                    Node {
+                        width: px(44),
+                        ..default()
+                    },
+                ));
+                h.spawn((
+                    line("CLAN", compact(12.0), DIM),
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: px(0),
+                        ..default()
+                    },
+                ));
+                h.spawn((
+                    line("POINTS", compact(12.0), DIM),
+                    TextLayout {
+                        justify: Justify::Right,
+                        ..default()
+                    },
+                    Node {
+                        width: px(60),
+                        ..default()
+                    },
+                ));
+            });
             m.spawn((
                 Table,
                 Node {
@@ -861,11 +891,7 @@ fn refresh(
     }
     for (a, mut b) in &mut fields {
         if matches!(a, Act::Name) {
-            *b = BorderColor::all(if ui.typing {
-                GOLD
-            } else {
-                Color::srgba(1.0, 1.0, 1.0, 0.3)
-            });
+            *b = BorderColor::all(if ui.typing { ACCENT } else { LINE });
         }
     }
     for (mut back, kids) in &mut preview {
@@ -889,6 +915,7 @@ fn refresh(
         .despawn_children()
         .with_children(|t| {
             for (i, (name, points, emblem, bg, you)) in rows.iter().enumerate() {
+                let color = if *you { ACCENT } else { INK };
                 t.spawn(Node {
                     align_items: AlignItems::Center,
                     column_gap: px(8),
@@ -896,11 +923,35 @@ fn refresh(
                 })
                 .with_children(|r| {
                     r.spawn(mark(&art, *emblem, *bg, 26.0));
-                    let color = if *you { GOLD } else { GREY };
-                    r.spawn(line(
-                        format!("{:>2}. {name:<12} {points:>5}", i + 1),
-                        17.0,
-                        color,
+                    r.spawn((
+                        line(format!("{}.", i + 1), digits(15.0), DIM),
+                        TextLayout {
+                            justify: Justify::Right,
+                            ..default()
+                        },
+                        Node {
+                            width: px(28),
+                            ..default()
+                        },
+                    ));
+                    r.spawn((
+                        line(name.clone(), strong(15.0), color),
+                        Node {
+                            flex_grow: 1.0,
+                            flex_basis: px(0),
+                            ..default()
+                        },
+                    ));
+                    r.spawn((
+                        line(points.to_string(), digits(15.0), color),
+                        TextLayout {
+                            justify: Justify::Right,
+                            ..default()
+                        },
+                        Node {
+                            width: px(60),
+                            ..default()
+                        },
                     ));
                 });
             }
@@ -1045,7 +1096,6 @@ fn overlay(
     cameras: Query<Entity, With<Camera3d>>,
 ) {
     let Ok(camera) = cameras.single() else { return };
-    let white = Color::WHITE;
     // Beside the 460 px clock bar of the HUD (centred, 8 px from the top, 40 px high); the name
     // sits under the emblem so a long one stays clear of the "Kills / Deaths" text at the left.
     let side = |s: &Side, i: usize| {
@@ -1067,14 +1117,14 @@ fn overlay(
             },
             children![
                 mark(&art, s.emblem, s.bg, 48.0),
-                (line(&s.name, 18.0, white), TextShadow::default()),
+                (line(&s.name, strong(18.0), INK), shadow()),
             ],
         )
     };
     let points = |s: &Side, i: usize| {
         (
             Points(i),
-            line(format!("{}  {}", s.name, s.points), 18.0, white),
+            line(format!("{}  {}", s.name, s.points), strong(18.0), INK),
         )
     };
     let strip = |s: &Side, i: usize| {

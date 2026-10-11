@@ -14,7 +14,7 @@ on, one line per request) to stderr: the way to see what went wrong on a phone o
 import http.server, os, sys
 
 TYPES = {".wasm": "application/wasm", ".js": "text/javascript", ".html": "text/html",
-         ".json": "application/json", ".gz": "application/octet-stream"}
+         ".json": "application/json", ".gz": "application/octet-stream", ".ttf": "font/ttf"}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

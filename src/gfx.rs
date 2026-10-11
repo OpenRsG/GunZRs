@@ -7,10 +7,14 @@
 //! and the pause menu (an overlay) share is at the end of this file.
 
 use crate::{
+    controls,
     game::{Damage, Dead, Motor, Player, Settings, Vitals},
     level::MapMaterial,
-    menu::{ACCENT, Chosen, DIM, button, heading, panel, primary},
     profile::Profile,
+    ui::{
+        ACCENT, Chosen, DIM, INK, LINE, SCRIM, body, button, compact, digits, heading, panel,
+        primary,
+    },
 };
 use bevy::{
     anti_alias::{
@@ -955,22 +959,6 @@ enum Show {
 #[derive(Component)]
 struct OverlayRoot;
 
-fn text(s: &str, size: f32, color: Color) -> impl Bundle {
-    (
-        Text::new(s),
-        TextFont::from_font_size(size),
-        TextColor(color),
-    )
-}
-
-fn row() -> Node {
-    Node {
-        align_items: AlignItems::Center,
-        column_gap: px(6),
-        ..default()
-    }
-}
-
 /// The panel's three cards: the image, the screen effects, the preset and display.
 pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
     p.spawn(Node {
@@ -989,48 +977,17 @@ pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
 }
 
 fn slider(m: &mut ChildSpawnerCommands, k: Knob) {
-    m.spawn(row()).with_children(|r| {
-        r.spawn((
-            Node {
-                width: px(138),
-                ..default()
-            },
-            children![text(k.label(), 14.0, Color::WHITE)],
-        ));
-        r.spawn((
-            Button,
-            Slider(k),
-            RelativeCursorPosition::default(),
-            Node {
-                width: px(96),
-                height: px(24),
-                flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-        ))
-        .with_children(|t| {
-            t.spawn((
-                Node {
-                    height: px(6),
-                    border_radius: BorderRadius::all(px(3)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
-                children![(
-                    Fill(k),
-                    Node {
-                        height: percent(100),
-                        border_radius: BorderRadius::all(px(3)),
-                        ..default()
-                    },
-                    BackgroundColor(ACCENT),
-                )],
-            ));
-        });
+    m.spawn(controls::row()).with_children(|r| {
+        r.spawn(controls::boxed(k.label(), compact(14.0), INK, 138.0));
+        r.spawn((Slider(k), controls::slider_track(96.0)))
+            .with_children(|t| {
+                t.spawn(controls::slider_groove(6.0)).with_children(|g| {
+                    g.spawn((Fill(k), controls::slider_fill()));
+                });
+            });
         r.spawn(button(22.0, 24.0, "-", 15.0, Ctl::Step(k, -1)));
         r.spawn(button(22.0, 24.0, "+", 15.0, Ctl::Step(k, 1)));
-        r.spawn((Show::Knob(k), text("", 14.0, ACCENT)));
+        r.spawn((Show::Knob(k), controls::text("", digits(14.0), ACCENT)));
     });
 }
 
@@ -1042,7 +999,7 @@ fn choices<T: Copy>(
     w: f32,
     ctl: fn(T) -> Ctl,
 ) {
-    m.spawn(text(title, 14.0, DIM));
+    m.spawn(controls::text(title.to_uppercase(), compact(14.0), DIM));
     m.spawn(Node {
         flex_wrap: FlexWrap::Wrap,
         width: percent(100),
@@ -1094,9 +1051,9 @@ fn effects(m: &mut ChildSpawnerCommands) {
             margin: UiRect::top(px(8)),
             ..default()
         },
-        children![text(
+        children![controls::text(
             "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, light rays, a dash's wider view and afterimages) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched.",
-            13.0,
+            body(13.0),
             DIM
         )],
     ));
@@ -1104,7 +1061,18 @@ fn effects(m: &mut ChildSpawnerCommands) {
 
 fn display(m: &mut ChildSpawnerCommands, done: bool) {
     m.spawn(heading("PRESET"));
-    m.spawn(row()).with_children(|r| {
+    // A segmented control: the tabs share one hairline border with no gap between them.
+    m.spawn((
+        Node {
+            column_gap: px(0),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(3)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BorderColor::all(LINE),
+    ))
+    .with_children(|r| {
         for p in Preset::ALL {
             r.spawn(button(112.0, 34.0, p.label(), 15.0, Ctl::Preset(p)));
         }
@@ -1115,7 +1083,7 @@ fn display(m: &mut ChildSpawnerCommands, done: bool) {
             min_height: px(54),
             ..default()
         },
-        children![(Show::Preset, text("", 13.0, DIM))],
+        children![(Show::Preset, controls::text("", body(13.0), DIM))],
     ));
     m.spawn(heading("LIGHTING"));
     for k in [Knob::ActorLight, Knob::DynLight, Knob::Shadow] {
@@ -1125,14 +1093,8 @@ fn display(m: &mut ChildSpawnerCommands, done: bool) {
     slider(m, Knob::Fov);
     // the browser always presents in step with the display and cannot be limited
     if !cfg!(target_arch = "wasm32") {
-        m.spawn(row()).with_children(|r| {
-            r.spawn((
-                Node {
-                    width: px(138),
-                    ..default()
-                },
-                children![text("Vertical sync", 14.0, Color::WHITE)],
-            ));
+        m.spawn(controls::row()).with_children(|r| {
+            r.spawn(controls::boxed("Vertical sync", compact(14.0), INK, 138.0));
             r.spawn(button(64.0, 24.0, "", 13.0, Ctl::Vsync));
         });
         choices(m, "Frame limit", &FPS, 44.0, Ctl::Fps);
@@ -1192,7 +1154,7 @@ fn overlay(
                         ..default()
                     },
                     // opaque enough that the HUD under it does not read through
-                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+                    BackgroundColor(SCRIM.with_alpha(0.85)),
                 ))
                 .with_children(|r| fill(r, true));
         }

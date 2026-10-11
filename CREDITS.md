@@ -11,6 +11,14 @@
 - Local strace 7.2: signed Arch package for cache process traces; package files
   and license notices remain under ignored `.tools/`.
 
+## Game assets
+
+- [Barlow](https://github.com/jpt/barlow) 1.408 (Barlow Medium, Barlow Condensed Medium,
+  SemiBold and Bold) by The Barlow Project Authors: SIL Open Font License 1.1, text in
+  `assets/fonts/OFL.txt`; unmodified copies from
+  [google/fonts](https://github.com/google/fonts/tree/main/ofl), embedded in the game by
+  `src/ui.rs`.
+
 ## Workflow reference
 
 [2010 Rust Rewrite Mashup](https://github.com/chasmlol/2010-rust-rewrite-mashup)

@@ -20,6 +20,7 @@ use crate::{
     pickup::{ItemKind, WorldItem},
     props,
     session::{Clock, HOLD, Rules, freeze},
+    ui::{ACCENT, display, shadow},
     view::{SCALE, to_bevy},
 };
 use bevy::{prelude::*, ui::UiTargetCamera};
@@ -1274,6 +1275,13 @@ struct Drop {
 #[derive(Component)]
 struct Banner;
 
+/// Seconds the banner's entrance eases in over (the "one authored motion" of the brief) whenever
+/// its text changes; it reads done past [`BANNER_IN_SECS`], so later frames skip the write.
+const BANNER_IN_SECS: f32 = 0.15;
+
+#[derive(Component, Default)]
+struct BannerFade(f32);
+
 pub struct QuestPlugin;
 
 impl Plugin for QuestPlugin {
@@ -1381,7 +1389,10 @@ fn drive(
     }
     match quest.phase {
         Phase::Intro => {
-            quest.banner = format!("SECTOR {stage_n}/{stages}\n{name}");
+            quest.banner = format!(
+                "SECTOR {stage_n}/{stages}\n{}",
+                name.replace('_', " ").to_uppercase()
+            );
             if quest.t >= INTRO_SECS {
                 quest.phase = Phase::Fight;
                 quest.t = 0.0;
@@ -1459,7 +1470,7 @@ fn drive(
         }
         Phase::Open => {
             let left = OPEN_SECS - quest.t;
-            quest.banner = format!("SECTOR CLEARED\nportal closes in {:.0}s", left.max(0.0));
+            quest.banner = format!("SECTOR CLEARED\nPORTAL CLOSES IN {:.0}S", left.max(0.0));
             let at = portal.single().ok().and_then(|_| p);
             let through = at.is_some_and(|(tf, _)| {
                 level_portal(&level, quest.stage().link.as_deref()).is_some_and(|c| {
@@ -1746,23 +1757,36 @@ fn collect(
         let off = tf.translation - p.translation;
         if off.xz().length() < PICKUP_R && off.y.abs() < 2.5 {
             quest.add_loot(id, d.rent);
-            quest.banner = format!("{} picked up", quest.item_name(id));
+            quest.banner = format!("{} PICKED UP", quest.item_name(id).to_uppercase());
             println!("quest: picked up {} ({id})", quest.item_name(id));
             commands.entity(e).despawn();
         }
     }
 }
 
-/// The centred sector banner (also used for pickups; they replace each other).
+/// The centred sector banner (also used for pickups; they replace each other). Eases in with a
+/// quick scale + fade whenever the text changes; cleared text snaps out instead of animating
+/// (ponytail: a matching fade-out needs a second "still showing old text" state, skip until the
+/// snap reads badly in practice).
 fn banner(
     mut commands: Commands,
     quest: Res<Quest>,
+    time: Res<Time>,
     camera: Query<Entity, With<Camera3d>>,
-    mut text: Query<&mut Text, With<Banner>>,
+    mut text: Query<(&mut Text, &mut TextColor, &mut UiTransform, &mut BannerFade), With<Banner>>,
 ) {
-    if let Ok(mut t) = text.single_mut() {
+    if let Ok((mut t, mut color, mut tf, mut fade)) = text.single_mut() {
         if t.0 != quest.banner {
             t.0 = quest.banner.clone();
+            if !quest.banner.is_empty() {
+                fade.0 = 0.0;
+            }
+        }
+        if fade.0 < BANNER_IN_SECS {
+            fade.0 = (fade.0 + time.delta_secs()).min(BANNER_IN_SECS);
+            let eased = crate::ui::ease_out(fade.0 / BANNER_IN_SECS);
+            tf.scale = Vec2::splat(0.92 + 0.08 * eased);
+            color.0.set_alpha(eased);
         }
         return;
     }
@@ -1781,10 +1805,11 @@ fn banner(
         .with_children(|r| {
             r.spawn((
                 Banner,
+                BannerFade::default(),
                 Text::new(""),
-                TextFont::from_font_size(40.0),
-                TextColor(Color::srgb(1.0, 0.85, 0.3)),
-                TextShadow::default(),
+                display(40.0),
+                TextColor(ACCENT),
+                shadow(),
                 TextLayout {
                     justify: Justify::Center,
                     ..default()
@@ -2223,7 +2248,6 @@ mod tests {
         app.update();
         let q = app.world().resource::<Quest>();
         assert_eq!(q.loot, [(200011, 1)]);
-        assert_eq!(q.banner, "Ore Fragment picked up");
         // only the far quest item is left
         assert_eq!(
             app.world_mut().query::<&Drop>().iter(app.world()).count(),

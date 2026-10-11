@@ -34,6 +34,7 @@ use crate::{
     level::Level,
     menu::Mode,
     session::{Clock, PROTECT_SECS, RESPAWN_SECS, Rules, freeze},
+    ui::{ACCENT, INK, compact, digits, display, hover, shadow, strong},
     view::{SCALE, Shot, to_bevy},
 };
 use bevy::{
@@ -142,9 +143,7 @@ impl Plugin for BlitzPlugin {
                 finish,
                 feedback,
                 hud,
-                ui::select_ui,
-                ui::minimap,
-                ui::reward_ui,
+                (ui::select_ui, hover, ui::minimap, ui::reward_ui),
             )
                 .chain()
                 .run_if(live),
@@ -1002,8 +1001,8 @@ fn buy(
         _ => {}
     }
     Ok(format!(
-        "{} step {} (-{cost:.0} honor)",
-        UPGRADES[which].0,
+        "{} STEP {} (-{cost:.0} HONOR)",
+        UPGRADES[which].0.to_uppercase(),
         level + 1
     ))
 }
@@ -1723,7 +1722,9 @@ fn classes(
         if player {
             blitz.banner = (
                 clock.elapsed + BANNER_SECS,
-                c.map_or("NO CLASS".into(), |c| format!("CLASS: {}", CLASSES[c].0)),
+                c.map_or("NO CLASS".into(), |c| {
+                    format!("CLASS: {}", CLASSES[c].0.to_uppercase())
+                }),
             );
         }
     }
@@ -1962,13 +1963,13 @@ fn hud(
                 },
             ))
             .with_children(|r| {
-                let text = |line, size, left: Val, top: Val, right: Val| {
+                let text = |line, font: TextFont, color: Color, left: Val, top: Val, right: Val| {
                     (
                         line,
                         Text::new(""),
-                        TextFont::from_font_size(size),
-                        TextColor(Color::srgb(1.0, 0.9, 0.5)),
-                        TextShadow::default(),
+                        font,
+                        TextColor(color),
+                        shadow(),
                         Node {
                             position_type: PositionType::Absolute,
                             left,
@@ -1978,17 +1979,45 @@ fn hud(
                         },
                     )
                 };
-                r.spawn(text(Line::Honor, 22.0, px(16), px(56), auto()));
-                r.spawn(text(Line::Panel, 20.0, px(24), px(200), auto()));
-                r.spawn(text(Line::Banner, 30.0, percent(30), px(110), auto()));
-                r.spawn(text(Line::Event, 24.0, percent(20), px(150), auto()));
+                r.spawn(text(
+                    Line::Honor,
+                    digits(20.0),
+                    ACCENT,
+                    px(16),
+                    px(56),
+                    auto(),
+                ));
+                r.spawn(text(
+                    Line::Panel,
+                    compact(16.0),
+                    INK,
+                    px(24),
+                    px(200),
+                    auto(),
+                ));
+                r.spawn(text(
+                    Line::Banner,
+                    display(28.0),
+                    ACCENT,
+                    percent(30),
+                    px(110),
+                    auto(),
+                ));
+                r.spawn(text(
+                    Line::Event,
+                    strong(20.0),
+                    ACCENT,
+                    percent(20),
+                    px(150),
+                    auto(),
+                ));
             });
         return;
     }
     let Ok(h) = player.single() else { return };
     let cfg = &blitz.cfg;
     let panel = if blitz.open && clock.over.is_none() {
-        let mut s = String::from("UPGRADES  (Up/Down, Enter buys, F closes)\n");
+        let mut s = String::from("UPGRADES  (UP/DOWN SELECT, ENTER BUYS, F CLOSES)\n");
         for (i, (name, what)) in UPGRADES.iter().enumerate() {
             let l = h.level[i] as usize;
             let next = |a: &[f32; 4]| a[l.min(3)];
@@ -2001,14 +2030,15 @@ fn hud(
                 _ => next(&cfg.up.revive) * 100.0,
             };
             s += &format!(
-                "{} {}  {name}: {}   step {l}/4   {}\n",
+                "{} {}  {}: {}   STEP {l}/4   {}\n",
                 if i == blitz.sel { ">" } else { " " },
                 i + 1,
+                name.to_uppercase(),
                 what.replace("{}", &format!("{value:.0}")),
                 if l < 4 {
-                    format!("{:.0} honor", cfg.up.cost[l])
+                    format!("{:.0} HONOR", cfg.up.cost[l])
                 } else {
-                    "done".into()
+                    "DONE".into()
                 }
             );
         }
@@ -2029,7 +2059,7 @@ fn hud(
     for (line, mut t) in &mut lines {
         let want = match line {
             Line::Honor => format!(
-                "HONOR {:.0}   [F] upgrades{}",
+                "HONOR {:.0}   [F] UPGRADES{}",
                 h.points,
                 h.class.map_or(String::new(), |c| format!(
                     "   {}",

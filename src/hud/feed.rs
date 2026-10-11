@@ -1,16 +1,19 @@
 //! Kill feed: one row per kill at the top right, newest at the bottom: killer, the retail
 //! kill-log weapon icon (`Ingame_KillLogArrow_N` of `bitmapalias.xml`, cut from
-//! `ingame_01.png`), a HEADSHOT tag, victim; clan wars add each side's emblem. Rows slide in,
-//! then slide out and collapse. The player's own headshot kill also flashes the retail
-//! `Ingame_KillDirection_HeadShot` banner (`ingame_00.png`). A child of `hud.rs`.
+//! `ingame_01.png`), a HEADSHOT tag, victim; clan wars add each side's emblem. Rows slide/fade
+//! in, then fade out and collapse. The player's own kill also shows a kill confirmation below
+//! the crosshair: "ELIMINATED" over the victim's name, with a HEADSHOT or MELEE tag when it
+//! applies. A child of `hud.rs`.
 
 use super::{Root, try_image};
 use crate::{
     actor::ActorData,
     clan::{ClanArt, ClanWar, Member, mark},
+    combat::is_melee,
     game::{Killed, Player, Team},
     item::WeaponKind,
     level::Level,
+    ui::{self, ACCENT, BLUE, DANGER, DIM, INK, PLATE, RED},
 };
 use bevy::prelude::*;
 
@@ -24,37 +27,54 @@ pub(super) fn plugin(app: &mut App) {
     );
 }
 
-/// Seconds a row stays, its slide in and out, and how many rows show at once.
+/// Seconds a row stays, its slide/fade in and fade out, and how many rows show at once.
 const LIFE: f32 = 6.0;
-const ENTER: f32 = 0.22;
+const ENTER: f32 = 0.15;
 const LEAVE: f32 = 0.3;
 const LINES: usize = 6;
 const ROW_H: f32 = 30.0;
-/// Seconds the headshot banner shows.
-const BANNER: f32 = 1.4;
+/// Pixels a row slides in from.
+const ENTER_X: f32 = 56.0;
 
-const GOLD: Color = Color::srgb(0.95, 0.78, 0.36);
-const RED: Color = Color::srgb(1.0, 0.45, 0.4);
-const BLUE: Color = Color::srgb(0.48, 0.68, 1.0);
+/// Kill confirmation timing: scale-in, hold at full size, then fade.
+const CONFIRM_IN: f32 = 0.12;
+const CONFIRM_HOLD: f32 = 1.4;
+const CONFIRM_OUT: f32 = 0.25;
 
 #[derive(Resource)]
 struct FeedArt {
     log: Handle<Image>,
-    banner: Handle<Image>,
 }
 
 #[derive(Component)]
 struct FeedBox;
 
+/// A child text/icon/tag that fades with its row or the kill confirmation: `0` is its full
+/// opacity colour, restored each frame and multiplied by the current fade fraction.
 #[derive(Component)]
-struct Banner(f32);
+struct Fade(Color);
 
-/// A feed row: when it came and when it started to leave.
+/// A feed row: when it came, when it started to leave, and its left accent bar colour.
 #[derive(Component)]
 struct Row {
     born: f32,
     leave: Option<f32>,
+    edge: Color,
 }
+
+/// The kill confirmation below the crosshair; `start` is when the latest kill set it.
+#[derive(Component)]
+struct Confirm {
+    start: f32,
+}
+
+/// The victim name line of the confirmation.
+#[derive(Component)]
+struct ConfirmName;
+
+/// The HEADSHOT / MELEE tag of the confirmation (hidden when neither applies).
+#[derive(Component)]
+struct ConfirmTag;
 
 /// Retail kill-log icon index (the comments in `bitmapalias.xml` name each one).
 fn log_icon(kind: WeaponKind) -> usize {
@@ -87,17 +107,43 @@ fn log_rect(i: usize) -> Rect {
     Rect::new(x, y, x + 108.0, y + 29.0)
 }
 
+/// A killer/victim name, or the fallback "killed" label.
+fn text(s: &str, color: Color) -> impl Bundle {
+    (
+        Fade(color),
+        Text::new(s),
+        ui::strong(16.0),
+        TextColor(color),
+        ui::shadow(),
+    )
+}
+
+/// A small caps tag (HEADSHOT, MELEE): a hairline box in `color`.
+fn tag(label: impl Into<String>, color: Color) -> impl Bundle {
+    (
+        Fade(color),
+        Node {
+            padding: UiRect::axes(px(6), px(1)),
+            border: UiRect::all(px(1)),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BorderColor::all(color),
+        Text::new(label.into()),
+        ui::strong(12.0),
+        TextColor(color),
+        ui::shadow(),
+    )
+}
+
 fn spawn(
     mut commands: Commands,
     level: Res<Level>,
     mut images: ResMut<Assets<Image>>,
     root: Single<Entity, With<Root>>,
 ) {
-    let (Some(log), Some(banner)) = (
-        try_image(&level.vfs, &mut images, "ingame_01.png"),
-        try_image(&level.vfs, &mut images, "ingame_00.png"),
-    ) else {
-        error!("kill feed: interface/default/ingame_00.png or ingame_01.png missing");
+    let Some(log) = try_image(&level.vfs, &mut images, "ingame_01.png") else {
+        error!("kill feed: interface/default/ingame_01.png missing");
         commands.spawn(FeedBox);
         return;
     };
@@ -115,35 +161,51 @@ fn spawn(
             ..default()
         },
     ));
-    commands.spawn((
-        Banner(0.0),
-        ChildOf(*root),
-        Visibility::Hidden,
-        UiTransform::default(),
-        Node {
-            position_type: PositionType::Absolute,
-            left: percent(50),
-            top: percent(22),
-            width: px(411),
-            height: px(62),
-            margin: UiRect::left(px(-205)),
-            ..default()
-        },
-        ImageNode {
-            rect: Some(Rect::new(0.0, 596.0, 411.0, 658.0)),
-            ..ImageNode::new(banner.clone())
-        },
-    ));
-    commands.insert_resource(FeedArt { log, banner });
-}
-
-fn text(s: &str, color: Color) -> impl Bundle {
-    (
-        Text::new(s),
-        TextFont::from_font_size(17.0),
-        TextColor(color),
-        TextShadow::default(),
-    )
+    // Kill confirmation: a centred column just below the crosshair.
+    commands
+        .spawn((
+            ChildOf(*root),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: percent(56),
+                width: percent(100),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+        ))
+        .with_children(|r| {
+            r.spawn((
+                Confirm { start: f32::MIN },
+                Visibility::Hidden,
+                UiTransform::default(),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: px(2),
+                    ..default()
+                },
+                children![
+                    (
+                        Fade(ACCENT),
+                        Text::new("ELIMINATED"),
+                        ui::strong(14.0),
+                        TextColor(ACCENT),
+                        ui::shadow(),
+                    ),
+                    (
+                        ConfirmName,
+                        Fade(INK),
+                        Text::new(""),
+                        ui::display(30.0),
+                        TextColor(INK),
+                        ui::shadow(),
+                    ),
+                    (ConfirmTag, Visibility::Hidden, tag("", DANGER)),
+                ],
+            ));
+        });
+    commands.insert_resource(FeedArt { log });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -160,7 +222,9 @@ fn add(
     war: Option<Res<ClanWar>>,
     clan_art: Option<Res<ClanArt>>,
     members: Query<&Member>,
-    mut banner: Single<(&mut Banner, &mut Visibility)>,
+    mut confirm: Single<&mut Confirm>,
+    mut confirm_name: Single<&mut Text, (With<ConfirmName>, Without<ConfirmTag>)>,
+    mut confirm_tag: Single<(&mut Text, &mut Visibility), (With<ConfirmTag>, Without<ConfirmName>)>,
 ) {
     let now = time.elapsed_secs();
     for k in killed.read() {
@@ -169,12 +233,12 @@ fn add(
         let died = players.contains(k.victim);
         let color = |e| {
             if players.contains(e) {
-                GOLD
+                ACCENT
             } else {
                 match teams.get(e) {
                     Ok(Team::Red) => RED,
                     Ok(Team::Blue) => BLUE,
-                    _ => Color::WHITE,
+                    _ => INK,
                 }
             }
         };
@@ -183,13 +247,29 @@ fn add(
             .get(k.item)
             .and_then(|i| i.weapon.as_ref())
             .map(|w| w.kind);
-        if you && k.head {
-            *banner.0 = Banner(now);
-            *banner.1 = Visibility::Inherited;
+        if you {
+            confirm.start = now;
+            confirm_name.0 = names
+                .get(k.victim)
+                .map_or("?", |n| n.as_str())
+                .to_uppercase();
+            let melee = kind.is_some_and(is_melee);
+            let (text, vis) = &mut *confirm_tag;
+            match (k.head, melee) {
+                (true, _) => {
+                    text.0 = "HEADSHOT".into();
+                    **vis = Visibility::Inherited;
+                }
+                (false, true) => {
+                    text.0 = "MELEE".into();
+                    **vis = Visibility::Inherited;
+                }
+                (false, false) => **vis = Visibility::Hidden,
+            }
         }
         let edge = match (you, died) {
-            (true, _) => GOLD,
-            (_, true) => Color::srgb(0.85, 0.15, 0.12),
+            (true, _) => ACCENT,
+            (_, true) => DANGER,
             _ => Color::NONE,
         };
         let row = commands
@@ -197,25 +277,20 @@ fn add(
                 Row {
                     born: now,
                     leave: None,
+                    edge,
                 },
                 ChildOf(*feed),
-                UiTransform::from_translation(Val2::px(120.0, 0.0)),
+                UiTransform::from_translation(Val2::px(ENTER_X, 0.0)),
                 Node {
                     align_items: AlignItems::Center,
                     column_gap: px(8),
                     height: px(ROW_H),
                     padding: UiRect::axes(px(12), px(0)),
                     border: UiRect::left(px(3)),
-                    border_radius: BorderRadius::all(px(8)),
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(
-                    0.03,
-                    0.04,
-                    0.07,
-                    if you { 0.82 } else { 0.62 },
-                )),
+                BackgroundColor(PLATE),
                 BorderColor::all(edge),
             ))
             .id();
@@ -250,6 +325,7 @@ fn add(
             };
             match icon {
                 Some(i) => drop(r.spawn((
+                    Fade(Color::WHITE),
                     Node {
                         width: px(82),
                         height: px(22),
@@ -261,36 +337,73 @@ fn add(
                         ..ImageNode::new(art.log.clone())
                     },
                 ))),
-                None => drop(r.spawn(text("killed", Color::srgb(0.7, 0.7, 0.7)))),
+                None => drop(r.spawn(text("killed", DIM))),
             }
             if k.head {
-                r.spawn((
-                    Node {
-                        width: px(78),
-                        height: px(18),
-                        ..default()
-                    },
-                    ImageNode {
-                        rect: Some(Rect::new(150.0, 604.0, 380.0, 656.0)),
-                        image_mode: NodeImageMode::Stretch,
-                        ..ImageNode::new(art.banner.clone())
-                    },
-                ));
+                r.spawn(tag("HEADSHOT", DANGER));
             }
             name(r, k.victim);
         });
     }
 }
 
-fn ease(t: f32) -> f32 {
-    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+/// Applies `frac` (1 = full opacity) to every direct [`Fade`] child of a row or the confirmation.
+fn fade_children(
+    children: &Children,
+    frac: f32,
+    parts: &mut Query<
+        (
+            &Fade,
+            Option<&mut TextColor>,
+            Option<&mut BorderColor>,
+            Option<&mut ImageNode>,
+        ),
+        Without<Row>,
+    >,
+) {
+    for &e in children {
+        let Ok((fade, text, border, img)) = parts.get_mut(e) else {
+            continue;
+        };
+        let c = fade.0.with_alpha(fade.0.alpha() * frac);
+        if let Some(mut t) = text {
+            t.0 = c;
+        }
+        if let Some(mut b) = border {
+            b.set_all(c);
+        }
+        if let Some(mut i) = img {
+            i.color = c;
+        }
+    }
 }
 
+#[allow(clippy::type_complexity)]
 fn animate(
     mut commands: Commands,
     time: Res<Time>,
-    mut rows: Query<(Entity, &mut Row, &mut UiTransform, &mut Node)>,
-    mut banner: Single<(&Banner, &mut Visibility, &mut UiTransform), Without<Row>>,
+    mut rows: Query<
+        (
+            Entity,
+            &mut Row,
+            &mut UiTransform,
+            &mut Node,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &Children,
+        ),
+        (Without<Confirm>, Without<Fade>),
+    >,
+    mut parts: Query<
+        (
+            &Fade,
+            Option<&mut TextColor>,
+            Option<&mut BorderColor>,
+            Option<&mut ImageNode>,
+        ),
+        Without<Row>,
+    >,
+    mut confirm: Single<(&mut Confirm, &mut Visibility, &mut UiTransform, &Children), Without<Row>>,
 ) {
     let now = time.elapsed_secs();
     // oldest first: the rows past `LINES` and past their life start to leave
@@ -308,29 +421,56 @@ fn animate(
             row.leave = Some(now);
         }
     }
-    for (e, row, mut tf, mut node) in &mut rows {
-        let x = match row.leave {
+    for (e, row, mut tf, mut node, mut bg, mut border, children) in &mut rows {
+        if row.leave.is_none() && now - row.born >= ENTER {
+            // fully entered and not leaving: settled, nothing changes until it leaves
+            continue;
+        }
+        let (x, frac) = match row.leave {
             Some(t) => {
                 let t = (now - t) / LEAVE;
                 if t >= 1.0 {
                     commands.entity(e).despawn();
                     continue;
                 }
-                node.height = px(ROW_H * (1.0 - ease(t)));
-                320.0 * t * t
+                node.height = px(ROW_H * (1.0 - ui::ease_out(t)));
+                (0.0, 1.0 - ui::ease_out(t))
             }
-            None => 120.0 * (1.0 - ease((now - row.born) / ENTER)),
+            None => {
+                let f = ui::ease_out((now - row.born) / ENTER);
+                (ENTER_X * (1.0 - f), f)
+            }
         };
         tf.translation = Val2::px(x, 0.0);
+        bg.0 = PLATE.with_alpha(PLATE.alpha() * frac);
+        border.set_all(row.edge.with_alpha(row.edge.alpha() * frac));
+        fade_children(children, frac, &mut parts);
     }
-    let (b, vis, tf) = &mut *banner;
-    let age = now - b.0;
-    if age > BANNER {
+    let (c, vis, tf, children) = &mut *confirm;
+    let age = now - c.start;
+    let total = CONFIRM_IN + CONFIRM_HOLD + CONFIRM_OUT;
+    if age > total {
         if **vis != Visibility::Hidden {
             **vis = Visibility::Hidden;
         }
+        return;
+    }
+    if **vis != Visibility::Inherited {
+        **vis = Visibility::Inherited;
+    }
+    if age < CONFIRM_IN {
+        let f = ui::ease_out(age / CONFIRM_IN);
+        tf.scale = Vec2::splat(0.82 + 0.18 * f);
+        fade_children(children, f, &mut parts);
+    } else if age < CONFIRM_IN + CONFIRM_HOLD {
+        // steady hold: apply once, not every frame
+        if tf.scale != Vec2::ONE {
+            tf.scale = Vec2::ONE;
+            fade_children(children, 1.0, &mut parts);
+        }
     } else {
-        tf.scale = Vec2::splat(1.0 + 0.35 * (1.0 - ease(age / 0.18)));
+        let f = 1.0 - ui::ease_out((age - CONFIRM_IN - CONFIRM_HOLD) / CONFIRM_OUT);
+        fade_children(children, f, &mut parts);
     }
 }
 

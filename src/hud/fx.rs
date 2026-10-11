@@ -10,6 +10,7 @@ use crate::{
     game::{Dead, Killed, Loadout, NewRound, Player, Settings, Team, Vitals},
     gore::{paint, smooth, splat_image},
     level::Level,
+    ui::{self, INK, OK, PLATE},
 };
 use bevy::{prelude::*, transform::TransformSystems, ui::UiSystems};
 
@@ -143,11 +144,11 @@ fn track(h: f32) -> impl Bundle {
         Node {
             width: percent(100),
             height: px(h),
-            border_radius: BorderRadius::all(px(h / 2.0)),
+            border_radius: BorderRadius::all(px(1)),
             overflow: Overflow::clip(),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+        BackgroundColor(PLATE),
     )
 }
 
@@ -159,7 +160,7 @@ fn fill(actor: Entity, bar: MateBar) -> impl Bundle {
             height: percent(100),
             ..default()
         },
-        BackgroundColor(Color::WHITE),
+        BackgroundColor(OK),
     )
 }
 
@@ -201,9 +202,9 @@ fn spawn_mates(
                     Mate(a),
                     MateAmmo(None),
                     Text::new(""),
-                    TextFont::from_font_size(AMMO_H - 1.0),
-                    TextColor(Color::WHITE),
-                    TextShadow::default(),
+                    ui::digits(AMMO_H - 1.0),
+                    TextColor(INK),
+                    ui::shadow(),
                 ),
             ],
         ));
@@ -280,7 +281,7 @@ fn mate_bars(
                 let [r, g, b] = HP_TIERS[tier(v.hp / v.max_hp.max(1.0))].0;
                 (v.hp, v.max_hp, Color::srgb_u8(r, g, b))
             }
-            MateBar::Ap => (v.ap, v.max_ap, Color::srgb_u8(70, 150, 235)),
+            MateBar::Ap => (v.ap, v.max_ap, OK),
         };
         node.width = percent((value / max.max(1.0)).clamp(0.0, 1.0) * 100.0);
         if bg.0 != colour {

@@ -583,17 +583,23 @@ textures (`crosshair02`, `hit_marker`, `kill_marker`, `ingame_hpbar`, `ingame_ti
   segments (40,111,162)->(64,150,220) as one bar.
 - **Weapon icons**: the shop's item icons (`itemicon.xml` cells of `interface/loadable/*`, loaded
   through `shop::Icons`) for the weapon strip; the kill feed still uses the kill-log atlas.
-- **Fonts**: none in the archives, so all text is Bevy's built-in font.
+- **Fonts**: none in the archives. `ui.rs` embeds Barlow (SIL OFL, `assets/fonts`): Barlow Medium for
+  running text (it replaces Bevy's default font) and Barlow Condensed Medium, SemiBold and Bold for
+  labels, buttons, titles and the tabular-figure numbers of the HUD.
 
-Layout (logical px at 1280 x 720, scaled down below that by `menu::fit`): health and armour card
-bottom left (rounded bars, a pale trail behind the bar that waits 0.5 s after damage then drains,
-the number pops on a hit and pulses red under 30%); weapon strip (up to six item-icon tiles with their
-key numbers, the selected one raised and gold-framed) over the ammo card (weapon name, magazine,
-reserve; the magazine turns red and pulses at or below a quarter of its size, RELOAD or NO AMMO
-shows when it is empty) bottom right, bottom centre on touch screens; the match header (460 px bar
-fading at both ends; the clan emblems of `clan.rs` hang off it) and a kills / deaths chip top
-left; the notice below the crosshair pops in and fades. The header stacks the timer (24 px) over the
-mode line (score, round, leader; hidden when the mode has none): `session::Clock.timer` and `.header`.
+Layout (logical px at 1280 x 720, scaled down below that by `menu::fit`; colours, fonts and widgets
+from `ui.rs`, sharp plates instead of rounded cards): health and armour bottom left with no card (a
+44 px HP number over a 6 px bar with a pale trail that waits 0.5 s after damage then drains, a 3 px
+armour bar; the number pops on a hit and turns red under 30%); weapon strip (up to six item-icon tiles
+with their key numbers, the selected one framed and underlined in the accent) over the weapon plate
+(weapon name, 44 px magazine, reserve; the magazine turns red and pulses at or below a quarter of its
+size, RELOAD or NO AMMO shows when it is empty; melee weapons show the name only) bottom right, bottom
+centre on touch screens; the match header (a plate holding the clock, with the red and blue scores in
+team chips either side in team modes; the clan emblems of `clan.rs` hang off it) and KILLS / DEATHS
+top left. The header stacks the timer over the mode line (round, leader; hidden when the mode has
+none): `session::Clock.timer`, `.header` and `.team_score`. A kill by the player shows ELIMINATED and
+the victim's name below the crosshair for 1.4 s (`feed.rs`; HEADSHOT / MELEE tags when they apply);
+the death screen is a plate with KILLED BY, the damage rows and a draining RESPAWN IN bar.
 Damage direction is a thin arc of nine glowing segments on a 140 px ring around the crosshair,
 turned towards the attacker and fading over the last 0.75 s. The HUD draws no full-screen red wash
 (the graphics page's hit flash and low-health effect and the screen blood already tint the frame);
@@ -601,19 +607,20 @@ only when both of those are off a faint edge vignette shows under 30% HP. The cr
 shadow: its gap opens with running speed (+7 px at 10 m/s), jumping (+4 px) and each gun shot
 (+5 px, decaying 40 px/s) and is fixed with "Fixed spread" (the numbers are cosmetic, **inferred**,
 not the combat cone); hit markers (white) and kill markers (red) are the same ticks turned 45 degrees.
-The scoreboard is a 720 px card with one row per actor sorted by kills (team stripe, `you`
-highlighted, K/D ratio); the clan strip and the "earned" line sit on it.
+The scoreboard is a 720 px plate with one row per actor sorted by kills (team stripe, the player's row
+in the accent, K/D ratio); the clan strip and the "earned" line sit on it.
 
 ### Main menu and match flow (`src/menu.rs`, `src/session.rs`)
 
 Retail art used: `bg_play.png` (1920x1080 lobby backdrop, drawn on a quad behind the 3D preview),
-`gunz_logo_hq.png` (231x96). Buttons, tabs and cards are flat rounded Bevy UI nodes (accent amber
-`menu::ACCENT`, hover / pressed / selected states in `menu::hover`); the retail `defaultbutton_*` textures are
+`gunz_logo_hq.png` (231x96). Buttons are flat square tiles with a 2 px bar under them, tabs are text
+with an accent underline (accent amber
+`ui::ACCENT`, hover / pressed / selected states in `ui::hover`); the retail `defaultbutton_*` textures are
 unused.
 The `banner_<map>.tga` strips (360x32, a map picture with its name) exist for only 21 of the 30
 maps, so the map list is plain buttons. No font file exists in the archives (`*.ttf` absent; the
-retail UI uses system fonts such as the `FONTb20b` of `combatinterface.xml`), so all text uses
-Bevy's built-in font. Maps are the 30 directories under `maps/` holding an `.RS` file; weapon
+retail UI uses system fonts such as the `FONTb20b` of `combatinterface.xml`), so text uses the Barlow
+fonts of `ui.rs`. Maps are the 30 directories under `maps/` holding an `.RS` file; weapon
 candidates are zitem weapons that have a name and a model (melee -> slot 1, range -> slots 2/3,
 custom -> slot 4; `character` part sets: 170 for the man, 259 for the woman).
 

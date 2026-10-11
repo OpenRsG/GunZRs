@@ -1,8 +1,10 @@
 //! The in-match HUD panels (Bevy UI over the 3D view): dynamic crosshair with hit and kill
-//! markers, health and armour bars with a damage trail, the weapon strip and ammo counter, the
-//! match header, kill/death counters, notices, the death screen and the scoreboard. A child of
-//! `hud.rs`; the nodes are spawned once and only rewritten afterwards. Everything is drawn from
-//! rounded dark cards and the item icons of `interface/loadable/`; the retail frame art is gone.
+//! markers, thin health and armour bars with a damage trail, the weapon strip and ammo counter,
+//! the CoD-style match header (RED/BLUE score blocks or the mode line either side of the clock),
+//! kill/death counters, notices, the "KILLED BY" death screen and the scoreboard. A child of
+//! `hud.rs`; the nodes are spawned once and only rewritten afterwards. Floating text with a drop
+//! shadow, or a slim `PLATE` slab where legibility needs one — no rounded cards, no pill shapes.
+//! Item icons come from `interface/loadable/`; the retail frame art is gone.
 
 use super::{HP_TIERS, HURT_SLOTS, Hud, Indicator, LOW_HP, LowHp, Marks, Root, fx, set, tier};
 use crate::{
@@ -10,9 +12,9 @@ use crate::{
     controls::{Action, Input},
     game::{Dead, Fire, Loadout, Player, Score, Settings, Status, Team, Vitals},
     gfx::Knob,
-    menu::{ACCENT, DIM},
     profile::{MatchGain, Profile, Ranks},
     session::{Clock, HOLD},
+    ui::{self, ACCENT, BLUE, DANGER, DIM, INK, LINE, PLATE, RED, SCRIM, SHADOW},
 };
 use bevy::{prelude::*, text::Justify, ui::UiTargetCamera};
 
@@ -20,11 +22,8 @@ use bevy::{prelude::*, text::Justify, ui::UiTargetCamera};
 const BOARD_ROWS: usize = 12;
 const TILES: usize = 6;
 
-const PANEL: Color = Color::srgba(0.03, 0.04, 0.07, 0.62);
-const EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.09);
-const RED: Color = Color::srgb(1.0, 0.32, 0.28);
-const TRACK: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
-const AP_FILL: ([u8; 3], [u8; 3]) = ([40, 111, 162], [64, 150, 220]);
+/// Armour bar fill: flat `ui::BLUE` (sRGB u8) at both gradient stops.
+const AP_FILL: ([u8; 3], [u8; 3]) = ([102, 173, 255], [102, 173, 255]);
 
 /// The damage-direction arc: segments, the angle between them (degrees) and the ring radius (px).
 const ARC: usize = 9;
@@ -34,6 +33,18 @@ const RING: f32 = 140.0;
 /// The header's mode line wrapper (hidden when the mode has none).
 #[derive(Component)]
 pub(super) struct HeaderLine;
+
+/// The header's RED/BLUE score chips (hidden outside two-team modes).
+#[derive(Component)]
+pub(super) struct TeamScore;
+
+/// The death screen's draining respawn-countdown bar.
+#[derive(Component)]
+pub(super) struct RespawnBar;
+
+/// The weapon tile's current-slot accent bar.
+#[derive(Component)]
+pub(super) struct TileBar(usize);
 
 /// Text slots rewritten every frame.
 #[derive(Component, Clone, Copy)]
@@ -45,14 +56,17 @@ pub(super) enum Label {
     Reserve,
     Hint,
     Weapon,
-    /// The respawn line of the death screen.
+    /// The death screen's "KILLED BY" line and its respawn countdown.
+    KilledBy,
     Death,
     /// The player's own kills and deaths at the top left.
     Kills,
     Deaths,
-    /// The header's mode line, and its timer above it.
+    /// The header's mode line, the timer, and a two-team mode's RED/BLUE score.
     Clock,
     Timer,
+    RedScore,
+    BlueScore,
     /// Slow / stun / root / burn timers of the player (`Status`).
     Status,
 }
@@ -109,6 +123,10 @@ pub(super) struct Cell(usize, usize);
 #[derive(Component)]
 pub(super) struct WeaponBox;
 
+/// The magazine / reserve / hint row of the weapon plate (hidden for melee: name only).
+#[derive(Component)]
+pub(super) struct AmmoRow;
+
 /// The scoreboard's last line once the match is over: level, XP and bounty earned (`profile.rs`).
 #[derive(Component)]
 pub(super) struct Earned;
@@ -132,44 +150,30 @@ pub(super) fn touch_layout(
     }
 }
 
-fn label(slot: Label, size: f32, color: Color) -> impl Bundle {
-    (
-        slot,
-        Text::new(""),
-        TextFont::from_font_size(size),
-        TextColor(color),
-    )
+fn label(slot: Label, font: TextFont, color: Color) -> impl Bundle {
+    (slot, Text::new(""), font, TextColor(color))
 }
 
-fn text(s: &str, size: f32, color: Color) -> impl Bundle {
-    (
-        Text::new(s),
-        TextFont::from_font_size(size),
-        TextColor(color),
-    )
+fn text(s: &str, font: TextFont, color: Color) -> impl Bundle {
+    (Text::new(s), font, TextColor(color))
 }
 
-/// A rounded dark card (12 px corners unless the node sets its own).
-fn card(node: Node) -> impl Bundle {
-    card_on(node, PANEL)
+/// A slim CoD-style slab where a block of text needs a legible backing: flat `PLATE` fill, a
+/// hairline edge and a soft shadow, corners sharp (≤ 2 px unless the node sets its own).
+fn plate(node: Node) -> impl Bundle {
+    plate_on(node, PLATE)
 }
 
-fn card_on(mut node: Node, bg: Color) -> impl Bundle {
+fn plate_on(mut node: Node, bg: Color) -> impl Bundle {
     node.border = UiRect::all(px(1));
     if node.border_radius == BorderRadius::ZERO {
-        node.border_radius = BorderRadius::all(px(12));
+        node.border_radius = BorderRadius::all(px(2));
     }
     (
         node,
         BackgroundColor(bg),
-        BorderColor::all(EDGE),
-        BoxShadow::new(
-            Color::srgba(0.0, 0.0, 0.0, 0.35),
-            px(0),
-            px(4),
-            px(0),
-            px(14),
-        ),
+        BorderColor::all(LINE),
+        BoxShadow::new(SHADOW.with_alpha(0.35), px(0), px(3), px(0), px(10)),
     )
 }
 
@@ -224,13 +228,7 @@ fn tick(kind: Show, dir: usize, len: f32, thick: f32, color: Color) -> impl Bund
             ..default()
         },
         BackgroundColor(color),
-        BoxShadow::new(
-            Color::srgba(0.0, 0.0, 0.0, 0.55),
-            px(0),
-            px(0),
-            px(1),
-            px(2),
-        ),
+        BoxShadow::new(SHADOW.with_alpha(0.55), px(0), px(0), px(1), px(2)),
     )
 }
 
@@ -252,14 +250,14 @@ fn gradient((a, b): ([u8; 3], [u8; 3])) -> BackgroundGradient {
     .into()
 }
 
-/// Transparent centre fading to red at the screen edge (`alpha` there).
+/// Transparent centre fading to `DANGER` at the screen edge (`alpha` there).
 pub(super) fn vignette(alpha: f32) -> BackgroundGradient {
     RadialGradient::new(
         UiPosition::CENTER,
         RadialGradientShape::default(),
         vec![
-            ColorStop::new(Color::srgba(0.75, 0.0, 0.0, 0.0), percent(45)),
-            ColorStop::new(Color::srgba(0.75, 0.0, 0.0, alpha), percent(100)),
+            ColorStop::new(DANGER.with_alpha(0.0), percent(45)),
+            ColorStop::new(DANGER.with_alpha(alpha), percent(100)),
         ],
     )
     .into()
@@ -276,23 +274,19 @@ fn stretch() -> Node {
     }
 }
 
-/// A rounded bar with its damage trail behind the fill.
+/// A thin, sharp-edged bar with its damage trail behind the fill.
 fn bar(fill: Fill, trail: Fill, (w, h): (f32, f32), g: ([u8; 3], [u8; 3])) -> impl Bundle {
     (
         Node {
             width: px(w),
             height: px(h),
-            border_radius: BorderRadius::all(px(h / 2.0)),
+            border_radius: BorderRadius::all(px(1)),
             overflow: Overflow::clip(),
             ..default()
         },
-        BackgroundColor(TRACK),
+        BackgroundColor(LINE.with_alpha(0.18)),
         children![
-            (
-                trail,
-                stretch(),
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.7))
-            ),
+            (trail, stretch(), BackgroundColor(INK.with_alpha(0.7))),
             (fill, stretch(), gradient(g)),
         ],
     )
@@ -316,28 +310,22 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
         ))
         .id();
     commands.entity(root).with_children(|r| {
-        // Crosshair, hit marker, kill marker.
-        marker(
-            r,
-            Show::Cross,
-            8.0,
-            2.0,
-            Color::srgba(1.0, 1.0, 1.0, 0.92),
-            0.0,
-        );
-        marker(r, Show::Hit, 8.0, 2.0, Color::WHITE, 45.0);
-        marker(r, Show::Kill, 11.0, 3.0, RED, 45.0);
+        // Crosshair, hit marker, kill marker (crisp, unchanged behaviour; the kill mark reads
+        // as danger).
+        marker(r, Show::Cross, 8.0, 2.0, INK.with_alpha(0.92), 0.0);
+        marker(r, Show::Hit, 8.0, 2.0, INK, 45.0);
+        marker(r, Show::Kill, 11.0, 3.0, DANGER, 45.0);
         r.spawn((
             LowHp,
             Visibility::Hidden,
             overlay(Color::NONE),
             vignette(0.0),
         ));
-        // Notice.
+        // Notice banner: upper-centre, display caps, fast pop.
         r.spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: percent(62),
+                top: percent(14),
                 left: px(0),
                 width: percent(100),
                 justify_content: JustifyContent::Center,
@@ -347,9 +335,9 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                 Banner,
                 UiTransform::default(),
                 Text::new(""),
-                TextFont::from_font_size(26.0),
+                ui::display(26.0),
                 TextColor(ACCENT),
-                TextShadow::default(),
+                ui::shadow(),
             )],
         ));
         // Status effects, above the vitals.
@@ -357,141 +345,133 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
             Node {
                 position_type: PositionType::Absolute,
                 left: px(24),
-                bottom: px(118),
+                bottom: px(130),
                 ..default()
             },
             children![(
-                label(Label::Status, 20.0, Color::srgb(0.45, 0.8, 1.0)),
-                TextShadow::default()
+                label(Label::Status, ui::compact(16.0), DANGER),
+                ui::shadow()
             )],
         ));
-        // Health and armour.
-        r.spawn(card(Node {
+        // Health and armour: floating over the view, no card, a slim track under each bar.
+        r.spawn(Node {
             position_type: PositionType::Absolute,
             left: px(24),
             bottom: px(24),
             flex_direction: FlexDirection::Column,
-            row_gap: px(8),
-            padding: UiRect::axes(px(14), px(12)),
+            row_gap: px(5),
             ..default()
-        }))
+        })
         .with_children(|c| {
-            c.spawn((
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(10),
-                    ..default()
-                },
-                children![
-                    (
-                        Node {
-                            width: px(26),
-                            ..default()
-                        },
-                        children![text("HP", 13.0, DIM)]
-                    ),
-                    bar(Fill::Hp, Fill::HpTrail, (230.0, 14.0), HP_TIERS[0]),
-                    (
-                        Pop,
-                        Node {
-                            width: px(52),
-                            justify_content: JustifyContent::FlexEnd,
-                            ..default()
-                        },
-                        UiTransform::default(),
-                        children![(label(Label::Hp, 28.0, Color::WHITE), TextShadow::default())],
-                    ),
-                ],
-            ));
-            c.spawn((
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(10),
-                    ..default()
-                },
-                children![
-                    (
-                        Node {
-                            width: px(26),
-                            ..default()
-                        },
-                        children![text("AP", 13.0, DIM)]
-                    ),
-                    bar(Fill::Ap, Fill::ApTrail, (230.0, 8.0), AP_FILL),
-                    (
-                        Node {
-                            width: px(52),
-                            justify_content: JustifyContent::FlexEnd,
-                            ..default()
-                        },
-                        children![label(Label::Ap, 20.0, Color::srgb(0.7, 0.85, 1.0))],
-                    ),
-                ],
-            ));
+            c.spawn(Node {
+                align_items: AlignItems::Baseline,
+                column_gap: px(8),
+                ..default()
+            })
+            .with_children(|n| {
+                n.spawn((
+                    Pop,
+                    Node::default(),
+                    UiTransform::default(),
+                    children![(label(Label::Hp, ui::digits(50.0), INK), ui::shadow())],
+                ));
+                n.spawn((text("HP", ui::strong(13.0), DIM), ui::shadow()));
+            });
+            c.spawn(bar(Fill::Hp, Fill::HpTrail, (200.0, 6.0), HP_TIERS[0]));
+            c.spawn(Node {
+                align_items: AlignItems::Baseline,
+                column_gap: px(6),
+                ..default()
+            })
+            .with_children(|n| {
+                n.spawn(label(Label::Ap, ui::digits(18.0), INK));
+                n.spawn((text("ARMOR", ui::strong(13.0), DIM), ui::shadow()));
+            });
+            c.spawn(bar(Fill::Ap, Fill::ApTrail, (150.0, 3.0), AP_FILL));
         });
-        // Match header: the timer over the mode line, on a bar fading out at both ends.
+        // Match header: a compact plate at top-centre. Team modes show RED score | clock |
+        // BLUE score in team-coloured blocks; other modes show the clock with the caps mode
+        // line under it.
         r.spawn((
-            Node {
+            UiTransform::from_translation(Val2::new(percent(-50), px(0))),
+            plate(Node {
                 position_type: PositionType::Absolute,
                 left: percent(50),
-                margin: UiRect::left(px(-230)),
-                top: px(8),
-                width: px(460),
-                min_height: px(40),
-                padding: UiRect::vertical(px(3)),
+                top: px(24),
                 flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
+                row_gap: px(4),
+                padding: UiRect::axes(px(20), px(8)),
                 ..default()
-            },
-            BackgroundGradient::from(LinearGradient::to_right(vec![
-                ColorStop::new(Color::srgba(0.0, 0.0, 0.0, 0.0), percent(0)),
-                ColorStop::new(Color::srgba(0.0, 0.0, 0.0, 0.6), percent(22)),
-                ColorStop::new(Color::srgba(0.0, 0.0, 0.0, 0.6), percent(78)),
-                ColorStop::new(Color::srgba(0.0, 0.0, 0.0, 0.0), percent(100)),
-            ])),
-            children![
-                (
-                    label(Label::Timer, 24.0, Color::WHITE),
-                    TextShadow::default()
-                ),
-                (
-                    HeaderLine,
+            }),
+        ))
+        .with_children(|h| {
+            h.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: px(14),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn((
+                    TeamScore,
                     Node {
                         display: Display::None,
+                        padding: UiRect::axes(px(10), px(3)),
+                        border_radius: BorderRadius::all(px(2)),
                         ..default()
                     },
-                    children![(
-                        label(Label::Clock, 15.0, Color::srgb(0.85, 0.88, 0.95)),
-                        TextShadow::default(),
-                        TextLayout {
-                            linebreak: bevy::text::LineBreak::NoWrap,
-                            ..default()
-                        },
-                    )],
-                ),
-            ],
-        ));
-        // Own kills and deaths.
-        r.spawn(card(Node {
-            position_type: PositionType::Absolute,
-            left: px(16),
-            top: px(12),
-            align_items: AlignItems::Center,
-            column_gap: px(8),
-            padding: UiRect::axes(px(12), px(6)),
-            border_radius: BorderRadius::all(px(10)),
-            ..default()
-        }))
-        .with_children(|c| {
-            c.spawn(text("K", 13.0, DIM));
-            c.spawn(label(Label::Kills, 22.0, Color::WHITE));
-            c.spawn(Node {
-                width: px(8),
-                ..default()
+                    BackgroundColor(RED.with_alpha(0.85)),
+                    children![label(Label::RedScore, ui::digits(20.0), INK)],
+                ));
+                row.spawn((label(Label::Timer, ui::digits(28.0), INK), ui::shadow()));
+                row.spawn((
+                    TeamScore,
+                    Node {
+                        display: Display::None,
+                        padding: UiRect::axes(px(10), px(3)),
+                        border_radius: BorderRadius::all(px(2)),
+                        ..default()
+                    },
+                    BackgroundColor(BLUE.with_alpha(0.85)),
+                    children![label(Label::BlueScore, ui::digits(20.0), INK)],
+                ));
             });
-            c.spawn(text("D", 13.0, DIM));
-            c.spawn(label(Label::Deaths, 22.0, Color::WHITE));
+            h.spawn((
+                HeaderLine,
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+                children![(
+                    label(Label::Clock, ui::strong(14.0), DIM),
+                    TextLayout {
+                        linebreak: bevy::text::LineBreak::NoWrap,
+                        ..default()
+                    },
+                )],
+            ));
+        });
+        // Own kills and deaths, top left, floating to match the vitals.
+        r.spawn(Node {
+            position_type: PositionType::Absolute,
+            left: px(24),
+            top: px(24),
+            align_items: AlignItems::Center,
+            column_gap: px(20),
+            ..default()
+        })
+        .with_children(|c| {
+            for (caption, value) in [("KILLS", Label::Kills), ("DEATHS", Label::Deaths)] {
+                c.spawn(Node {
+                    align_items: AlignItems::Baseline,
+                    column_gap: px(6),
+                    ..default()
+                })
+                .with_children(|n| {
+                    n.spawn((text(caption, ui::strong(13.0), DIM), ui::shadow()));
+                    n.spawn((label(value, ui::digits(24.0), INK), ui::shadow()));
+                });
+            }
         });
         // Weapon strip and ammo.
         r.spawn((
@@ -509,7 +489,7 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
         ))
         .with_children(|w| {
             w.spawn(Node {
-                column_gap: px(6),
+                column_gap: px(5),
                 align_items: AlignItems::FlexEnd,
                 ..default()
             })
@@ -517,16 +497,16 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                 for i in 0..TILES {
                     s.spawn((
                         Tile(i),
-                        UiTransform::default(),
                         Node {
-                            width: px(50),
-                            height: px(50),
+                            width: px(42),
+                            height: px(42),
                             border: UiRect::all(px(1)),
-                            border_radius: BorderRadius::all(px(8)),
+                            border_radius: BorderRadius::all(px(3)),
+                            overflow: Overflow::clip(),
                             ..default()
                         },
-                        BackgroundColor(PANEL),
-                        BorderColor::all(EDGE),
+                        BackgroundColor(PLATE),
+                        BorderColor::all(LINE),
                         children![
                             (
                                 Icon(i, u32::MAX),
@@ -534,8 +514,8 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                                     position_type: PositionType::Absolute,
                                     left: px(4),
                                     top: px(4),
-                                    width: px(40),
-                                    height: px(40),
+                                    width: px(34),
+                                    height: px(34),
                                     ..default()
                                 },
                                 ImageNode::default(),
@@ -543,78 +523,128 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                             (
                                 Node {
                                     position_type: PositionType::Absolute,
-                                    left: px(4),
+                                    left: px(3),
                                     top: px(1),
                                     ..default()
                                 },
-                                children![text(&(i + 1).to_string(), 11.0, DIM)],
+                                children![text(&(i + 1).to_string(), ui::compact(13.0), DIM)],
+                            ),
+                            (
+                                TileBar(i),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: px(0),
+                                    bottom: px(0),
+                                    width: percent(100),
+                                    height: px(2),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::NONE),
                             ),
                         ],
                     ));
                 }
             });
-            w.spawn(card(Node {
+            w.spawn(plate(Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,
-                min_width: px(220),
-                padding: UiRect::axes(px(16), px(10)),
+                padding: UiRect::axes(px(16), px(8)),
                 ..default()
             }))
             .with_children(|a| {
-                a.spawn(label(Label::Weapon, 15.0, DIM));
-                a.spawn(Node {
-                    align_items: AlignItems::Baseline,
-                    column_gap: px(8),
-                    ..default()
-                })
+                a.spawn(label(Label::Weapon, ui::strong(16.0), INK));
+                a.spawn((
+                    AmmoRow,
+                    Node {
+                        align_items: AlignItems::Baseline,
+                        column_gap: px(8),
+                        ..default()
+                    },
+                ))
                 .with_children(|n| {
                     n.spawn((
-                        label(Label::Hint, 16.0, RED),
+                        label(Label::Hint, ui::strong(13.0), DANGER),
                         Node {
-                            margin: UiRect::right(px(10)),
+                            margin: UiRect::right(px(8)),
                             ..default()
                         },
                     ));
-                    n.spawn((label(Label::Mag, 46.0, Color::WHITE), TextShadow::default()));
-                    n.spawn(label(Label::Reserve, 22.0, DIM));
+                    n.spawn((label(Label::Mag, ui::digits(44.0), INK), ui::shadow()));
+                    n.spawn(label(Label::Reserve, ui::digits(22.0), DIM));
                 });
             });
         });
-        // Death screen.
-        r.spawn((
-            Show::Death,
-            Visibility::Hidden,
-            overlay(Color::srgba(0.0, 0.0, 0.0, 0.18)),
-        ))
-        .with_children(|d| {
-            d.spawn(card(Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: px(10),
-                padding: UiRect::axes(px(40), px(22)),
-                border_radius: BorderRadius::all(px(16)),
-                ..default()
-            }))
-            .with_children(|c| {
-                c.spawn((text("YOU DIED", 44.0, RED), TextShadow::default()));
-                c.spawn(label(Label::Death, 22.0, Color::WHITE));
-                c.spawn((
-                    fx::ReportText,
-                    Text::new(""),
-                    TextFont::from_font_size(18.0),
-                    TextColor(Color::srgb(1.0, 0.85, 0.85)),
-                    TextLayout {
-                        justify: Justify::Center,
+        // Death screen: "KILLED BY <NAME>", the damage breakdown and a draining respawn
+        // countdown on one PLATE (DANGER bar on its left) over the scrim.
+        r.spawn((Show::Death, Visibility::Hidden, overlay(SCRIM)))
+            .with_children(|d| {
+                d.spawn(plate(Node {
+                    align_items: AlignItems::Stretch,
+                    column_gap: px(16),
+                    padding: UiRect::all(px(16)),
+                    ..default()
+                }))
+                .with_children(|row| {
+                    row.spawn((
+                        Node {
+                            width: px(3),
+                            ..default()
+                        },
+                        BackgroundColor(DANGER),
+                    ));
+                    row.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(8),
+                        justify_content: JustifyContent::Center,
+                        min_width: px(280),
                         ..default()
-                    },
-                ));
+                    })
+                    .with_children(|c| {
+                        c.spawn((label(Label::KilledBy, ui::display(32.0), INK), ui::shadow()));
+                        c.spawn((
+                            fx::ReportText,
+                            Text::new(""),
+                            ui::digits(15.0),
+                            TextColor(INK),
+                            TextLayout {
+                                justify: Justify::Left,
+                                ..default()
+                            },
+                        ));
+                        c.spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(6),
+                            margin: UiRect::top(px(6)),
+                            ..default()
+                        })
+                        .with_children(|rc| {
+                            rc.spawn(label(Label::Death, ui::strong(16.0), INK));
+                            rc.spawn((
+                                Node {
+                                    height: px(3),
+                                    overflow: Overflow::clip(),
+                                    ..default()
+                                },
+                                BackgroundColor(LINE.with_alpha(0.2)),
+                                children![(
+                                    RespawnBar,
+                                    Node {
+                                        width: percent(100),
+                                        height: percent(100),
+                                        ..default()
+                                    },
+                                    BackgroundColor(ACCENT),
+                                )],
+                            ));
+                        });
+                    });
+                });
             });
-        });
         // Scoreboard: 720 x 440, centred (the clan strip sits on its top right).
         r.spawn((
             Show::Board,
             Visibility::Hidden,
-            card_on(
+            plate_on(
                 Node {
                     position_type: PositionType::Absolute,
                     left: percent(50),
@@ -628,10 +658,9 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                     padding: UiRect::axes(px(24), px(18)),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(3),
-                    border_radius: BorderRadius::all(px(16)),
                     ..default()
                 },
-                Color::srgba(0.03, 0.04, 0.07, 0.88),
+                PLATE.with_alpha(0.88),
             ),
         ))
         .with_children(|b| {
@@ -640,7 +669,7 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                     height: px(34),
                     ..default()
                 },
-                children![text("SCOREBOARD", 22.0, ACCENT)],
+                children![text("SCOREBOARD", ui::display(20.0), ACCENT)],
             ));
             let cols = [
                 ("#", 34.0),
@@ -662,7 +691,7 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                             width: px(w),
                             ..default()
                         },
-                        children![text(name, 12.0, DIM)],
+                        children![text(name, ui::strong(13.0), DIM)],
                     ));
                 }
             });
@@ -673,7 +702,6 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                         height: px(25),
                         padding: UiRect::horizontal(px(12)),
                         align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(px(6)),
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
@@ -692,6 +720,11 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                         BackgroundColor(Color::NONE),
                     ));
                     for (c, (_, w)) in cols.iter().enumerate() {
+                        let font = if c == 1 {
+                            ui::strong(16.0)
+                        } else {
+                            ui::digits(16.0)
+                        };
                         row.spawn((
                             Node {
                                 width: px(*w),
@@ -701,8 +734,8 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                             children![(
                                 Cell(i, c),
                                 Text::new(""),
-                                TextFont::from_font_size(17.0),
-                                TextColor(Color::WHITE),
+                                font,
+                                TextColor(INK),
                                 TextLayout {
                                     linebreak: bevy::text::LineBreak::NoWrap,
                                     ..default()
@@ -715,7 +748,7 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
             b.spawn((
                 Earned,
                 Text::new(""),
-                TextFont::from_font_size(18.0),
+                ui::compact(16.0),
                 TextColor(ACCENT),
                 Node {
                     margin: UiRect::top(px(8)),
@@ -752,7 +785,8 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
     }
 }
 
-/// Colour at `frac` of the way from red to the bar's own colour: the number's low-health tint.
+/// Colour at `frac` of the way from `DANGER` to the bar's own colour: the number's low-health
+/// tint.
 fn lerp(a: Color, b: Color, t: f32) -> Color {
     Color::from(LinearRgba::from(a).mix(&LinearRgba::from(b), t.clamp(0.0, 1.0)))
 }
@@ -817,9 +851,9 @@ pub(super) fn vitals(
             Label::Hp => (
                 format!("{}", vitals.hp.ceil()),
                 if low_hp {
-                    lerp(Color::WHITE, RED, 0.5 + 0.5 * pulse)
+                    lerp(INK, DANGER, 0.5 + 0.5 * pulse)
                 } else {
-                    Color::WHITE
+                    INK
                 },
             ),
             Label::Ap => (format!("{}", vitals.ap.ceil()), c.0),
@@ -872,7 +906,7 @@ pub(super) fn vitals(
         let s = 1.0 + 0.3 * (marks.flash / 0.4);
         tf.scale = Vec2::splat(s);
     }
-    // Low health: a thin red edge vignette, only when neither the graphics page's low-health
+    // Low health: a thin DANGER edge vignette, only when neither the graphics page's low-health
     // effect nor the screen blood already tints the frame.
     let level = if low_hp && wash {
         1.0 - hp_frac / LOW_HP
@@ -981,13 +1015,9 @@ pub(super) fn weapon(
     real: Res<Time<Real>>,
     player: Query<&Loadout, With<Player>>,
     mut texts: Query<(&Label, &mut Text, &mut TextColor)>,
-    mut tiles: Query<(
-        &Tile,
-        &mut Node,
-        &mut BorderColor,
-        &mut BackgroundColor,
-        &mut UiTransform,
-    )>,
+    mut tiles: Query<(&Tile, &mut Node, &mut BorderColor)>,
+    mut bars: Query<(&TileBar, &mut BackgroundColor)>,
+    mut ammo: Query<&mut Node, (With<AmmoRow>, Without<Tile>)>,
     mut icons: Query<(&mut Icon, &mut ImageNode)>,
 ) {
     let Ok(loadout) = player.single() else {
@@ -1007,18 +1037,18 @@ pub(super) fn weapon(
         let (s, color) = match l {
             Label::Weapon => (
                 item.and_then(|i| i.name.clone())
-                    .unwrap_or_else(|| format!("item {}", slot.item)),
+                    .map_or_else(|| format!("ITEM {}", slot.item), |n| n.to_uppercase()),
                 c.0,
             ),
             Label::Mag if melee => (String::new(), c.0),
             Label::Mag => (
                 slot.magazine.to_string(),
                 if empty {
-                    RED
+                    DANGER
                 } else if low {
-                    lerp(Color::WHITE, RED, 0.4 + 0.6 * pulse)
+                    lerp(INK, DANGER, 0.4 + 0.6 * pulse)
                 } else {
-                    Color::WHITE
+                    INK
                 },
             ),
             Label::Reserve if melee => (String::new(), c.0),
@@ -1031,9 +1061,9 @@ pub(super) fn weapon(
                 }
                 .to_owned(),
                 if slot.reserve == 0 {
-                    RED
+                    DANGER
                 } else {
-                    lerp(ACCENT, Color::WHITE, pulse)
+                    lerp(ACCENT, INK, pulse)
                 },
             ),
             _ => continue,
@@ -1043,7 +1073,7 @@ pub(super) fn weapon(
             c.0 = color;
         }
     }
-    for (tile, mut n, mut border, mut bg, mut tf) in &mut tiles {
+    for (tile, mut n, mut border) in &mut tiles {
         let display = if tile.0 < loadout.slots.len() {
             Display::Flex
         } else {
@@ -1053,20 +1083,26 @@ pub(super) fn weapon(
             n.display = display;
         }
         let on = tile.0 == loadout.current;
-        let (fill, edge, y, scale) = if on {
-            (ACCENT.with_alpha(0.22), ACCENT, -6.0, 1.1)
-        } else {
-            (PANEL, EDGE, 0.0, 1.0)
-        };
-        if bg.0 != fill {
-            bg.0 = fill;
-        }
-        let edge = BorderColor::all(edge);
+        let edge = BorderColor::all(if on { ACCENT } else { LINE });
         if *border != edge {
             *border = edge;
         }
-        tf.translation = Val2::px(0.0, y);
-        tf.scale = Vec2::splat(scale);
+    }
+    let ammo_display = if melee { Display::None } else { Display::Flex };
+    for mut n in &mut ammo {
+        if n.display != ammo_display {
+            n.display = ammo_display;
+        }
+    }
+    for (TileBar(i), mut bg) in &mut bars {
+        let c = if *i == loadout.current {
+            ACCENT
+        } else {
+            Color::NONE
+        };
+        if bg.0 != c {
+            bg.0 = c;
+        }
     }
     for (mut icon, mut img) in &mut icons {
         let Some(s) = loadout.slots.get(icon.0) else {
@@ -1079,11 +1115,13 @@ pub(super) fn weapon(
     }
 }
 
-/// The player's counters, the header, the death screen and the scoreboard.
+/// The player's counters, the header (clock, mode line or RED/BLUE score), the death screen and
+/// the scoreboard.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn scores(
     input: Input,
     clock: Option<Res<Clock>>,
+    marks: Res<Marks>,
     player: Query<(&Score, Option<&Dead>), With<Player>>,
     actors: Query<(&Name, &Score, Has<Player>, Option<&Team>)>,
     mut texts: Query<(&Label, &mut Text), Without<Cell>>,
@@ -1091,7 +1129,34 @@ pub(super) fn scores(
     mut rows: Query<(&Row, &mut Node, &mut BackgroundColor), Without<Stripe>>,
     mut stripes: Query<(&Stripe, &mut BackgroundColor), Without<Row>>,
     mut cells: Query<(&Cell, &mut Text, &mut TextColor), Without<Label>>,
-    mut line: Query<&mut Node, (With<HeaderLine>, Without<Row>)>,
+    mut line: Query<
+        &mut Node,
+        (
+            With<HeaderLine>,
+            Without<Row>,
+            Without<TeamScore>,
+            Without<RespawnBar>,
+        ),
+    >,
+    mut team: Query<
+        &mut Node,
+        (
+            With<TeamScore>,
+            Without<Row>,
+            Without<HeaderLine>,
+            Without<RespawnBar>,
+        ),
+    >,
+    mut respawn_bar: Query<
+        &mut Node,
+        (
+            With<RespawnBar>,
+            Without<Row>,
+            Without<HeaderLine>,
+            Without<TeamScore>,
+        ),
+    >,
+    mut respawn_max: Local<f32>,
 ) {
     for mut n in &mut line {
         let want = if clock.as_ref().is_some_and(|c| !c.header.is_empty()) {
@@ -1103,9 +1168,35 @@ pub(super) fn scores(
             n.display = want;
         }
     }
+    let has_team = clock.as_ref().is_some_and(|c| c.team_score.is_some());
+    for mut n in &mut team {
+        let want = if has_team {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if n.display != want {
+            n.display = want;
+        }
+    }
     let Ok((score, dead)) = player.single() else {
         return;
     };
+    // a fresh death (respawn counting from higher than the last-seen max) restarts the bar
+    if let Some(d) = dead {
+        if d.respawn > *respawn_max {
+            *respawn_max = d.respawn;
+        }
+    } else {
+        *respawn_max = 0.0;
+    }
+    let respawn_frac = dead.map_or(0.0, |d| (d.respawn / respawn_max.max(0.01)).clamp(0.0, 1.0));
+    for mut n in &mut respawn_bar {
+        let w = percent(respawn_frac * 100.0);
+        if n.width != w {
+            n.width = w;
+        }
+    }
     let over = clock.as_ref().is_some_and(|c| c.over.is_some());
     for (l, mut t) in &mut texts {
         let s = match l {
@@ -1115,11 +1206,26 @@ pub(super) fn scores(
                 .as_ref()
                 .map_or_else(String::new, |c| c.header.clone()),
             Label::Timer => clock.as_ref().map_or_else(String::new, |c| c.timer.clone()),
+            Label::RedScore => clock
+                .as_ref()
+                .and_then(|c| c.team_score)
+                .map_or_else(String::new, |(red, _)| red.to_string()),
+            Label::BlueScore => clock
+                .as_ref()
+                .and_then(|c| c.team_score)
+                .map_or_else(String::new, |(_, blue)| blue.to_string()),
+            Label::KilledBy => {
+                if marks.killed_by.is_empty() {
+                    "YOU DIED".to_owned()
+                } else {
+                    format!("KILLED BY {}", marks.killed_by.to_uppercase())
+                }
+            }
             Label::Death => dead.map_or(String::new(), |d| {
                 if d.respawn >= HOLD {
-                    "Waiting to rejoin".to_owned()
+                    "WAITING TO REJOIN".to_owned()
                 } else {
-                    format!("Respawn in {}", d.respawn.ceil())
+                    format!("RESPAWN IN {}", d.respawn.ceil())
                 }
             }),
             _ => continue,
@@ -1128,7 +1234,7 @@ pub(super) fn scores(
     }
     for (s, mut v) in &mut shows {
         let on = match s {
-            Show::Death => dead.is_some() && !over,
+            Show::Death => dead.is_some() && !over && !input.pressed(Action::Score),
             Show::Board => input.pressed(Action::Score) || over,
             _ => continue,
         };
@@ -1146,9 +1252,7 @@ pub(super) fn scores(
     for (Row(i), mut n, mut bg) in &mut rows {
         let (display, fill) = match list.get(*i) {
             None => (Display::None, Color::NONE),
-            Some((_, _, true, _)) => (Display::Flex, ACCENT.with_alpha(0.16)),
-            Some(_) if i % 2 == 0 => (Display::Flex, Color::srgba(1.0, 1.0, 1.0, 0.04)),
-            Some(_) => (Display::Flex, Color::NONE),
+            Some(_) => (Display::Flex, PLATE.with_alpha(0.5)),
         };
         if n.display != display {
             n.display = display;
@@ -1157,10 +1261,12 @@ pub(super) fn scores(
             bg.0 = fill;
         }
     }
+    // Team colour, except the player's own row: an ACCENT bar instead.
     for (Stripe(i), mut bg) in &mut stripes {
-        let c = match list.get(*i).and_then(|r| r.3) {
-            Some(Team::Red) => RED,
-            Some(Team::Blue) => Color::srgb(0.48, 0.68, 1.0),
+        let c = match list.get(*i) {
+            Some((_, _, true, _)) => ACCENT,
+            Some((_, _, _, Some(Team::Red))) => RED,
+            Some((_, _, _, Some(Team::Blue))) => BLUE,
             _ => Color::NONE,
         };
         if bg.0 != c {
@@ -1180,14 +1286,14 @@ pub(super) fn scores(
             _ => format!("{:.2}", s.kills as f32 / s.deaths.max(1) as f32),
         };
         set(&mut t, text);
-        let want = if *you { ACCENT } else { Color::WHITE };
+        let want = if *you { ACCENT } else { INK };
         if color.0 != want {
             color.0 = want;
         }
     }
 }
 
-/// The notice pops in, holds and fades out.
+/// The notice pops in, holds and fades out, in caps.
 pub(super) fn banner(
     marks: Res<Marks>,
     real: Res<Time<Real>>,
@@ -1205,7 +1311,7 @@ pub(super) fn banner(
     set(
         &mut text,
         if *left > 0.0 {
-            line.clone()
+            line.to_uppercase()
         } else {
             String::new()
         },

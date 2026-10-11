@@ -1,8 +1,8 @@
 //! `gunz-play` main menu (Bevy UI over a 3D character preview) and the run configuration it
 //! edits. The menu is its own `App`: [`run`] returns the chosen [`Config`], and the binary
 //! re-executes itself with the matching flags (see `src/bin/gunz-play.rs`). Art comes from
-//! `interface/default/` (lobby background, logo); retail fonts are not in the
-//! archives, so text uses Bevy's built-in font. Notes: `docs/formats.md` (menu).
+//! `interface/default/` (lobby background, logo); the type and widgets are `ui.rs`'s. Notes:
+//! `docs/formats.md` (menu).
 
 use crate::{
     character::{self, Character, Look, Slot, TINTS, Wardrobe},
@@ -11,8 +11,12 @@ use crate::{
     item::Items,
     model::Textures,
     mrs::Vfs,
-    profile::{Profile, Ranks},
+    profile::{Profile, Ranks, progress},
     shop::{self, ShopData},
+    ui::{
+        ACCENT, Chosen, DIM, INK, LINE, RAISED, SHADOW, body, button, compact, digits, display,
+        heading, hover, panel, primary, shadow, strong,
+    },
     view::{self, Shot},
 };
 use bevy::{
@@ -518,167 +522,6 @@ impl FromStr for Page {
     }
 }
 
-/// The UI's accent (amber, from the retail headings) and its dimmed text colour.
-pub const ACCENT: Color = Color::srgb(1.0, 0.78, 0.3);
-pub const DIM: Color = Color::srgb(0.66, 0.7, 0.78);
-
-/// Marks the selected button of a group (drawn with the accent).
-#[derive(Component)]
-pub struct Chosen;
-
-/// A button [`hover`] paints; the main call to action (START, RESUME) is [`Primary`].
-#[derive(Component)]
-pub struct Flat;
-
-#[derive(Component)]
-pub struct Primary;
-
-/// The look every flat button starts with (`hover` repaints it by state).
-pub fn flat(w: f32, h: f32) -> impl Bundle {
-    (
-        Button,
-        Flat,
-        UiTransform::default(),
-        Node {
-            width: px(w),
-            height: px(h),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(6)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.14)),
-    )
-}
-
-/// A clickable button; `act` is the system-specific action component.
-pub fn button<A: Component>(w: f32, h: f32, label: &str, size: f32, act: A) -> impl Bundle {
-    (
-        act,
-        flat(w, h),
-        children![(
-            Text::new(label),
-            TextFont::from_font_size(size),
-            TextColor(Color::WHITE)
-        )],
-    )
-}
-
-/// The main button of a screen: filled with the accent.
-pub fn primary<A: Component>(w: f32, h: f32, label: &str, size: f32, act: A) -> impl Bundle {
-    (
-        act,
-        Primary,
-        flat(w, h),
-        BoxShadow::new(
-            Color::srgba(1.0, 0.7, 0.2, 0.25),
-            px(0),
-            px(4),
-            px(0),
-            px(14),
-        ),
-        children![(
-            Text::new(label),
-            TextFont::from_font_size(size),
-            TextColor(Color::srgb(0.1, 0.07, 0.0))
-        )],
-    )
-}
-
-/// Hover, pressed and selected look of every [`Flat`] button.
-#[allow(clippy::type_complexity)]
-pub fn hover(
-    mut buttons: Query<
-        (
-            &Interaction,
-            Has<Chosen>,
-            Has<Primary>,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &mut UiTransform,
-        ),
-        With<Flat>,
-    >,
-) {
-    for (i, chosen, primary, mut bg, mut border, mut tf) in &mut buttons {
-        let (fill, edge) = match (primary, *i, chosen) {
-            (true, Interaction::Pressed, _) => (Color::srgb(0.85, 0.6, 0.15), ACCENT),
-            (true, Interaction::Hovered, _) => (Color::srgb(1.0, 0.86, 0.45), Color::WHITE),
-            (true, _, _) => (ACCENT, Color::srgba(1.0, 1.0, 1.0, 0.0)),
-            (_, Interaction::Pressed, _) => (ACCENT.with_alpha(0.32), ACCENT),
-            (_, Interaction::Hovered, true) => (ACCENT.with_alpha(0.3), ACCENT),
-            (_, _, true) => (ACCENT.with_alpha(0.18), ACCENT.with_alpha(0.85)),
-            (_, Interaction::Hovered, _) => (
-                Color::srgba(1.0, 1.0, 1.0, 0.16),
-                Color::srgba(1.0, 1.0, 1.0, 0.45),
-            ),
-            _ => (
-                Color::srgba(1.0, 1.0, 1.0, 0.07),
-                Color::srgba(1.0, 1.0, 1.0, 0.14),
-            ),
-        };
-        if bg.0 != fill {
-            bg.0 = fill;
-        }
-        let edge = BorderColor::all(edge);
-        if *border != edge {
-            *border = edge;
-        }
-        let scale = if *i == Interaction::Pressed {
-            0.97
-        } else {
-            1.0
-        };
-        if tf.scale != Vec2::splat(scale) {
-            tf.scale = Vec2::splat(scale);
-        }
-    }
-}
-
-/// A rounded dark card with a soft shadow.
-pub fn panel(width: f32, align: AlignItems) -> impl Bundle {
-    (
-        Node {
-            width: px(width),
-            align_items: align,
-            flex_direction: FlexDirection::Column,
-            row_gap: px(8),
-            padding: UiRect::all(px(16)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(12)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.03, 0.04, 0.07, 0.8)),
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.09)),
-        BoxShadow::new(
-            Color::srgba(0.0, 0.0, 0.0, 0.5),
-            px(0),
-            px(8),
-            px(0),
-            px(24),
-        ),
-    )
-}
-
-/// A card title: accent text over a hairline.
-pub fn heading(s: &str) -> impl Bundle {
-    (
-        Text::new(s),
-        TextFont::from_font_size(18.0),
-        TextColor(ACCENT),
-        Node {
-            width: percent(100),
-            padding: UiRect::bottom(px(6)),
-            margin: UiRect::bottom(px(4)),
-            border: UiRect::bottom(px(1)),
-            ..default()
-        },
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.1)),
-    )
-}
-
 fn label(s: &str, w: f32) -> impl Bundle {
     (
         Text::new(s),
@@ -690,6 +533,107 @@ fn label(s: &str, w: f32) -> impl Bundle {
             ..default()
         },
     )
+}
+
+/// Marks a top-bar page tab; [`tab_look`] paints it from [`Interaction`] and [`Chosen`].
+#[derive(Component)]
+struct Tab;
+
+/// A top-bar tab: caps text over a 3 px bar that lights up on hover and shows the accent when
+/// selected (no filled tile, unlike [`button`]).
+fn tab(text: &str, page: Page) -> impl Bundle {
+    (
+        Act::Page(page),
+        Tab,
+        Button,
+        Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: px(7),
+            padding: UiRect::horizontal(px(2)),
+            ..default()
+        },
+        children![
+            (
+                Text::new(text.to_uppercase()),
+                strong(19.0),
+                TextColor(DIM),
+                shadow()
+            ),
+            (
+                Node {
+                    width: percent(100),
+                    height: px(3),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ),
+        ],
+    )
+}
+
+/// Hover/selected look of the top-bar tabs [`tab`] spawns: a lighter style than [`hover`]'s
+/// filled [`Flat`] buttons (tabs never get a background tile).
+#[allow(clippy::type_complexity)]
+fn tab_look(
+    tabs: Query<(&Interaction, Has<Chosen>, &Children), With<Tab>>,
+    mut labels: Query<&mut TextColor>,
+    mut bars: Query<&mut BackgroundColor>,
+) {
+    for (i, chosen, kids) in &tabs {
+        let hot = *i != Interaction::None;
+        let ink = if chosen || hot { INK } else { DIM };
+        let bar = if chosen {
+            ACCENT
+        } else if hot {
+            DIM
+        } else {
+            Color::NONE
+        };
+        if let Some(&label) = kids.first()
+            && let Ok(mut t) = labels.get_mut(label)
+        {
+            t.set_if_neq(TextColor(ink));
+        }
+        if let Some(&under) = kids.get(1)
+            && let Ok(mut b) = bars.get_mut(under)
+        {
+            b.set_if_neq(BackgroundColor(bar));
+        }
+    }
+}
+
+/// Marks a [`quiet`] button; [`quiet_look`] lights its label on hover.
+#[derive(Component)]
+struct Quiet;
+
+/// A low-emphasis text button (QUIT): no tile, just caps text.
+fn quiet<A: Component>(text: &str, size: f32, act: A) -> impl Bundle {
+    (
+        act,
+        Quiet,
+        Button,
+        Node {
+            padding: UiRect::axes(px(12), px(10)),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        children![(Text::new(text.to_uppercase()), strong(size), TextColor(DIM))],
+    )
+}
+
+/// DIM label, INK while hovered or pressed.
+fn quiet_look(
+    buttons: Query<(&Interaction, &Children), With<Quiet>>,
+    mut labels: Query<&mut TextColor>,
+) {
+    for (i, kids) in &buttons {
+        if let Some(&label) = kids.first()
+            && let Ok(mut t) = labels.get_mut(label)
+        {
+            t.set_if_neq(TextColor(if *i == Interaction::None { DIM } else { INK }));
+        }
+    }
 }
 
 /// What the main menu offers: maps, the characters and their clothes.
@@ -1039,7 +983,13 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         .add_plugins(crate::controls::ControlsPlugin)
         .add_plugins(crate::gfx::GfxPlugin)
         .add_systems(Startup, build)
-        .add_systems(Update, (act, refresh, hover, preview, orbit, fit).chain());
+        .add_systems(
+            Update,
+            (
+                act, refresh, hover, tab_look, quiet_look, preview, orbit, fit,
+            )
+                .chain(),
+        );
     // in the browser the page takes over when the menu ends (`web::play`, `gunzExit`)
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(crate::web::WebPlugin);
@@ -1095,7 +1045,35 @@ fn build(
         column_gap: px(6),
         ..default()
     };
-    // `◀ value ▶` with the field's value text between two step buttons.
+    // The `«`/`»` step buttons and the digits value between them, shared by every stepper.
+    let group = |p: &mut ChildSpawnerCommands, f: Field, w: f32, big: bool| {
+        if big {
+            p.spawn(button(34.0, 30.0, "<<", 15.0, Act::Step(f, -10)));
+        }
+        p.spawn(button(30.0, 30.0, "<", 15.0, Act::Step(f, -1)));
+        p.spawn((
+            Value(f),
+            Text::new(value(cfg, &cat, &profile, f)),
+            digits(16.0),
+            TextColor(INK),
+            TextLayout {
+                justify: Justify::Center,
+                linebreak: LineBreak::NoWrap,
+                ..default()
+            },
+            Node {
+                width: px(w),
+                height: px(24),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+        ));
+        p.spawn(button(30.0, 30.0, ">", 15.0, Act::Step(f, 1)));
+        if big {
+            p.spawn(button(34.0, 30.0, ">>", 15.0, Act::Step(f, 10)));
+        }
+    };
+    // `name  « value »`: a labelled row around [`group`].
     let stepper = |p: &mut ChildSpawnerCommands, name: &str, f: Field, w: f32, big: bool| {
         p.spawn(row()).with_children(|r| {
             // The limit labels name what the limit means in the chosen mode.
@@ -1105,30 +1083,7 @@ fn build(
                 Field::Kills => drop(l.insert(Value(Field::KillsName))),
                 _ => {}
             }
-            if big {
-                r.spawn(button(40.0, 30.0, "<<", 16.0, Act::Step(f, -10)));
-            }
-            r.spawn(button(34.0, 30.0, "<", 16.0, Act::Step(f, -1)));
-            r.spawn((
-                Value(f),
-                Text::new(value(cfg, &cat, &profile, f)),
-                TextFont::from_font_size(18.0),
-                TextColor(Color::WHITE),
-                TextLayout {
-                    justify: Justify::Center,
-                    linebreak: LineBreak::NoWrap,
-                    ..default()
-                },
-                Node {
-                    width: px(w),
-                    height: px(24),
-                    ..default()
-                },
-            ));
-            r.spawn(button(34.0, 30.0, ">", 16.0, Act::Step(f, 1)));
-            if big {
-                r.spawn(button(40.0, 30.0, ">>", 16.0, Act::Step(f, 10)));
-            }
+            group(r, f, w, big);
         });
     };
 
@@ -1144,7 +1099,7 @@ fn build(
         .with_children(|root| {
             // dark bands behind the tabs and the buttons, fading into the lobby picture
             for (top, stops) in [(true, [0.8, 0.0]), (false, [0.0, 0.85])] {
-                let c = |a| Color::srgba(0.0, 0.0, 0.0, a);
+                let c = |a| SHADOW.with_alpha(a);
                 root.spawn((
                     Node {
                         position_type: PositionType::Absolute,
@@ -1171,12 +1126,12 @@ fn build(
                     ..default()
                 },
             ));
-            // Tabs.
+            // Tabs: caps text, ACCENT underline on the selected page (tab_look paints it).
             root.spawn(Node {
                 position_type: PositionType::Absolute,
                 left: px(280),
-                top: px(40),
-                column_gap: px(8),
+                top: px(44),
+                column_gap: px(28),
                 ..default()
             })
             .with_children(|t| {
@@ -1189,8 +1144,91 @@ fn build(
                     ("CONTROLS", Page::Controls),
                     ("GRAPHICS", Page::Graphics),
                 ] {
-                    t.spawn(button(124.0, 40.0, label, 16.0, Act::Page(page)));
+                    t.spawn(tab(label, page));
                 }
+            });
+            // Player strip: name, level + XP bar, bounty, medals.
+            let (level, into, need) = progress(profile.xp);
+            let frac = if need == 0 {
+                1.0
+            } else {
+                (into as f32 / need as f32).clamp(0.0, 1.0)
+            };
+            root.spawn(Node {
+                position_type: PositionType::Absolute,
+                top: px(14),
+                right: px(24),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::End,
+                row_gap: px(3),
+                ..default()
+            })
+            .with_children(|s| {
+                s.spawn((
+                    Text::new(profile.name.to_uppercase()),
+                    display(22.0),
+                    TextColor(INK),
+                    shadow(),
+                ));
+                s.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn((Text::new("LV"), compact(14.0), TextColor(DIM), shadow()));
+                    r.spawn((
+                        Text::new(level.to_string()),
+                        digits(15.0),
+                        TextColor(ACCENT),
+                        shadow(),
+                    ));
+                    r.spawn((
+                        Node {
+                            width: px(110),
+                            height: px(6),
+                            ..default()
+                        },
+                        BackgroundColor(RAISED),
+                    ))
+                    .with_children(|bar| {
+                        bar.spawn((
+                            Node {
+                                width: px(110.0 * frac),
+                                height: percent(100),
+                                ..default()
+                            },
+                            BackgroundColor(ACCENT),
+                        ));
+                    });
+                    r.spawn((
+                        Text::new(format!("{into}/{need}")),
+                        digits(14.0),
+                        TextColor(DIM),
+                        shadow(),
+                    ));
+                });
+                s.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn((Text::new("BOUNTY"), compact(13.0), TextColor(DIM), shadow()));
+                    r.spawn((
+                        Text::new(profile.bounty.to_string()),
+                        digits(16.0),
+                        TextColor(INK),
+                        shadow(),
+                    ));
+                    r.spawn((Text::new("MEDALS"), compact(13.0), TextColor(DIM), shadow()));
+                    r.spawn((
+                        Text::new(profile.medals.to_string()),
+                        digits(16.0),
+                        TextColor(INK),
+                        shadow(),
+                    ));
+                });
             });
             let page = |page| {
                 (
@@ -1212,13 +1250,13 @@ fn build(
                         m.spawn(heading("MAP"));
                         m.spawn(Node {
                             flex_wrap: FlexWrap::Wrap,
-                            column_gap: px(6),
-                            row_gap: px(6),
+                            column_gap: px(4),
+                            row_gap: px(4),
                             ..default()
                         })
                         .with_children(|g| {
                             for (i, name) in cat.maps.iter().enumerate() {
-                                g.spawn(button(206.0, 34.0, &title(name), 16.0, Act::Map(i)));
+                                g.spawn(button(200.0, 30.0, &title(name), 16.0, Act::Map(i)));
                             }
                         });
                     });
@@ -1228,8 +1266,8 @@ fn build(
                         m.spawn((
                             Value(Field::MapName),
                             Text::new(value(cfg, &cat, &profile, Field::MapName)),
-                            TextFont::from_font_size(30.0),
-                            TextColor(Color::WHITE),
+                            display(30.0),
+                            TextColor(INK),
                         ));
                         m.spawn(Node {
                             flex_wrap: FlexWrap::Wrap,
@@ -1250,8 +1288,8 @@ fn build(
                         m.spawn((
                             Value(Field::Blurb),
                             Text::new(value(cfg, &cat, &profile, Field::Blurb)),
-                            TextFont::from_font_size(15.0),
-                            TextColor(Color::srgb(0.75, 0.75, 0.75)),
+                            body(15.0),
+                            TextColor(DIM),
                             Node {
                                 width: px(510),
                                 height: px(40),
@@ -1272,8 +1310,8 @@ fn build(
                         q.spawn((
                             Value(Field::Needs),
                             Text::new(value(cfg, &cat, &profile, Field::Needs)),
-                            TextFont::from_font_size(16.0),
-                            TextColor(Color::srgb(1.0, 0.85, 0.4)),
+                            body(16.0),
+                            TextColor(ACCENT),
                             Node {
                                 width: px(600),
                                 min_height: px(60),
@@ -1283,44 +1321,21 @@ fn build(
                     });
             });
             root.spawn(page(Page::Player)).with_children(|p| {
-                p.spawn(panel(700.0, AlignItems::FlexStart))
+                p.spawn(panel(740.0, AlignItems::FlexStart))
                     .with_children(|m| {
                         m.spawn(heading("CHARACTER"));
                         m.spawn(row()).with_children(|r| {
-                            r.spawn(label("Sex", 100.0));
+                            r.spawn(label("Sex", 110.0));
                             r.spawn(button(110.0, 30.0, "Man", 16.0, Act::Sex(false)));
                             r.spawn(button(110.0, 30.0, "Woman", 16.0, Act::Sex(true)));
                         });
-                        // per slot: `<< < piece > >>` then `< ■ dye >`
-                        let text = |f: Field, w: f32| {
-                            (
-                                Value(f),
-                                Text::new(value(cfg, &cat, &profile, f)),
-                                TextFont::from_font_size(15.0),
-                                TextColor(Color::WHITE),
-                                TextLayout {
-                                    justify: Justify::Center,
-                                    linebreak: LineBreak::NoWrap,
-                                },
-                                Node {
-                                    width: px(w),
-                                    height: px(20),
-                                    overflow: Overflow::clip(),
-                                    ..default()
-                                },
-                            )
-                        };
+                        // per slot: `label  << < piece > >>   < swatch dye >`
                         for (s, slot) in Slot::ALL.into_iter().enumerate() {
                             m.spawn(row()).with_children(|r| {
-                                r.spawn(label(slot.label(), 100.0));
-                                let f = Field::Piece(s);
-                                r.spawn(button(34.0, 28.0, "<<", 14.0, Act::Step(f, -10)));
-                                r.spawn(button(30.0, 28.0, "<", 14.0, Act::Step(f, -1)));
-                                r.spawn(text(f, 236.0));
-                                r.spawn(button(30.0, 28.0, ">", 14.0, Act::Step(f, 1)));
-                                r.spawn(button(34.0, 28.0, ">>", 14.0, Act::Step(f, 10)));
+                                r.spawn(label(slot.label(), 110.0));
+                                group(r, Field::Piece(s), 236.0, true);
                                 r.spawn(Node {
-                                    width: px(8),
+                                    width: px(10),
                                     ..default()
                                 });
                                 let f = Field::Tint(s);
@@ -1333,15 +1348,31 @@ fn build(
                                         border: UiRect::all(px(1)),
                                         ..default()
                                     },
-                                    BackgroundColor(Color::WHITE),
-                                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+                                    BackgroundColor(INK),
+                                    BorderColor::all(LINE),
                                 ));
-                                r.spawn(text(f, 70.0));
+                                r.spawn((
+                                    Value(f),
+                                    Text::new(value(cfg, &cat, &profile, f)),
+                                    digits(14.0),
+                                    TextColor(INK),
+                                    TextLayout {
+                                        justify: Justify::Center,
+                                        linebreak: LineBreak::NoWrap,
+                                        ..default()
+                                    },
+                                    Node {
+                                        width: px(70),
+                                        height: px(20),
+                                        overflow: Overflow::clip(),
+                                        ..default()
+                                    },
+                                ));
                                 r.spawn(button(28.0, 28.0, ">", 14.0, Act::Step(f, 1)));
                             });
                         }
                         m.spawn(row()).with_children(|r| {
-                            r.spawn(label("", 100.0));
+                            r.spawn(label("", 110.0));
                             r.spawn(button(130.0, 32.0, "RANDOM", 16.0, Act::Random(false)));
                             r.spawn(button(130.0, 32.0, "RANDOM DYES", 15.0, Act::Random(true)));
                             r.spawn(button(110.0, 32.0, "RESET", 16.0, Act::Reset));
@@ -1350,18 +1381,25 @@ fn build(
                         m.spawn((
                             Value(Field::Saved),
                             Text::new(value(cfg, &cat, &profile, Field::Saved)),
-                            TextFont::from_font_size(15.0),
-                            TextColor(Color::srgb(1.0, 0.85, 0.4)),
+                            body(15.0),
+                            TextColor(ACCENT),
                             Node {
-                                margin: UiRect::left(px(106)),
+                                margin: UiRect::left(px(116)),
                                 ..default()
                             },
                         ));
                     });
-                p.spawn(Node {
-                    flex_grow: 1.0,
-                    ..default()
-                });
+                // Frames the character preview showing through the gap between the panels.
+                p.spawn((
+                    Node {
+                        flex_grow: 1.0,
+                        align_self: AlignSelf::Stretch,
+                        margin: UiRect::vertical(px(4)),
+                        border: UiRect::all(px(1)),
+                        ..default()
+                    },
+                    BorderColor::all(LINE),
+                ));
                 p.spawn(panel(300.0, AlignItems::FlexStart))
                     .with_children(|m| {
                         m.spawn(heading("VIEW"));
@@ -1378,8 +1416,8 @@ fn build(
                         });
                         m.spawn((
                             Text::new("Drag the character to turn it, mouse wheel to zoom. Dyes are not in the original game; weapons and armour stats are set in INVENTORY."),
-                            TextFont::from_font_size(14.0),
-                            TextColor(Color::srgb(0.85, 0.85, 0.85)),
+                            body(14.0),
+                            TextColor(DIM),
                             Node {
                                 width: px(270),
                                 ..default()
@@ -1397,7 +1435,6 @@ fn build(
                 root.spawn(page(page_kind))
                     .with_children(|p| shop::fill(p, page_kind));
             }
-            root.spawn(shop::card());
             root.spawn(Node {
                 position_type: PositionType::Absolute,
                 left: px(24),
@@ -1411,7 +1448,7 @@ fn build(
                 if cfg!(target_arch = "wasm32") {
                     f.spawn(Node::default());
                 } else {
-                    f.spawn(button(160.0, 48.0, "QUIT", 22.0, Act::Quit));
+                    f.spawn(quiet("QUIT", 18.0, Act::Quit));
                 }
                 f.spawn(Node {
                     column_gap: px(16),

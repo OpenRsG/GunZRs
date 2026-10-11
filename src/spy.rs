@@ -7,9 +7,10 @@ use crate::{
     item::{SPY_MINE, WeaponKind},
     modes::{Located, Spy},
     projectile::Projectile,
+    ui::{DANGER, shadow, strong},
 };
 use bevy::{prelude::*, ui::UiTargetCamera};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Seconds between refreshes of the triangulated spy positions shown to the trackers
 /// (**inferred**: messages 2201/2202 only say the locations were "triangulated", with no period).
@@ -178,22 +179,30 @@ fn test_afflict(
 
 /// Triangulation hint (message 2202): once the spies are located, every living spy shows to the
 /// tracker player as a "[SPY] name distance" marker pinned where it stood at the last ping
-/// (every [`PING_SECS`]); off-screen ones sit on the left or right edge.
+/// (every [`PING_SECS`]); off-screen ones sit on the left or right edge. One blip entity per spy
+/// is kept and moved in place (its screen position tracks the camera every frame even between
+/// pings); only a spy that stops being tracked despawns its blip.
 fn ping(
     mut commands: Commands,
     time: Res<Time>,
     camera: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
     player: Query<Has<Spy>, With<Player>>,
     spies: Query<(Entity, &GlobalTransform, &Name), (With<Located>, Without<Dead>)>,
-    old: Query<Entity, With<Blip>>,
+    mut blips: Query<(Entity, &Blip, &mut Node, &mut Text)>,
     mut seen: Local<(f32, HashMap<Entity, Vec3>)>,
     ui: Res<UiScale>,
 ) {
-    for e in &old {
-        commands.entity(e).despawn();
-    }
+    let (Ok((cam_e, cam, view)), Ok(false)) = (camera.single(), player.single()) else {
+        for (e, ..) in &blips {
+            commands.entity(e).despawn();
+        }
+        return;
+    };
     if spies.is_empty() {
         *seen = (0.0, HashMap::new());
+        for (e, ..) in &blips {
+            commands.entity(e).despawn();
+        }
         return;
     }
     seen.0 -= time.delta_secs();
@@ -202,14 +211,19 @@ fn ping(
         seen.1 = spies.iter().map(|(e, g, _)| (e, g.translation())).collect();
         info!("spy ping: {} spies triangulated", seen.1.len());
     }
-    let (Ok((cam_e, cam, view)), Ok(false)) = (camera.single(), player.single()) else {
-        return;
-    };
     let size = cam
         .logical_viewport_size()
         .unwrap_or(Vec2::new(1280.0, 720.0));
-    for (e, _, name) in &spies {
-        let Some(&at) = seen.1.get(&e) else { continue };
+    let mut live = HashSet::new();
+    // Off-screen blips share an edge: stack them (in a stable order) instead of overlapping.
+    let mut order: Vec<_> = spies.iter().collect();
+    order.sort_by_key(|s| s.0);
+    let mut stacked = [0u8; 2];
+    for (spy_e, _, name) in order {
+        let Some(&at) = seen.1.get(&spy_e) else {
+            continue;
+        };
+        live.insert(spy_e);
         let pos = cam.world_to_viewport(view, at).ok().filter(|p| {
             view.affine().inverse().transform_point3(at).z < 0.0
                 && p.cmpge(Vec2::ZERO).all()
@@ -217,27 +231,48 @@ fn ping(
         });
         let p = pos.unwrap_or_else(|| {
             let right = view.affine().inverse().transform_point3(at).x >= 0.0;
-            Vec2::new(if right { size.x - 200.0 } else { 16.0 }, size.y / 2.0)
-        });
-        let p = p / ui.0;
-        commands.spawn((
-            Blip,
-            UiTargetCamera(cam_e),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(p.x),
-                top: px(p.y),
-                ..default()
-            },
-            Text::new(format!("{name} {:.0} m", view.translation().distance(at))),
-            TextFont::from_font_size(20.0),
-            TextColor(Color::srgb(1.0, 0.3, 0.2)),
-        ));
+            let row = &mut stacked[usize::from(right)];
+            let y = size.y / 2.0 + 24.0 * f32::from(*row);
+            *row += 1;
+            Vec2::new(if right { size.x - 200.0 } else { 16.0 }, y)
+        }) / ui.0;
+        let label = format!(
+            "{} {:.0}M",
+            name.as_str().to_uppercase(),
+            view.translation().distance(at)
+        );
+        if let Some((_, _, mut node, mut text)) = blips.iter_mut().find(|(_, b, ..)| b.0 == spy_e) {
+            node.left = px(p.x);
+            node.top = px(p.y);
+            if text.0 != label {
+                text.0 = label;
+            }
+        } else {
+            commands.spawn((
+                Blip(spy_e),
+                UiTargetCamera(cam_e),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(p.x),
+                    top: px(p.y),
+                    ..default()
+                },
+                Text::new(label),
+                strong(20.0),
+                TextColor(DANGER),
+                shadow(),
+            ));
+        }
+    }
+    for (e, b, ..) in &blips {
+        if !live.contains(&b.0) {
+            commands.entity(e).despawn();
+        }
     }
 }
 
 #[derive(Component)]
-struct Blip;
+struct Blip(Entity);
 
 /// Mines last one round.
 fn clear(

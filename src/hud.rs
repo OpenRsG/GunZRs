@@ -10,6 +10,7 @@ use crate::{
     level::Level,
     mrs::Vfs,
     shop::{Icons, ShopData},
+    ui::DANGER,
     view::decode,
 };
 use bevy::{image::ImageSampler, prelude::*, transform::TransformSystems};
@@ -73,8 +74,11 @@ struct Marks {
     hit: f32,
     kill: f32,
     flash: f32,
-    /// Centre-screen notice ("You killed X") and its seconds left.
+    /// Centre-screen notice (`Notice` messages) and its seconds left.
     notice: (f32, String),
+    /// Who killed the player last ("" when the death had no distinct killer): the death
+    /// screen's "KILLED BY" name.
+    killed_by: String,
 }
 
 /// A centre-screen line for the player (e.g. the sensitivity keys' new value).
@@ -204,7 +208,8 @@ const HP_TIERS: [([u8; 3], [u8; 3]); 4] = [
     ([212, 212, 212], [230, 230, 230]),
     ([232, 190, 58], [255, 235, 60]),
     ([232, 128, 58], [255, 179, 60]),
-    ([207, 60, 56], [216, 81, 29]),
+    // DANGER (0.95, 0.27, 0.22) as sRGB u8: the critical tier.
+    ([242, 69, 56], [242, 69, 56]),
 ];
 
 fn tier(frac: f32) -> usize {
@@ -278,9 +283,14 @@ fn track(
     }
     for k in killed.read() {
         if players.contains(k.killer) && k.killer != k.victim {
-            let name = names.get(k.victim).map_or("?", |n| n.as_str());
             marks.kill = 0.8;
-            marks.notice = (2.0, format!("You killed {name}"));
+        }
+        if players.contains(k.victim) {
+            marks.killed_by = if k.killer == k.victim {
+                String::new()
+            } else {
+                names.get(k.killer).map_or("?", |n| n.as_str()).to_owned()
+            };
         }
     }
     for n in notices.read() {
@@ -318,8 +328,8 @@ fn indicators(
         for (n, k) in kids.iter().enumerate() {
             if let Ok((mut c, mut glow)) = segs.get_mut(k) {
                 let taper = 1.0 - ((n as f32 - mid).abs() / (mid + 1.0));
-                c.0 = Color::srgba(1.0, 0.18, 0.14, fade * (0.35 + 0.6 * taper));
-                glow.0[0].color = Color::srgba(1.0, 0.1, 0.05, fade * 0.5 * taper);
+                c.0 = DANGER.with_alpha(fade * (0.35 + 0.6 * taper));
+                glow.0[0].color = DANGER.with_alpha(fade * 0.5 * taper);
             }
         }
     }

@@ -7,6 +7,10 @@
 
 use super::*;
 use crate::map::Map;
+use crate::ui::{
+    ACCENT, Chosen, DANGER, DIM, Flat, INK, LINE, OK, RAISED, SCRIM, SURFACE, compact, digits,
+    display, heading, panel, shadow, strong,
+};
 use bevy::{
     asset::RenderAssetUsages,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
@@ -122,15 +126,6 @@ fn root(camera: Entity, z: i32) -> impl Bundle {
     )
 }
 
-fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
-    (
-        Text::new(s),
-        TextFont::from_font_size(size),
-        TextColor(color),
-        TextShadow::default(),
-    )
-}
-
 // ---------------------------------------------------------------------------------------------
 // Class select
 
@@ -200,7 +195,7 @@ pub(super) fn select_ui(
     data: Res<ActorData>,
     camera: Query<Entity, With<Camera3d>>,
     open: Query<Entity, With<SelectRoot>>,
-    mut cards: Query<(&Card, &Interaction, &mut BorderColor, &mut BackgroundColor)>,
+    cards: Query<(Entity, &Card, &Interaction, Has<Chosen>)>,
     mut count: Query<&mut Text, With<Countdown>>,
 ) {
     let Some(sel) = &blitz.select else {
@@ -218,48 +213,58 @@ pub(super) fn select_ui(
                 .unwrap_or_else(|| "-".into())
         };
         commands
-            .spawn((
-                SelectRoot,
-                root(camera, 6),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
-            ))
+            .spawn((SelectRoot, root(camera, 6), BackgroundColor(SCRIM)))
             .with_children(|r| {
-                r.spawn(text(
-                    "BLITZKRIEG: SELECT YOUR CLASS",
-                    40.0,
-                    Color::srgb(1.0, 0.85, 0.3),
+                r.spawn((
+                    Text::new("BLITZKRIEG: SELECT YOUR CLASS"),
+                    display(34.0),
+                    TextColor(ACCENT),
+                    shadow(),
                 ));
-                r.spawn((Countdown, text("", 24.0, Color::WHITE)));
-                r.spawn(Node {
-                    column_gap: px(6),
-                    row_gap: px(6),
-                    max_width: percent(98),
-                    flex_wrap: FlexWrap::Wrap,
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                })
+                r.spawn((
+                    Countdown,
+                    Text::new(""),
+                    digits(16.0),
+                    TextColor(INK),
+                    shadow(),
+                ));
+                r.spawn((
+                    Node {
+                        column_gap: px(6),
+                        row_gap: px(6),
+                        padding: UiRect::all(px(8)),
+                        max_width: percent(98),
+                        flex_wrap: FlexWrap::Wrap,
+                        justify_content: JustifyContent::Center,
+                        border_radius: BorderRadius::all(px(3)),
+                        ..default()
+                    },
+                    BackgroundColor(SURFACE),
+                ))
                 .with_children(|row| {
                     for (i, (title, _, book)) in CLASSES.iter().enumerate() {
                         row.spawn((
                             Card(i),
                             Button,
+                            Flat,
                             Node {
-                                width: px(130),
-                                height: px(330),
-                                padding: UiRect::all(px(8)),
-                                border: UiRect::all(px(3)),
+                                width: px(132),
+                                height: px(332),
+                                padding: UiRect::all(px(10)),
+                                border: UiRect::all(px(2)),
+                                border_radius: BorderRadius::all(px(2)),
                                 flex_direction: FlexDirection::Column,
                                 row_gap: px(8),
                                 ..default()
                             },
-                            BorderColor::all(Color::srgb(0.4, 0.4, 0.4)),
-                            BackgroundColor(Color::srgba(0.1, 0.12, 0.14, 0.9)),
+                            BackgroundColor(RAISED),
+                            BorderColor::all(Color::NONE),
                         ))
                         .with_children(|c| {
-                            c.spawn(text(
-                                format!("{} {}", i + 1, title.replace("Combat ", "Combat\n")),
-                                16.0,
-                                Color::srgb(1.0, 0.9, 0.5),
+                            c.spawn((
+                                Text::new(format!("{} — {}", i + 1, title.to_uppercase())),
+                                strong(16.0),
+                                TextColor(INK),
                             ));
                             c.spawn(Node {
                                 column_gap: px(6),
@@ -271,56 +276,67 @@ pub(super) fn select_ui(
                                         Node {
                                             width: px(48),
                                             height: px(48),
+                                            border: UiRect::all(px(1)),
                                             ..default()
                                         },
+                                        BorderColor::all(LINE),
                                         icon.clone(),
                                     ));
                                 }
                             });
-                            c.spawn(text(describe(&blitz.cfg, i), 13.0, Color::WHITE));
+                            c.spawn((
+                                Text::new(describe(&blitz.cfg, i)),
+                                compact(13.0),
+                                TextColor(DIM),
+                            ));
                             let kit = blitz.kit[i];
-                            c.spawn(text(
-                                format!("{}\n{}", name(kit[0]), name(kit[1])),
-                                12.0,
-                                Color::srgb(0.65, 0.8, 0.95),
+                            c.spawn((
+                                Text::new(format!("{}\n{}", name(kit[0]), name(kit[1]))),
+                                compact(13.0),
+                                TextColor(INK),
                             ));
                             if book.is_none() {
-                                c.spawn(text("no class book", 12.0, Color::srgb(0.6, 0.6, 0.6)));
+                                c.spawn((
+                                    Text::new("NO CLASS BOOK"),
+                                    compact(13.0),
+                                    TextColor(DIM),
+                                ));
                             }
                         });
                     }
                 });
-                r.spawn(text(
-                    "1-9 / arrow keys / click to choose, Enter or Space to confirm",
-                    20.0,
-                    Color::srgb(0.8, 0.8, 0.8),
+                r.spawn((
+                    Text::new("1-9 / ARROWS / CLICK TO CHOOSE, ENTER OR SPACE TO CONFIRM"),
+                    compact(13.0),
+                    TextColor(DIM),
+                    shadow(),
                 ));
             });
         return;
     }
     let (chosen, left) = (sel.sel, sel.left);
-    for (card, hover, mut border, mut back) in &mut cards {
-        if *hover == Interaction::Pressed {
+    for (e, card, interaction, has_chosen) in &cards {
+        if *interaction == Interaction::Pressed {
             if let Some(s) = &mut blitz.select {
                 s.sel = card.0;
                 s.done = true;
             }
         }
-        let on = card.0 == chosen || *hover == Interaction::Hovered;
-        *border = BorderColor::all(if card.0 == chosen {
-            Color::srgb(1.0, 0.85, 0.3)
-        } else if on {
-            Color::srgb(0.8, 0.8, 0.8)
-        } else {
-            Color::srgb(0.4, 0.4, 0.4)
-        });
-        back.0 = Color::srgba(0.1, 0.12, 0.14, if on { 1.0 } else { 0.9 });
+        let want = card.0 == chosen;
+        if want != has_chosen {
+            let mut e = commands.entity(e);
+            if want {
+                e.insert(Chosen);
+            } else {
+                e.remove::<Chosen>();
+            }
+        }
     }
     for mut t in &mut count {
-        t.0 = format!(
-            "Please select your class in {} second(s).",
-            left.ceil().max(0.0)
-        );
+        let want = format!("SELECT YOUR CLASS — {}S LEFT", left.ceil().max(0.0) as i32);
+        if t.0 != want {
+            t.0 = want;
+        }
     }
 }
 
@@ -366,7 +382,7 @@ pub(super) fn minimap(
                 border: UiRect::all(px(2)),
                 ..default()
             },
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+            BorderColor::all(DIM),
             ImageNode {
                 image_mode: NodeImageMode::Stretch,
                 ..ImageNode::new(blitz.plan.clone())
@@ -387,38 +403,23 @@ pub(super) fn minimap(
         return;
     };
     let at = |p: Vec3| Vec2::new((hi.x - p.x) / area.x, (p.z - lo.y) / area.y) * size;
-    let tint = |team: Team, ally: Color, foe: Color| if team == mine { ally } else { foe };
+    let tint = |team: Team| if team == mine { OK } else { DANGER };
     // (position on the map image, colour, size, round)
     let mut marks: Vec<(Vec2, Color, f32, bool)> = Vec::new();
     for (g, n, t) in &npcs {
         let (colour, d, round) = match n.kind.as_str() {
-            "radar" => (
-                tint(*t, Color::srgb(0.3, 0.8, 1.0), Color::srgb(1.0, 0.6, 0.2)),
-                14.0,
-                false,
-            ),
-            "barricade" => (
-                tint(*t, Color::srgb(0.3, 0.8, 1.0), Color::srgb(1.0, 0.6, 0.2)),
-                8.0,
-                false,
-            ),
-            k if SOLDIERS.contains(&k) => (
-                tint(*t, Color::srgb(0.3, 1.0, 0.4), Color::srgb(1.0, 0.3, 0.3)),
-                4.0,
-                true,
-            ),
+            "radar" => (tint(*t), 14.0, false),
+            "barricade" => (tint(*t), 8.0, false),
+            k if SOLDIERS.contains(&k) => (tint(*t), 4.0, true),
             _ => continue,
         };
         marks.push((at(g.translation()), colour, d, round));
     }
     for (tf, t, player) in &actors {
         let (colour, d) = if player {
-            (Color::WHITE, 9.0)
+            (ACCENT, 9.0)
         } else {
-            (
-                tint(*t, Color::srgb(0.3, 1.0, 0.4), Color::srgb(1.0, 0.3, 0.3)),
-                6.0,
-            )
+            (tint(*t), 6.0)
         };
         marks.push((at(tf.translation), colour, d, true));
     }
@@ -478,39 +479,32 @@ pub(super) fn reward_ui(
     let Ok(camera) = camera.single() else { return };
     let r = &blitz.cfg.reward;
     let share = if p.won { r.mvp_win } else { r.mvp_lose };
-    let mut lines = vec![
-        ("REWARD".to_string(), 30.0, Color::srgb(1.0, 0.85, 0.3)),
-        (
-            format!(
-                "{} after {} min",
-                if p.won { "Victory" } else { "No victory" },
-                p.minutes
-            ),
-            20.0,
-            Color::WHITE,
+    let mut lines = vec![(
+        format!(
+            "{} — {} MIN",
+            if p.won { "VICTORY" } else { "NO VICTORY" },
+            p.minutes
         ),
-    ];
+        strong(16.0),
+        if p.won { OK } else { DIM },
+    )];
     match &p.none {
         Some(why) => lines.push((
-            format!("No reward: {why}"),
-            20.0,
-            Color::srgb(0.9, 0.5, 0.4),
+            format!("NO REWARD: {}", why.to_uppercase()),
+            compact(14.0),
+            DANGER,
         )),
         None => {
             if p.mvp {
                 lines.push((
-                    format!("MVP: +{:.0}% XP/BP/Medal", share[0] * 100.0),
-                    20.0,
-                    Color::srgb(0.6, 1.0, 0.6),
+                    format!("MVP BONUS +{:.0}%", share[0] * 100.0),
+                    digits(16.0),
+                    ACCENT,
                 ));
             }
-            lines.push((format!("+{} XP", p.xp), 24.0, Color::WHITE));
-            lines.push((format!("+{} bounty", p.bounty), 24.0, Color::WHITE));
-            lines.push((
-                format!("+{} medals", p.medals),
-                24.0,
-                Color::srgb(0.7, 0.85, 1.0),
-            ));
+            lines.push((format!("+{} XP", p.xp), digits(18.0), INK));
+            lines.push((format!("+{} BOUNTY", p.bounty), digits(18.0), INK));
+            lines.push((format!("+{} MEDALS", p.medals), digits(18.0), INK));
         }
     }
     commands
@@ -522,17 +516,16 @@ pub(super) fn reward_ui(
                 position_type: PositionType::Absolute,
                 left: px(12),
                 top: px(110),
-                padding: UiRect::all(px(12)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
         ))
         .with_children(|c| {
-            for (s, size, colour) in lines {
-                c.spawn(text(s, size, colour));
-            }
+            c.spawn(panel(260.0, AlignItems::Start)).with_children(|p| {
+                p.spawn(heading("Reward"));
+                for (s, font, colour) in lines {
+                    p.spawn((Text::new(s), font, TextColor(colour)));
+                }
+            });
         });
 }
 

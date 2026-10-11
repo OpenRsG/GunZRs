@@ -5,8 +5,11 @@
 //! keys: `docs/formats.md` "Controls".
 
 use crate::{
-    menu::{button, heading, panel, primary},
     profile::Profile,
+    ui::{
+        ACCENT, DIM, INK, LINE, ON_ACCENT, RAISED, SCRIM, body, button, compact, digits, heading,
+        panel, primary, strong,
+    },
 };
 use bevy::{
     ecs::system::SystemParam,
@@ -617,8 +620,6 @@ pub struct Overlay;
 
 const HINT: &str =
     "Click a binding, then press a key, mouse button or wheel. Esc cancels, Delete clears.";
-const GOLD: Color = Color::srgb(1.0, 0.8, 0.3);
-const DIM: Color = Color::srgb(0.72, 0.72, 0.72);
 /// Speed-curve bars, one per count/ms.
 const BARS: usize = 40;
 
@@ -747,32 +748,80 @@ struct Bar(usize);
 #[derive(Component)]
 struct OverlayRoot;
 
-fn text(s: &str, size: f32, color: Color) -> impl Bundle {
-    (
-        Text::new(s),
-        TextFont::from_font_size(size),
-        TextColor(color),
-    )
+pub(crate) fn text(s: impl Into<String>, font: TextFont, color: Color) -> impl Bundle {
+    (Text::new(s.into()), font, TextColor(color))
 }
 
 /// A text in a box of fixed width (a fixed-width text node gets the height of its narrowest
 /// wrapping, so the width goes on a parent).
-fn boxed(s: &str, size: f32, color: Color, width: f32) -> impl Bundle {
+pub(crate) fn boxed(s: impl Into<String>, font: TextFont, color: Color, width: f32) -> impl Bundle {
     (
         Node {
             width: px(width),
             ..default()
         },
-        children![text(s, size, color)],
+        children![text(s, font, color)],
     )
 }
 
-fn row() -> Node {
+pub(crate) fn row() -> Node {
     Node {
         align_items: AlignItems::Center,
         column_gap: px(6),
         ..default()
     }
+}
+
+/// The thin ACCENT-filled groove, square thumb and button pair every mouse and graphics slider
+/// shares; the caller's `refresh` system owns the `Fill`-tagged bar's width.
+pub(crate) fn slider_track(w: f32) -> impl Bundle {
+    (
+        Button,
+        RelativeCursorPosition::default(),
+        Node {
+            width: px(w),
+            height: px(24.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+    )
+}
+
+pub(crate) fn slider_groove(h: f32) -> impl Bundle {
+    (
+        Node {
+            height: px(h),
+            border_radius: BorderRadius::all(px(h / 2.0)),
+            ..default()
+        },
+        BackgroundColor(RAISED),
+    )
+}
+
+/// The caller spawns this with a `Fill`-tagged marker and sets its width in `refresh`.
+pub(crate) fn slider_fill() -> impl Bundle {
+    (
+        Node {
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::FlexEnd,
+            ..default()
+        },
+        BackgroundColor(ACCENT),
+        children![slider_thumb()],
+    )
+}
+
+fn slider_thumb() -> impl Bundle {
+    (
+        Node {
+            width: px(10.0),
+            height: px(10.0),
+            ..default()
+        },
+        BackgroundColor(ON_ACCENT),
+    )
 }
 
 /// The panel's contents: mouse settings, then the bindings with the status line, RESET (and
@@ -803,7 +852,7 @@ pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
                             flex_basis: px(0),
                             ..default()
                         },
-                        children![(Show::Status, text(HINT, 14.0, DIM))],
+                        children![(Show::Status, text(HINT, body(14.0), DIM))],
                     ));
                     f.spawn(button(170.0, 34.0, "RESET DEFAULTS", 15.0, Ctl::Reset));
                     if done {
@@ -818,44 +867,21 @@ fn mouse(m: &mut ChildSpawnerCommands) {
     m.spawn(heading("MOUSE"));
     let slider = |m: &mut ChildSpawnerCommands, name: &str, k: Knob| {
         m.spawn(row()).with_children(|r| {
-            r.spawn(boxed(name, 15.0, Color::WHITE, 112.0));
-            r.spawn((
-                Button,
-                Slider(k),
-                RelativeCursorPosition::default(),
-                Node {
-                    width: px(120),
-                    height: px(24),
-                    flex_direction: FlexDirection::Column,
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-            ))
-            .with_children(|t| {
-                t.spawn((
-                    Node {
-                        height: px(6),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
-                    children![(
-                        Fill(k),
-                        Node {
-                            height: percent(100),
-                            ..default()
-                        },
-                        BackgroundColor(GOLD),
-                    )],
-                ));
-            });
+            r.spawn(boxed(name, compact(15.0), INK, 112.0));
+            r.spawn((Slider(k), slider_track(120.0)))
+                .with_children(|t| {
+                    t.spawn(slider_groove(6.0)).with_children(|g| {
+                        g.spawn((Fill(k), slider_fill()));
+                    });
+                });
             r.spawn(button(26.0, 24.0, "-", 16.0, Ctl::Step(k, -1)));
             r.spawn(button(26.0, 24.0, "+", 16.0, Ctl::Step(k, 1)));
-            r.spawn((Show::Knob(k), text("", 15.0, GOLD)));
+            r.spawn((Show::Knob(k), text("", digits(15.0), ACCENT)));
         });
     };
     let toggle = |m: &mut ChildSpawnerCommands, name: &str, f: Flag| {
         m.spawn(row()).with_children(|r| {
-            r.spawn(boxed(name, 15.0, Color::WHITE, 296.0));
+            r.spawn(boxed(name, compact(15.0), INK, 296.0));
             r.spawn(button(64.0, 24.0, "", 14.0, Ctl::Toggle(f)));
         });
     };
@@ -865,7 +891,7 @@ fn mouse(m: &mut ChildSpawnerCommands) {
             margin: UiRect::left(px(118)),
             ..default()
         },
-        children![(Show::Turn, text("", 13.0, DIM))],
+        children![(Show::Turn, text("", body(13.0), DIM))],
     ));
     slider(m, "Vertical", Knob::Vertical);
     toggle(m, "Invert vertical look", Flag::Invert);
@@ -875,11 +901,11 @@ fn mouse(m: &mut ChildSpawnerCommands) {
         toggle(m, "Raw input (no OS accel.)", Flag::Raw);
     } else {
         m.spawn(row()).with_children(|r| {
-            r.spawn(boxed("Raw input", 15.0, Color::WHITE, 296.0));
-            r.spawn(text("ALWAYS", 14.0, GOLD));
+            r.spawn(boxed("Raw input", compact(15.0), INK, 296.0));
+            r.spawn(text("ALWAYS", strong(14.0), ACCENT));
         });
     }
-    m.spawn(text("SPEED CURVE", 14.0, GOLD));
+    m.spawn(heading("SPEED CURVE"));
     m.spawn((
         Node {
             height: px(60),
@@ -888,7 +914,7 @@ fn mouse(m: &mut ChildSpawnerCommands) {
             border: UiRect::bottom(px(1)),
             ..default()
         },
-        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+        BorderColor::all(LINE),
     ))
     .with_children(|g| {
         for i in 0..BARS {
@@ -905,7 +931,7 @@ fn mouse(m: &mut ChildSpawnerCommands) {
     });
     m.spawn(boxed(
         "Gain by mouse speed, slow to fast; flat = no acceleration. Move the mouse to see your speed light up.",
-        13.0,
+        body(13.0),
         DIM,
         370.0,
     ));
@@ -925,10 +951,10 @@ fn binds(k: &mut ChildSpawnerCommands) {
                 ..default()
             })
             .with_children(|col| {
-                col.spawn(text(title, 14.0, GOLD));
+                col.spawn(text(title.to_uppercase(), compact(14.0), DIM));
                 for &a in actions {
                     col.spawn(row()).with_children(|r| {
-                        r.spawn(boxed(a.label(), 13.0, Color::WHITE, 100.0));
+                        r.spawn(boxed(a.label(), compact(13.0), INK, 100.0));
                         for slot in 0..2 {
                             r.spawn((
                                 Button,
@@ -939,11 +965,12 @@ fn binds(k: &mut ChildSpawnerCommands) {
                                     justify_content: JustifyContent::Center,
                                     align_items: AlignItems::Center,
                                     border: UiRect::all(px(1)),
+                                    border_radius: BorderRadius::all(px(3)),
                                     ..default()
                                 },
-                                BackgroundColor(Color::NONE),
-                                BorderColor::all(Color::NONE),
-                                children![text("", 12.0, Color::WHITE)],
+                                BackgroundColor(RAISED),
+                                BorderColor::all(LINE),
+                                children![text("", strong(13.0), INK)],
                             ));
                         }
                     });
@@ -1048,7 +1075,7 @@ fn overlay(
                         ..default()
                     },
                     // opaque enough that the HUD under it (death text, notices) does not read through
-                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+                    BackgroundColor(SCRIM.with_alpha(0.85)),
                 ))
                 .with_children(|r| fill(r, true));
         }
@@ -1178,9 +1205,9 @@ fn refresh(
             n.height = h;
         }
         let col = if b.0 == lit && panel.speed > 0.05 {
-            GOLD
+            ACCENT
         } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.35)
+            DIM
         };
         if bg.0 != col {
             bg.0 = col;
@@ -1192,17 +1219,17 @@ fn refresh(
             continue;
         };
         let (want, color) = match *ctl {
-            Ctl::Bind(a, s) if panel.capture == Some((a, s)) => ("PRESS...".to_owned(), GOLD),
+            Ctl::Bind(a, s) if panel.capture == Some((a, s)) => ("PRESS...".to_owned(), ACCENT),
             Ctl::Bind(a, s) => match c.binds[a as usize][s] {
-                Some(b) => (label(b), Color::WHITE),
-                None => ("-".to_owned(), Color::srgba(1.0, 1.0, 1.0, 0.35)),
+                Some(b) => (label(b).to_uppercase(), INK),
+                None => ("-".to_owned(), DIM),
             },
             Ctl::Toggle(f) => {
                 let on = match f {
                     Flag::Invert => c.invert,
                     Flag::Raw => c.raw,
                 };
-                ((if on { "ON" } else { "OFF" }).to_owned(), Color::WHITE)
+                ((if on { "ON" } else { "OFF" }).to_owned(), INK)
             }
             _ => continue,
         };
@@ -1216,15 +1243,11 @@ fn refresh(
         if let (Ctl::Bind(a, s), Some(mut bg), Some(mut border)) = (*ctl, bg, border) {
             let capturing = panel.capture == Some((a, s));
             let fill = match (capturing, *i) {
-                (true, _) => Color::srgba(1.0, 0.8, 0.3, 0.18),
-                (false, Interaction::None) => Color::srgba(1.0, 1.0, 1.0, 0.06),
-                _ => Color::srgba(1.0, 1.0, 1.0, 0.16),
+                (true, _) => ACCENT.with_alpha(0.18),
+                (false, Interaction::None) => RAISED,
+                _ => LINE,
             };
-            let edge = BorderColor::all(if capturing {
-                GOLD
-            } else {
-                Color::srgba(1.0, 1.0, 1.0, 0.25)
-            });
+            let edge = BorderColor::all(if capturing { ACCENT } else { LINE });
             if bg.0 != fill {
                 bg.0 = fill;
             }

@@ -39,6 +39,7 @@ pub mod session;
 pub mod shop;
 pub mod spy;
 pub mod steam;
+pub mod ui;
 pub mod view;
 #[cfg(target_arch = "wasm32")]
 pub mod web;

@@ -5,17 +5,20 @@
 //! `docs/formats.md` (menu).
 
 use crate::{
+    actor::DEFAULT_LOADOUT,
     ani::Ani,
     anim::{AnimPlugin, Animator, Loop},
     character::{self, Character, Look, Slot, TINTS, Wardrobe},
     clan::{self, ClanArt},
     dashfx::{self, HUES, Hue, STYLES, Style, Trail},
+    elu,
     hud::try_image,
-    item::Items,
-    model::Textures,
+    item::{Items, WeaponKind},
+    model::{self, Textures},
     mrs::Vfs,
     profile::{Profile, Ranks, progress},
     shop::{self, ShopData},
+    slashfx::{self, Slash},
     ui::{
         ACCENT, Chosen, DIM, INK, LINE, RAISED, SHADOW, body, button, compact, digits, display,
         flat, heading, hover, panel, primary, shadow, strong,
@@ -544,14 +547,14 @@ fn label(s: &str, w: f32) -> impl Bundle {
 
 /// Marks a top-bar page tab; [`tab_look`] paints it from [`Interaction`] and [`Chosen`].
 #[derive(Component)]
-struct Tab;
+struct NavTab;
 
 /// A top-bar tab: caps text over a 3 px bar that lights up on hover and shows the accent when
 /// selected (no filled tile, unlike [`button`]).
 fn tab(text: &str, page: Page) -> impl Bundle {
     (
         Act::Page(page),
-        Tab,
+        NavTab,
         Button,
         Node {
             flex_direction: FlexDirection::Column,
@@ -583,7 +586,7 @@ fn tab(text: &str, page: Page) -> impl Bundle {
 /// filled [`Flat`] buttons (tabs never get a background tile).
 #[allow(clippy::type_complexity)]
 fn tab_look(
-    tabs: Query<(&Interaction, Has<Chosen>, &Children), With<Tab>>,
+    tabs: Query<(&Interaction, Has<Chosen>, &Children), With<NavTab>>,
     mut labels: Query<&mut TextColor>,
     mut bars: Query<&mut BackgroundColor>,
 ) {
@@ -736,9 +739,10 @@ enum Field {
     Sac1,
     Sac2,
     Needs,
-    /// The dash trail's amount (a percentage) and colour name.
-    DashAmount,
-    DashColor,
+    /// The effects panel: a tab's amount (a percentage) and colour name, and the ORIGINAL note.
+    Amount(Tab),
+    Colour(Tab),
+    Note,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -759,10 +763,12 @@ enum Act {
     Save,
     /// Point the preview camera at a [`FOCUS`] entry.
     Focus(usize),
-    /// Dash trail settings (profile `dash_*` keys) and the demo button.
+    /// Effects panel: the dash style, the slash style, a tab's colour and amount, the tab.
     Style(Style),
-    Hue(Hue),
-    Amount(i32),
+    Cut(slashfx::Style),
+    Hue(Tab, Hue),
+    Amount(Tab, i32),
+    Tab(Tab),
     Demo,
     Quit,
 }
@@ -804,8 +810,9 @@ struct Orbit {
     zoom: f32,
 }
 
-/// The dash demo (**not retail**) on the player page: the character dashes across the stage
-/// and back with the chosen trail, when a dash setting changes, on DEMO and every so often.
+/// The effects demo (**not retail**) on the player page: the shown [`Tab`]'s effect plays on the
+/// character, when a setting of the tab changes, on DEMO and every so often: dashes across the
+/// stage and back, or the katana combo.
 #[derive(Resource)]
 struct Demo {
     /// Seconds until the next run starts (counts down while none runs and the page is open).
@@ -818,7 +825,36 @@ struct Demo {
     /// face the camera (0..=1); [`orbit`] applies both.
     x: f32,
     face: f32,
+    /// The run's length in seconds (a slash run ends early, half a second after its last swing)
+    /// and how many swings it has started.
+    end: f32,
+    step: usize,
 }
+
+impl Default for Demo {
+    fn default() -> Self {
+        Self {
+            wait: DEMO_FIRST,
+            run: None,
+            again: false,
+            x: 0.0,
+            face: 0.0,
+            end: DEMO_END,
+            step: 0,
+        }
+    }
+}
+
+/// What the EFFECTS panel shows and the demo plays.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Dash,
+    Slash,
+}
+
+#[derive(Resource)]
+struct Fx(Tab);
 
 /// Seconds from opening the page to the first run, from a run's end to the next, and from a
 /// settings change to its run.
@@ -830,8 +866,13 @@ const DEMO_SETTLE: f32 = 0.4;
 const DASHES: [(f32, f32, &str); 2] = [(0.35, 1.0, "tumbleL"), (1.7, 0.0, "tumbleR")];
 const DASH_TIME: f32 = 0.45;
 const DEMO_END: f32 = 2.7;
-/// Metres of the dash at FULL framing (the gap between the panels is about 0.8 m wide).
-const DEMO_SPAN: f32 = 0.35;
+/// Metres of the dash at FULL framing (the preview frame is about 0.8 m wide).
+const DEMO_SPAN: f32 = 0.2;
+/// The slash demo plays the katana's combo clips (motion type 1) and ends after `SLASH_CAP`
+/// seconds at the latest.
+const SLASHES: [&str; 4] = ["attack1", "attack2", "attack3", "attack4"];
+const SWORD_SET: u32 = 1;
+const SLASH_CAP: f32 = 8.0;
 /// The clips: the empty-handed lobby pose (`gm="0"` in the character XML; motion type 8 is the
 /// bare-handed item set) and the plain dash clips of that set.
 const IDLE: (u32, &str) = (8, "login_idle");
@@ -871,12 +912,20 @@ impl Clips {
     }
 }
 
-/// The amount slider of the DASH TRAIL panel and its filled part.
+/// The amount slider of an EFFECTS tab and its filled part.
 #[derive(Component)]
-struct DashSlider;
+struct Slider(Tab);
 
 #[derive(Component)]
-struct DashFill;
+struct Fill(Tab);
+
+/// Container shown only while its [`Tab`] is the EFFECTS panel's.
+#[derive(Component)]
+struct TabShow(Tab);
+
+/// The katana in the preview character's hand: hidden, but during the slash demo.
+#[derive(Component)]
+struct Sword;
 
 const MAX_BOTS: i32 = 15;
 
@@ -892,8 +941,9 @@ fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32
         | Field::TimeName
         | Field::KillsName
         | Field::Blurb
-        | Field::DashAmount
-        | Field::DashColor => {}
+        | Field::Amount(_)
+        | Field::Colour(_)
+        | Field::Note => {}
         Field::Time => {
             let secs: Vec<u32> = cfg.mode.limits().minutes.iter().map(|m| m * 60).collect();
             cfg.time_limit = Some(walk(&secs, cfg.time_limit.unwrap_or(0), d)).filter(|&t| t > 0)
@@ -1028,12 +1078,21 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
                 }
             }
         }
-        Field::DashAmount if profile.dash.amount <= 0.0 => "OFF".into(),
-        Field::DashAmount => format!("{:.0}%", profile.dash.amount * 100.0),
-        Field::DashColor => format!(
+        Field::Amount(t) if amount(profile, t) <= 0.0 => "OFF".into(),
+        Field::Amount(t) => format!("{:.0}%", amount(profile, t) * 100.0),
+        Field::Colour(t) => format!(
             "COLOUR  {}",
-            HUES.iter().find(|h| h.0 == profile.dash.hue).unwrap().2
+            HUES.iter()
+                .find(|h| h.0
+                    == match t {
+                        Tab::Dash => profile.dash.hue,
+                        Tab::Slash => profile.slash.hue,
+                    })
+                .unwrap()
+                .2
         ),
+        Field::Note if dashfx::original(profile) => "ORIGINAL: no trails".into(),
+        Field::Note => String::new(),
         Field::Scenario => cfg
             .scenario
             .clone()
@@ -1079,16 +1138,12 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
             focus: 0,
             zoom: 1.0,
         })
-        .insert_resource(Demo {
-            wait: DEMO_FIRST,
-            run: None,
-            again: false,
-            x: 0.0,
-            face: 0.0,
-        })
+        .insert_resource(Demo::default())
+        .insert_resource(Fx(Tab::Dash))
         .init_resource::<Clips>()
         .add_plugins(AnimPlugin)
         .add_plugins(dashfx::DashFxPlugin)
+        .add_plugins(slashfx::SlashFxPlugin)
         .add_plugins(shop::ShopPlugin)
         .add_plugins(clan::ClanMenuPlugin)
         .add_plugins(crate::controls::ControlsPlugin)
@@ -1101,10 +1156,11 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
             )
                 .chain(),
         )
-        .add_systems(Update, dash_panel);
+        .add_systems(Update, fx_panel);
     if headless {
         // Headless shots step the clock 1/60 s a frame, so the idle pose and the demo are the
-        // same on every run; `GUNZ_MENU_AT=SECS` takes the picture SECS into the page (default 2).
+        // same on every run; `GUNZ_MENU_AT=SECS` takes the picture SECS into the page (default 2),
+        // `GUNZ_MENU_TAB=slash` opens the EFFECTS panel on its SLASH tab.
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
         )));
@@ -1113,6 +1169,9 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
             .and_then(|s| s.parse::<f32>().ok())
         {
             app.world_mut().resource_mut::<Shot>().capture = (s * 60.0).round() as u32;
+        }
+        if std::env::var("GUNZ_MENU_TAB").is_ok_and(|t| t == "slash") {
+            app.world_mut().resource_mut::<Fx>().0 = Tab::Slash;
         }
     }
     // in the browser the page takes over when the menu ends (`web::play`, `gunzExit`)
@@ -1151,16 +1210,19 @@ fn build(
         Vec3::NEG_Z,
     )
     .id();
-    // Lobby background as a quad behind the character (UI sits on top of the 3D view).
+    // Lobby background as a quad behind the character (UI sits on top of the 3D view). A child of
+    // the camera, far back, so it fills the view however far the camera pulls back (the slash
+    // demo); at the default framing it looks as it did 7 m away (scaled 60 / 7).
     commands.spawn((
-        Mesh3d(meshes.add(Rectangle::new(19.0, 10.7))),
+        Mesh3d(meshes.add(Rectangle::new(162.9, 91.7))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color_texture: Some(bg),
             base_color: Color::srgb(0.85, 0.85, 0.9),
             unlit: true,
             ..default()
         })),
-        Transform::from_xyz(0.0, 1.0, -3.4),
+        Transform::from_xyz(0.0, -0.43, -60.0),
+        ChildOf(camera),
     ));
     commands.spawn((Preview, Transform::default(), Visibility::Hidden));
 
@@ -1525,7 +1587,7 @@ fn build(
                     },
                     BorderColor::all(LINE),
                 ));
-                // the right column: the view controls and the dash trail settings
+                // the right column: the view controls and the effects (dash, slash) settings
                 p.spawn(Node {
                     flex_direction: FlexDirection::Column,
                     row_gap: px(16),
@@ -1557,7 +1619,7 @@ fn build(
                         ));
                     });
                 col.spawn(panel(300.0, AlignItems::FlexStart))
-                    .with_children(dash_ui);
+                    .with_children(fx_ui);
                 });
             });
             root.spawn(page(Page::Clan))
@@ -1613,6 +1675,7 @@ fn act(
     mut clan_ui: ResMut<clan::Ui>,
     mut orbit: ResMut<Orbit>,
     mut demo: ResMut<Demo>,
+    mut fx: ResMut<Fx>,
     pick: Res<Pick>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -1670,11 +1733,18 @@ fn act(
                 orbit.zoom = 1.0;
             }
             Act::Style(s) => profile.dash.style = s,
-            Act::Hue(h) => profile.dash.hue = h,
-            Act::Amount(d) => {
-                let n = (profile.dash.amount * 20.0).round() + d as f32;
-                profile.dash.amount = n.clamp(0.0, 20.0) / 20.0;
+            Act::Cut(s) => profile.slash.style = s,
+            Act::Hue(Tab::Dash, h) => profile.dash.hue = h,
+            Act::Hue(Tab::Slash, h) => profile.slash.hue = h,
+            Act::Amount(t, d) => {
+                let n = (amount(&profile, t) * 20.0).round() + d as f32;
+                let n = n.clamp(0.0, 20.0) / 20.0;
+                match t {
+                    Tab::Dash => profile.dash.amount = n,
+                    Tab::Slash => profile.slash.amount = n,
+                }
             }
+            Act::Tab(t) => fx.0 = t,
             Act::Demo => {
                 demo.wait = 0.0;
                 demo.again = true;
@@ -1748,20 +1818,22 @@ fn act(
 }
 
 /// Keeps value texts, selected buttons and the visible page in line with [`State`].
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn refresh(
     mut commands: Commands,
     state: Res<State>,
     profile: Res<Profile>,
     cat: Res<Catalog>,
     orbit: Res<Orbit>,
+    fx: Res<Fx>,
     mut values: Query<(&Value, &mut Text)>,
     mut swatches: Query<(&Swatch, &mut BackgroundColor)>,
     buttons: Query<(Entity, &Act, Has<Chosen>)>,
-    mut pages: Query<(&PageRoot, &mut Node), Without<ModeShow>>,
-    mut modes: Query<(&ModeShow, &mut Node)>,
+    mut pages: Query<(&PageRoot, &mut Node), (Without<ModeShow>, Without<TabShow>)>,
+    mut modes: Query<(&ModeShow, &mut Node), Without<TabShow>>,
+    mut tabs: Query<(&TabShow, &mut Node), (Without<ModeShow>, Without<PageRoot>)>,
 ) {
-    if !state.is_changed() && !profile.is_changed() && !orbit.is_changed() {
+    if !state.is_changed() && !profile.is_changed() && !orbit.is_changed() && !fx.is_changed() {
         return;
     }
     for (s, mut bg) in &mut swatches {
@@ -1786,7 +1858,10 @@ fn refresh(
             Act::Sex(w) => w == cfg.woman,
             Act::Focus(f) => f == orbit.focus,
             Act::Style(s) => s == profile.dash.style,
-            Act::Hue(h) => h == profile.dash.hue,
+            Act::Cut(s) => s == profile.slash.style,
+            Act::Hue(Tab::Dash, h) => h == profile.dash.hue,
+            Act::Hue(Tab::Slash, h) => h == profile.slash.hue,
+            Act::Tab(t) => t == fx.0,
             _ => false,
         };
         match (on, chosen) {
@@ -1809,6 +1884,13 @@ fn refresh(
             Display::None
         };
     }
+    for (t, mut n) in &mut tabs {
+        n.display = if t.0 == fx.0 {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
 }
 
 /// Respawns the character model when sex or clothes change.
@@ -1819,11 +1901,12 @@ fn preview(
     cat: Res<Catalog>,
     mut clips: ResMut<Clips>,
     root: Single<(Entity, &mut Visibility), With<Preview>>,
-    mut shown: Local<Option<(bool, Look)>>,
+    mut shown: Local<Option<(bool, Look, u32)>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    profile: Res<Profile>,
 ) {
     let (parent, mut vis) = root.into_inner();
     let want = if state.page == Page::Player {
@@ -1835,10 +1918,18 @@ fn preview(
         *vis = want;
     }
     let cfg = &state.cfg;
-    if *shown == Some((cfg.woman, cfg.look)) {
+    // the slash demo's sword: the equipped melee weapon if it is a katana, else the starting one
+    let katana = [profile.equipped[0], DEFAULT_LOADOUT[0]]
+        .into_iter()
+        .find(|&id| {
+            let w = cat.items.get(id).and_then(|i| i.weapon.as_ref());
+            w.is_some_and(|w| matches!(w.kind, WeaponKind::Katana))
+        })
+        .unwrap_or(DEFAULT_LOADOUT[0]);
+    if *shown == Some((cfg.woman, cfg.look, katana)) {
         return;
     }
-    *shown = Some((cfg.woman, cfg.look));
+    *shown = Some((cfg.woman, cfg.look, katana));
     commands.entity(parent).despawn_children();
     let ch = cat.character(cfg.woman);
     let mut textures = Textures::new(&cat.vfs, "model/");
@@ -1864,6 +1955,30 @@ fn preview(
         })
         .unwrap_or_else(|e| panic!("{}: {e}", ch.name));
     commands.entity(parent).add_child(model.root);
+    // the sword in the hand, hidden until the slash demo swings it
+    let hand = model.nodes.get("eq_wd_katana");
+    let wm = cat.items.get(katana).and_then(|i| cat.items.model(i));
+    if let (Some(&hand), Some(wm)) = (hand, wm) {
+        let loaded = (cat.vfs.read(&wm.elu).map_err(|e| e.to_string()))
+            .and_then(|b| elu::load(&b).map_err(|e| e.to_string()));
+        match loaded {
+            Ok(elu) => {
+                let dir = &wm.elu[..wm.elu.rfind('/').map_or(0, |i| i + 1)];
+                let m = model::spawn_elu(
+                    &mut commands,
+                    &mut meshes,
+                    &mut bindposes,
+                    &elu,
+                    &mut |m| textures.standard(&mut images, &mut materials, dir, m),
+                    Transform::IDENTITY,
+                    |n| !n.name.starts_with("empty_cartridge"),
+                );
+                m.attach(&mut commands, hand);
+                commands.entity(m.root).insert((Sword, Visibility::Hidden));
+            }
+            Err(e) => warn!("{}: {e}", wm.elu),
+        }
+    }
     // the lobby pose, so the character is alive on the stage
     if let Some((ani, looping)) = clips.get(&cat, cfg.woman, IDLE.0, IDLE.1) {
         let mut idle = Animator::new(ani, looping);
@@ -1872,34 +1987,50 @@ fn preview(
     }
 }
 
-/// Runs the dash demo on the player page: [`Demo::run`] plays [`DASHES`] (a tumble clip while the
-/// character slides across the stage, one trail piece per [`dashfx::due`] step of the burst) and
-/// goes back to the idle pose. A run starts [`DEMO_FIRST`] s after the page opens, every
-/// [`DEMO_EVERY`] s after a run, [`DEMO_SETTLE`] s after a dash setting changed and on DEMO.
+/// Runs the effect demo on the player page, the shown [`Tab`]'s: [`Demo::run`] plays [`DASHES`]
+/// (a tumble clip while the character slides across the stage, one trail piece per
+/// [`dashfx::due`] step of the burst) or [`SLASHES`] (the katana combo with the sword in hand,
+/// trailed by [`slashfx`]) and goes back to the idle pose. A run starts [`DEMO_FIRST`] s after the
+/// page opens, every [`DEMO_EVERY`] s after a run, [`DEMO_SETTLE`] s after a setting of the
+/// shown tab or the tab itself changed and on DEMO.
 #[allow(clippy::too_many_arguments)]
 fn demo(
     time: Res<Time>,
     state: Res<State>,
     profile: Res<Profile>,
+    fx: Res<Fx>,
     cat: Res<Catalog>,
     mut clips: ResMut<Clips>,
     mut demo: ResMut<Demo>,
-    model: Option<Single<(Entity, &mut Animator)>>,
+    mut model: Option<Single<(Entity, &mut Animator)>>,
+    sword: Option<Single<Entity, With<Sword>>>,
     mut out: MessageWriter<dashfx::Dash>,
-    mut seen: Local<Option<Trail>>,
+    mut seen: Local<Option<(Trail, Slash, Tab)>>,
+    mut commands: Commands,
 ) {
     let dt = time.delta_secs().min(0.05);
-    let changed = seen
-        .replace(profile.dash)
-        .is_some_and(|t| t != profile.dash);
+    let key = (profile.dash, profile.slash, fx.0);
+    let before = seen.replace(key);
+    let tab_changed = before.is_some_and(|b| b.2 != fx.0);
+    let changed = tab_changed
+        || before.is_some_and(|b| match fx.0 {
+            Tab::Dash => b.0 != key.0,
+            Tab::Slash => b.1 != key.1,
+        });
+    let sword = sword.as_deref().copied();
+    let woman = state.cfg.woman;
+    // leaving the page or the tab cuts a run short: back to the idle pose, sword away
+    if (state.page != Page::Player || tab_changed) && demo.run.is_some() {
+        hold(&mut commands, sword, false);
+        if let Some(m) = model.as_mut()
+            && let Some((ani, looping)) = clips.get(&cat, woman, IDLE.0, IDLE.1)
+        {
+            m.1.play(ani, looping, 0.12);
+        }
+        (demo.run, demo.x, demo.face) = (None, 0.0, 0.0);
+    }
     if state.page != Page::Player {
-        *demo = Demo {
-            wait: DEMO_FIRST,
-            run: None,
-            again: false,
-            x: 0.0,
-            face: 0.0,
-        };
+        *demo = Demo::default();
         return;
     }
     if changed {
@@ -1911,6 +2042,12 @@ fn demo(
         if demo.wait <= 0.0 {
             demo.run = Some(0.0);
             demo.again = false;
+            demo.step = 0;
+            demo.end = if fx.0 == Tab::Slash {
+                SLASH_CAP
+            } else {
+                DEMO_END
+            };
         }
         return;
     };
@@ -1921,40 +2058,63 @@ fn demo(
         return;
     };
     let (root, mut anim) = model.into_inner();
-    let woman = state.cfg.woman;
     let now = t + dt;
-    let mut from = 0.0;
     let mut x = 0.0;
-    for (at, to, clip) in DASHES {
-        let u = now - at;
-        if u >= 0.0 {
-            if t < at
-                && let Some((ani, looping)) = clips.get(&cat, woman, DASH_SET, clip)
-            {
-                anim.play(ani, looping, 0.0);
-            }
-            if dashfx::due(u, dt, crate::actor::DASH_BURST) {
-                out.write(dashfx::Dash {
-                    model: root,
-                    dir: Vec3::X * (to - from).signum(),
-                    team: None,
-                    own: true,
-                });
-            }
-            x = from + (to - from) * crate::ui::ease_out(u / DASH_TIME);
+    if fx.0 == Tab::Slash {
+        // one swing after the other, each when the last has played out; the run ends half a
+        // second after the last
+        let first = t == 0.0;
+        if first {
+            hold(&mut commands, sword, true);
         }
-        from = to;
-    }
-    // back to the idle pose when the tumble has played out
-    if anim.finished()
-        && let Some((ani, looping)) = clips.get(&cat, woman, IDLE.0, IDLE.1)
-    {
-        anim.play(ani, looping, 0.12);
+        let played = anim.time >= anim.duration();
+        if demo.step < SLASHES.len() && (first || played) {
+            if let Some((ani, looping)) = clips.get(&cat, woman, SWORD_SET, SLASHES[demo.step]) {
+                anim.play(ani, looping, if first { 0.1 } else { 0.0 });
+            }
+            demo.step += 1;
+        } else if demo.step == SLASHES.len()
+            && played
+            && demo.end > now + 0.6
+            && let Some((ani, looping)) = clips.get(&cat, woman, IDLE.0, IDLE.1)
+        {
+            anim.play(ani, looping, 0.12);
+            demo.end = now + 0.5;
+        }
+    } else {
+        let mut from = 0.0;
+        for (at, to, clip) in DASHES {
+            let u = now - at;
+            if u >= 0.0 {
+                if t < at
+                    && let Some((ani, looping)) = clips.get(&cat, woman, DASH_SET, clip)
+                {
+                    anim.play(ani, looping, 0.0);
+                }
+                if dashfx::due(u, dt, crate::actor::DASH_BURST) {
+                    out.write(dashfx::Dash {
+                        model: root,
+                        dir: Vec3::X * (to - from).signum(),
+                        team: None,
+                        own: true,
+                    });
+                }
+                x = from + (to - from) * crate::ui::ease_out(u / DASH_TIME);
+            }
+            from = to;
+        }
+        // back to the idle pose when the tumble has played out
+        if anim.finished()
+            && let Some((ani, looping)) = clips.get(&cat, woman, IDLE.0, IDLE.1)
+        {
+            anim.play(ani, looping, 0.12);
+        }
     }
     demo.x = x * DEMO_SPAN;
-    let s = ((now / 0.3).min((DEMO_END - now) / 0.4)).clamp(0.0, 1.0);
+    let s = ((now / 0.3).min((demo.end - now) / 0.4)).clamp(0.0, 1.0);
     demo.face = s * s * (3.0 - 2.0 * s);
-    if now >= DEMO_END {
+    if now >= demo.end {
+        hold(&mut commands, sword, false);
         demo.run = None;
         demo.x = 0.0;
         demo.face = 0.0;
@@ -1966,118 +2126,216 @@ fn demo(
     }
 }
 
-/// The amount slider (drag), its filled part, and saving the dash settings once they settle.
-fn dash_panel(
+/// The demo's sword in hand and trailing (`on`) or away.
+fn hold(commands: &mut Commands, sword: Option<Entity>, on: bool) {
+    let Some(sword) = sword else { return };
+    let mut e = commands.entity(sword);
+    if on {
+        e.insert((
+            Visibility::Inherited,
+            slashfx::Swing {
+                team: None,
+                own: true,
+                cap: 0.16,
+            },
+        ));
+    } else {
+        e.insert(Visibility::Hidden).remove::<slashfx::Swing>();
+    }
+}
+
+/// The amount sliders (drag), their filled parts, and saving the effect settings once they settle.
+fn fx_panel(
     mouse: Res<ButtonInput<MouseButton>>,
-    slider: Query<(&Interaction, &RelativeCursorPosition), With<DashSlider>>,
-    mut fill: Query<&mut Node, With<DashFill>>,
+    sliders: Query<(&Interaction, &RelativeCursorPosition, &Slider)>,
+    mut fill: Query<(&mut Node, &Fill)>,
     mut profile: ResMut<Profile>,
-    mut dragging: Local<bool>,
-    mut saved: Local<Option<Trail>>,
+    mut dragging: Local<Option<Tab>>,
+    mut saved: Local<Option<(Trail, Slash)>>,
 ) {
-    if let Ok((i, rel)) = slider.single() {
-        if !mouse.pressed(MouseButton::Left) {
-            *dragging = false;
-        } else if *i == Interaction::Pressed {
-            *dragging = true;
-        }
-        if *dragging && let Some(n) = rel.normalized {
-            let v = ((n.x + 0.5).clamp(0.0, 1.0) * 20.0).round() / 20.0;
-            if profile.dash.amount != v {
-                profile.dash.amount = v;
+    if !mouse.pressed(MouseButton::Left) {
+        *dragging = None;
+    } else if let Some((.., s)) = sliders.iter().find(|s| *s.0 == Interaction::Pressed) {
+        *dragging = Some(s.0);
+    }
+    if let Some(t) = *dragging
+        && let Some((_, rel, _)) = sliders.iter().find(|s| s.2.0 == t)
+        && let Some(n) = rel.normalized
+    {
+        let v = ((n.x + 0.5).clamp(0.0, 1.0) * 20.0).round() / 20.0;
+        if amount(&profile, t) != v {
+            match t {
+                Tab::Dash => profile.dash.amount = v,
+                Tab::Slash => profile.slash.amount = v,
             }
         }
     }
-    let w = percent(profile.dash.amount * 100.0);
-    for mut n in &mut fill {
+    for (mut n, f) in &mut fill {
+        let w = percent(amount(&profile, f.0) * 100.0);
         if n.width != w {
             n.width = w;
         }
     }
+    let now = (profile.dash, profile.slash);
     match &*saved {
-        None => *saved = Some(profile.dash),
-        Some(t) if *t != profile.dash && !mouse.pressed(MouseButton::Left) => {
+        None => *saved = Some(now),
+        Some(s) if *s != now && !mouse.pressed(MouseButton::Left) => {
             profile.save();
-            *saved = Some(profile.dash);
+            *saved = Some(now);
         }
         _ => {}
     }
 }
 
-/// The DASH TRAIL panel: style, colour, amount and the demo button.
-fn dash_ui(m: &mut ChildSpawnerCommands) {
-    m.spawn(heading("DASH TRAIL"));
-    m.spawn(Node {
-        flex_wrap: FlexWrap::Wrap,
-        column_gap: px(6),
-        row_gap: px(6),
-        ..default()
-    })
-    .with_children(|g| {
-        for (s, _, label) in STYLES {
-            g.spawn(button(131.0, 28.0, label, 14.0, Act::Style(s)));
-        }
-    });
+/// The EFFECTS panel: a DASH | SLASH switch over the shown tab's style, colour and amount, then
+/// the demo button and, when the graphics are ORIGINAL, a note that trails are off.
+fn fx_ui(m: &mut ChildSpawnerCommands) {
     m.spawn((
-        Value(Field::DashColor),
-        crate::controls::text("", compact(14.0), DIM),
-    ));
+        Node {
+            width: percent(100),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            padding: UiRect::bottom(px(4)),
+            margin: UiRect::bottom(px(4)),
+            border: UiRect::bottom(px(1)),
+            ..default()
+        },
+        BorderColor::all(LINE),
+    ))
+    .with_children(|h| {
+        h.spawn((Text::new("EFFECTS"), display(20.0), TextColor(ACCENT)));
+        // a segmented control: the tabs share one hairline border with no gap between them
+        h.spawn((
+            Node {
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BorderColor::all(LINE),
+        ))
+        .with_children(|r| {
+            r.spawn(button(70.0, 28.0, "DASH", 14.0, Act::Tab(Tab::Dash)));
+            r.spawn(button(70.0, 28.0, "SLASH", 14.0, Act::Tab(Tab::Slash)));
+        });
+    });
+    fx_tab(
+        m,
+        Tab::Dash,
+        STYLES.map(|(s, _, label)| (label, Act::Style(s))).to_vec(),
+    );
+    fx_tab(
+        m,
+        Tab::Slash,
+        slashfx::STYLES
+            .map(|(s, _, label)| (label, Act::Cut(s)))
+            .to_vec(),
+    );
     m.spawn(Node {
-        column_gap: px(6),
+        column_gap: px(10),
+        align_items: AlignItems::Center,
         ..default()
     })
-    .with_children(|g| {
-        for (h, _, label) in HUES {
-            if h == Hue::Team {
-                g.spawn(button(52.0, 28.0, label, 13.0, Act::Hue(h)));
-                continue;
-            }
-            let c = h.color(None, 0.0);
-            let mut dot = Node {
-                width: px(16),
-                height: px(16),
-                border_radius: BorderRadius::all(px(8)),
-                ..default()
-            };
-            dot.border = UiRect::ZERO;
-            g.spawn((Act::Hue(h), flat(30.0, 28.0))).with_children(|b| {
-                let mut e = b.spawn((
-                    dot,
-                    BackgroundColor(Color::linear_rgb(
-                        c.red.min(1.0),
-                        c.green.min(1.0),
-                        c.blue.min(1.0),
-                    )),
-                ));
-                if h == Hue::Rainbow {
-                    let stop = |i: f32| {
-                        let c = Color::hsl(i * 60.0, 1.0, 0.5);
-                        ColorStop::new(c, percent(i * 100.0 / 6.0))
-                    };
-                    e.insert(BackgroundGradient::from(LinearGradient::to_right(
-                        (0..=6).map(|i| stop(i as f32)).collect(),
-                    )));
-                }
-            });
-        }
-    });
-    m.spawn(crate::controls::row()).with_children(|r| {
-        r.spawn(crate::controls::boxed("Amount", compact(14.0), INK, 52.0));
-        r.spawn((DashSlider, crate::controls::slider_track(100.0)))
-            .with_children(|t| {
-                t.spawn(crate::controls::slider_groove(6.0))
-                    .with_children(|g| {
-                        g.spawn((DashFill, crate::controls::slider_fill()));
-                    });
-            });
-        r.spawn(button(22.0, 24.0, "-", 15.0, Act::Amount(-1)));
-        r.spawn(button(22.0, 24.0, "+", 15.0, Act::Amount(1)));
+    .with_children(|r| {
+        r.spawn(button(124.0, 30.0, "DEMO", 16.0, Act::Demo));
         r.spawn((
-            Value(Field::DashAmount),
-            crate::controls::text("", digits(14.0), ACCENT),
+            Value(Field::Note),
+            crate::controls::text("", compact(13.0), DIM),
         ));
     });
-    m.spawn(button(268.0, 30.0, "DEMO", 16.0, Act::Demo));
+}
+
+/// One tab of the EFFECTS panel: the style buttons (two to a row), the colour and the amount.
+fn fx_tab(m: &mut ChildSpawnerCommands, tab: Tab, styles: Vec<(&'static str, Act)>) {
+    m.spawn((
+        TabShow(tab),
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            ..default()
+        },
+    ))
+    .with_children(|m| {
+        m.spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: px(6),
+            row_gap: px(6),
+            ..default()
+        })
+        .with_children(|g| {
+            for (label, act) in styles {
+                g.spawn(button(131.0, 28.0, label, 14.0, act));
+            }
+        });
+        m.spawn((
+            Value(Field::Colour(tab)),
+            crate::controls::text("", compact(14.0), DIM),
+        ));
+        m.spawn(Node {
+            column_gap: px(6),
+            ..default()
+        })
+        .with_children(|g| {
+            for (h, _, label) in HUES {
+                if h == Hue::Team {
+                    g.spawn(button(52.0, 28.0, label, 13.0, Act::Hue(tab, h)));
+                    continue;
+                }
+                let c = h.color(None, 0.0);
+                let mut dot = Node {
+                    width: px(16),
+                    height: px(16),
+                    border_radius: BorderRadius::all(px(8)),
+                    ..default()
+                };
+                dot.border = UiRect::ZERO;
+                g.spawn((Act::Hue(tab, h), flat(30.0, 28.0)))
+                    .with_children(|b| {
+                        let mut e = b.spawn((
+                            dot,
+                            BackgroundColor(Color::linear_rgb(
+                                c.red.min(1.0),
+                                c.green.min(1.0),
+                                c.blue.min(1.0),
+                            )),
+                        ));
+                        if h == Hue::Rainbow {
+                            let stop = |i: f32| {
+                                let c = Color::hsl(i * 60.0, 1.0, 0.5);
+                                ColorStop::new(c, percent(i * 100.0 / 6.0))
+                            };
+                            e.insert(BackgroundGradient::from(LinearGradient::to_right(
+                                (0..=6).map(|i| stop(i as f32)).collect(),
+                            )));
+                        }
+                    });
+            }
+        });
+        m.spawn(crate::controls::row()).with_children(|r| {
+            r.spawn(crate::controls::boxed("Amount", compact(14.0), INK, 52.0));
+            r.spawn((Slider(tab), crate::controls::slider_track(100.0)))
+                .with_children(|t| {
+                    t.spawn(crate::controls::slider_groove(6.0))
+                        .with_children(|g| {
+                            g.spawn((Fill(tab), crate::controls::slider_fill()));
+                        });
+                });
+            r.spawn(button(22.0, 24.0, "-", 15.0, Act::Amount(tab, -1)));
+            r.spawn(button(22.0, 24.0, "+", 15.0, Act::Amount(tab, 1)));
+            r.spawn((
+                Value(Field::Amount(tab)),
+                crate::controls::text("", digits(14.0), ACCENT),
+            ));
+        });
+    });
+}
+
+/// The amount of a tab's trail (0..=1).
+fn amount(profile: &Profile, tab: Tab) -> f32 {
+    match tab {
+        Tab::Dash => profile.dash.amount,
+        Tab::Slash => profile.slash.amount,
+    }
 }
 
 /// Shrinks the menu to fit windows smaller than its 1280 x 720 layout (phones, small browser
@@ -2121,6 +2379,7 @@ fn fit_by(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScal
 fn orbit(
     time: Res<Time>,
     demo: Res<Demo>,
+    fx: Res<Fx>,
     shot: Option<Res<Shot>>,
     state: Res<State>,
     mut orbit: ResMut<Orbit>,
@@ -2156,14 +2415,22 @@ fn orbit(
     let yaw = yaw + ((yaw / TAU).round() * TAU - yaw) * demo.face;
     model.rotation = Quat::from_rotation_y(yaw);
     let (_, h, d) = FOCUS[if player { orbit.focus } else { 0 }];
-    let d = d * if player { orbit.zoom } else { 1.0 };
+    // the slash demo's swings reach ~2 m: the camera backs off while one runs, so the trail
+    // stays inside the preview frame
+    let far = if fx.0 == Tab::Slash {
+        1.0 + 1.5 * demo.face
+    } else {
+        1.0
+    };
+    let d = d * if player { orbit.zoom } else { 1.0 } * far;
     model.translation.x = demo.x * d / FOCUS[0].2;
-    // the character stands right of the screen centre (about 15 % of the width), clear of the
-    // CHARACTER panel: tan(22.5 deg) * aspect * d is half the view's width at distance d
+    // the character stands in the preview frame between the panels (a third of the half width
+    // right of the screen centre), clear of the CHARACTER panel; `aspect * d` scales the half
+    // width of the view at distance d
     let aspect = window
         .single()
         .map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
-    let goal = Vec3::new(if player { -0.13 * aspect * d } else { 0.0 }, h, d);
+    let goal = Vec3::new(if player { -0.18 * aspect * d } else { 0.0 }, h, d);
     let t = if shot.is_some() {
         1.0
     } else {

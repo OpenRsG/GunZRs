@@ -83,14 +83,20 @@ drained, throbbing screen at low health. Dust
 rings from the game's own effects mark ground dashes, wall kicks and hard landings. LIGHTING lights the characters
 from the map's own lightmap colours (with a rim light), lights up the walls, floor and characters
 around muzzle flashes and explosions, and puts a soft contact shadow under every character.
+WORLD EFFECTS has the Explosions slider: at 0 (ORIGINAL) rockets and grenades show the game's own
+fireball sprite; above it they become a full explosion (a blinding flash, a fireball that cools
+into a lingering smoke plume, bouncing sparks, debris, dust along the floor, a shock ring and a
+scorch mark, a strong light and a camera shake), richer at ULTRA.
 Also field of view, vsync and a frame limit (not in the browser). Changes show in the match at once
 and are saved in the profile; `gunz-play --gfx original|enhanced|ultra` picks a preset for one run.
 
-PLAYER (a main-menu tab) shows your character idling in its lobby pose. Its DASH TRAIL panel picks
-what a dash leaves behind (afterimages, glowing sparks, both, or nothing), the colour (team, cyan,
-gold, violet, ember, toxic or rainbow) and how much; the character dashes across the stage to show
-each change, and DEMO replays it. Your colour is used for your own dashes; other players keep
-team colours.
+PLAYER (a main-menu tab) shows your character idling in its lobby pose. Its EFFECTS panel has two
+tabs. DASH picks what a dash leaves behind (afterimages, glowing sparks, both, or nothing); SLASH
+picks the trail your sword swings leave (arc, energy, fire or none, plus sparks where a blow
+lands). Both choose a colour (team, cyan, gold, violet, ember, toxic or rainbow) and an amount; the
+character dashes or swings a katana in the preview to show each change, and DEMO replays it.
+Your colour is used for your own dashes and swings; other players keep team colours. None of the
+trails are in the original game, so the ORIGINAL graphics preset hides them.
 
 Combo meter and killing sprees (not in the original game; the `Combo` option or `--no-combo` hides
 them): every hit you land within 2.5 s of the last grows a combo whose multiplier climbs from x1 to

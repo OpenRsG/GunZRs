@@ -5,6 +5,7 @@
 
 use crate::{
     actor::ActorData,
+    boom::Boom,
     col::MapCollision,
     combat::{EYE, Fx, Lifetime, SELF_BLAST, Vfx, shape},
     effect::FxAssets,
@@ -12,7 +13,9 @@ use crate::{
         Afflict, Blast, Bot, Damage, Dead, Fire, HitShape, Player, Protected, Push, Team, Vitals,
         apart, friendly,
     },
+    gfx::Knob,
     item::WeaponKind,
+    profile::Profile,
     spy::{self, Mine},
 };
 use bevy::prelude::*;
@@ -434,7 +437,11 @@ pub(crate) fn fly(
     mut vfx: MessageWriter<Vfx>,
     mut afflict: MessageWriter<Afflict>,
     sides: Query<(Option<&Team>, Has<Bot>)>,
-    mut blast: MessageWriter<Blast>,
+    (mut blast, mut booms, profile): (
+        MessageWriter<Blast>,
+        MessageWriter<Boom>,
+        Option<Res<Profile>>,
+    ),
 ) {
     let dt = time.delta_secs().min(0.05);
     for (e, mut tf, mut p, mut vis) in &mut projectiles {
@@ -550,13 +557,25 @@ pub(crate) fn fly(
             }
             _ => ("ef_gunsmoke", "we_gasgrenade_explosion", 2.0),
         };
-        vfx.write(Vfx::Facing {
-            name: effect,
-            at,
-            axis: None,
-            scale,
-        });
+        // With realistic explosions (`boom.rs`) the retail fireball sprite of rockets, frags and mines
+        // gives way to the layers; the flash-bang's, the smoke's and the sound stay.
+        let fire = matches!(
+            p.kind,
+            WeaponKind::Rocket | WeaponKind::Frag | WeaponKind::Mine
+        );
+        let realistic = crate::light::knob(&profile, Knob::Explosions) > 0.0;
+        if !(fire && realistic) {
+            vfx.write(Vfx::Facing {
+                name: effect,
+                at,
+                axis: None,
+                scale,
+            });
+        }
         blast.write(Blast { at, sound });
+        if !matches!(p.kind, WeaponKind::Smoke) {
+            booms.write(Boom { at, radius, fire });
+        }
         match p.kind {
             WeaponKind::Stun => {
                 // Stuns whoever the grenade's thrower is not friendly with, within its radius

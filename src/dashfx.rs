@@ -4,9 +4,11 @@
 //! afterimages (frozen glowing copies of the model, fading where they were left), particles
 //! (a few hundred additive streaks sharing one mesh, flying back and shrinking), or both.
 //! The settings are cosmetic and live in the profile (`dash_*` keys), apart from the graphics
-//! presets; the GRAPHICS panel's speed effects only cover the screen. Notes: `docs/formats.md`.
+//! presets; the GRAPHICS panel's speed effects only cover the screen. The GRAPHICS preset
+//! ORIGINAL draws no trail at all ([`original`]). [`crate::slashfx`] shares the colours and the
+//! spark streaks. Notes: `docs/formats.md`.
 
-use crate::{combat::rnd, game::Team, profile::Profile};
+use crate::{combat::rnd, game::Team, gfx::Preset, profile::Profile};
 use bevy::{camera::visibility::NoFrustumCulling, mesh::skinning::SkinnedMesh, prelude::*};
 use std::collections::HashMap;
 
@@ -15,8 +17,9 @@ pub struct DashFxPlugin;
 impl Plugin for DashFxPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Dash>()
+            .add_message::<Spray>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (emit, fade));
+            .add_systems(Update, (emit, spray, fade));
     }
 }
 
@@ -142,6 +145,21 @@ pub struct Dash {
     pub own: bool,
 }
 
+/// The GRAPHICS preset is exactly ORIGINAL: cosmetic trails (dash, slash) draw nothing, so the
+/// image is what the game always drew.
+pub fn original(profile: &Profile) -> bool {
+    profile.graphics.which() == Some(Preset::Original)
+}
+
+/// Asks for `n` spark streaks from `at`, flying along `dir` (unit) in `color` (a hit's sparks).
+#[derive(Message)]
+pub struct Spray {
+    pub at: Vec3,
+    pub dir: Vec3,
+    pub color: LinearRgba,
+    pub n: usize,
+}
+
 /// Seconds between trail pieces of a burst.
 const EVERY: f32 = 0.04;
 
@@ -191,6 +209,84 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     });
 }
 
+impl Sparks {
+    /// The additive material of `color`, one per distinct colour.
+    fn material(
+        &mut self,
+        materials: &mut Assets<StandardMaterial>,
+        color: LinearRgba,
+    ) -> Handle<StandardMaterial> {
+        let key = ((color.red * 16.0) as u32) << 20
+            | ((color.green * 16.0) as u32) << 10
+            | (color.blue * 16.0) as u32;
+        // a hot core: far above 1 so bloom catches it
+        let core = LinearRgba::rgb(color.red, color.green, color.blue) * 3.5;
+        self.mats
+            .entry(key)
+            .or_insert_with(|| {
+                materials.add(StandardMaterial {
+                    base_color: Color::from(core.with_alpha(1.0)),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Add,
+                    ..default()
+                })
+            })
+            .clone()
+    }
+
+    /// One streak flying from `at` with `vel`, `long` times the mesh's length at birth.
+    fn streak(
+        &self,
+        commands: &mut Commands,
+        mat: &Handle<StandardMaterial>,
+        at: Vec3,
+        vel: Vec3,
+        long: f32,
+        life: f32,
+    ) {
+        commands.spawn((
+            Spark {
+                vel,
+                age: 0.0,
+                life,
+                long,
+            },
+            Mesh3d(self.mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            Transform::from_translation(at)
+                .looking_to(vel, Vec3::Y)
+                .with_scale(Vec3::new(1.0, 1.0, long)),
+        ));
+    }
+}
+
+/// A hit's sparks: a fan of streaks along the message's direction.
+fn spray(
+    mut sprays: MessageReader<Spray>,
+    mut sparks: ResMut<Sparks>,
+    live: Query<(), With<Spark>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut seed: Local<u32>,
+    mut commands: Commands,
+) {
+    if *seed == 0 {
+        *seed = 0x85eb_ca6b;
+    }
+    let mut room = MAX_SPARKS.saturating_sub(live.iter().count());
+    for s in sprays.read() {
+        let mat = sparks.material(&mut materials, s.color);
+        let n = s.n.min(room);
+        room -= n;
+        let mut r = || rnd(&mut seed);
+        for _ in 0..n {
+            let speed = 2.5 + r() * 5.0;
+            let vel = s.dir * speed + Vec3::new(r() - 0.5, r() - 0.2, r() - 0.5) * 3.0;
+            let life = 0.2 + r() * 0.3;
+            sparks.streak(&mut commands, &mat, s.at, vel, 1.0 + speed * 0.3, life);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn emit(
     mut dashes: MessageReader<Dash>,
@@ -211,8 +307,9 @@ fn emit(
     mut last: Local<HashMap<Entity, f32>>,
     mut commands: Commands,
 ) {
-    let trail = profile.map_or_else(Trail::default, |p| p.dash);
-    if trail.style == Style::Off || trail.amount <= 0.0 {
+    let trail = profile.as_deref().map_or_else(Trail::default, |p| p.dash);
+    if trail.style == Style::Off || trail.amount <= 0.0 || profile.as_deref().is_some_and(original)
+    {
         dashes.clear();
         return;
     }
@@ -291,23 +388,7 @@ fn emit(
             } else {
                 color
             };
-            let key = ((color.red * 16.0) as u32) << 20
-                | ((color.green * 16.0) as u32) << 10
-                | (color.blue * 16.0) as u32;
-            // a hot core: far above 1 so bloom catches it
-            let core = LinearRgba::rgb(color.red, color.green, color.blue) * 3.5;
-            let mat = sparks
-                .mats
-                .entry(key)
-                .or_insert_with(|| {
-                    materials.add(StandardMaterial {
-                        base_color: Color::from(core.with_alpha(1.0)),
-                        unlit: true,
-                        alpha_mode: AlphaMode::Add,
-                        ..default()
-                    })
-                })
-                .clone();
+            let mat = sparks.material(&mut materials, color);
             let feet = globals.get(d.model).map_or(Vec3::ZERO, |g| g.translation());
             // the first piece of a burst throws a burst of sparks
             let now = time.elapsed_secs();
@@ -322,19 +403,8 @@ fn emit(
                 // spread over the whole body
                 let at = feet + Vec3::new((r() - 0.5) * 0.7, 0.05 + r() * 1.65, (r() - 0.5) * 0.7);
                 let long = 1.0 + speed * 0.4;
-                commands.spawn((
-                    Spark {
-                        vel,
-                        age: 0.0,
-                        life: 0.35 + r() * 0.5,
-                        long,
-                    },
-                    Mesh3d(sparks.mesh.clone()),
-                    MeshMaterial3d(mat.clone()),
-                    Transform::from_translation(at)
-                        .looking_to(vel, Vec3::Y)
-                        .with_scale(Vec3::new(1.0, 1.0, long)),
-                ));
+                let life = 0.35 + r() * 0.5;
+                sparks.streak(&mut commands, &mat, at, vel, long, life);
             }
         }
     }

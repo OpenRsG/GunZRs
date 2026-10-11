@@ -71,9 +71,10 @@ pub enum Knob {
     ActorLight,
     DynLight,
     Shadow,
+    Explosions,
 }
 
-pub const N: usize = 17;
+pub const N: usize = 18;
 
 impl Knob {
     pub const ALL: [Knob; N] = [
@@ -94,6 +95,7 @@ impl Knob {
         Knob::ActorLight,
         Knob::DynLight,
         Knob::Shadow,
+        Knob::Explosions,
     ];
 
     fn row(self) -> &'static Row {
@@ -129,7 +131,7 @@ impl Knob {
             Knob::Exposure => format!("{v:+.1} EV"),
             Knob::Fov => format!("{v:.0} deg"),
             Knob::Contrast | Knob::Saturation => format!("{:.0}%", v * 100.0),
-            _ if v == 0.0 => "OFF".into(),
+            Knob::Explosions if v == 0.0 => "RETAIL".into(),
             _ => format!("{:.0}%", v * 100.0),
         }
     }
@@ -184,6 +186,8 @@ const KNOBS: [Row; N] = [
         0.05,
         [0.0, 0.6, 0.8],
     ),
+    // 0 draws only the game's own explosion sprite; above, the realistic layers scale with it
+    ("explosions", "Explosions", 0.0, 1.0, 0.05, [0.0, 0.6, 1.0]),
 ];
 
 /// Value, profile text and label of each option of a choice setting.
@@ -411,7 +415,11 @@ impl Graphics {
         let bad = || format!("{k}: bad value {v:?}");
         let v = v.trim();
         match name {
-            "tonemap" => self.tone = find(&TONES, v).ok_or_else(bad)?,
+            "tonemap" => {
+                self.tone = find(&TONES, v).ok_or_else(bad)?;
+                // profiles saved before the explosions setting keep the game's own explosions
+                self.knobs[Knob::Explosions as usize] = 0.0;
+            }
             "aa" => self.aa = find(&AAS, v).ok_or_else(bad)?,
             "aniso" => self.aniso = find(&ANISOS, v).ok_or_else(bad)?,
             "fps" => self.fps = find(&FPS, v).ok_or_else(bad)?,
@@ -1057,6 +1065,20 @@ fn effects(m: &mut ChildSpawnerCommands) {
             DIM
         )],
     ));
+    m.spawn(heading("WORLD EFFECTS"));
+    slider(m, Knob::Explosions);
+    m.spawn((
+        Node {
+            width: px(366),
+            margin: UiRect::top(px(4)),
+            ..default()
+        },
+        children![controls::text(
+            "Fireball, smoke plume, sparks, debris and scorch for rockets, grenades and mines. RETAIL draws only the game's own sprite.",
+            body(13.0),
+            DIM
+        )],
+    ));
 }
 
 fn display(m: &mut ChildSpawnerCommands, done: bool) {
@@ -1237,9 +1259,9 @@ fn refresh(
         let want = match *s {
             Show::Knob(k) => k.text(g.get(k)),
             Show::Preset => match g.which() {
-                Some(Preset::Original) => "ORIGINAL: no tonemapping, no effects, no lighting, 4x MSAA; the image as the game always drew it.".into(),
-                Some(Preset::Enhanced) => "ENHANCED: HDR with tonemapping, bloom, sharpening, vignette, lit characters, muzzle-flash and explosion lights, contact shadows.".into(),
-                Some(Preset::Ultra) => "ULTRA: all of that, stronger, plus SMAA, 16x filtering, fog, film grain, chromatic aberration and motion blur.".into(),
+                Some(Preset::Original) => "ORIGINAL: no tonemapping, no effects, no lighting, the game's own explosions, 4x MSAA; the image as the game always drew it.".into(),
+                Some(Preset::Enhanced) => "ENHANCED: HDR with tonemapping, bloom, sharpening, vignette, lit characters, dynamic lights, contact shadows, realistic explosions.".into(),
+                Some(Preset::Ultra) => "ULTRA: all of that, stronger, plus SMAA, 16x filtering, fog, film grain, chromatic aberration, motion blur, richer explosions.".into(),
                 None => "CUSTOM: your own mix. A preset keeps the field of view, vsync and frame limit.".to_owned(),
             },
         };

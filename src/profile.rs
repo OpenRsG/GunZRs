@@ -18,6 +18,7 @@ use crate::{
     mrs::Vfs,
     session::{Clock, Rules, StartVitals},
     shop::ShopData,
+    slashfx::Slash,
     view::Shot,
 };
 use bevy::prelude::*;
@@ -147,6 +148,8 @@ pub struct Profile {
     pub graphics: Graphics,
     /// Dash trail settings (`dash_*` keys), cosmetic and apart from the graphics presets.
     pub dash: Trail,
+    /// Slash trail settings (`slash_*` keys), cosmetic like the dash trail.
+    pub slash: Slash,
     /// Where [`Profile::save`] writes; `None` = throwaway.
     path: Option<PathBuf>,
 }
@@ -175,6 +178,7 @@ impl Profile {
             controls: Controls::default(),
             graphics: Graphics::default(),
             dash: Trail::default(),
+            slash: Slash::default(),
             path: None,
         }
     }
@@ -261,6 +265,7 @@ impl Profile {
         text += &self.controls.to_text();
         text += &self.graphics.to_text();
         text += &self.dash.to_text();
+        text += &self.slash.to_text();
         text
     }
 
@@ -341,6 +346,7 @@ impl Profile {
                 k if p.controls.set(k, v)? => {}
                 k if p.graphics.set_text(k, v)? => {}
                 k if p.dash.set_text(k, v)? => {}
+                k if p.slash.set_text(k, v)? => {}
                 _ => return Err(format!("unknown key {k:?}")),
             }
         }

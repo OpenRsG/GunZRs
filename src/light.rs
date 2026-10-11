@@ -5,6 +5,7 @@
 //! a soft contact shadow under every actor. Values and limits: `docs/formats.md` "Graphics".
 
 use crate::{
+    boom::Boom,
     col::MapCollision,
     combat::Vfx,
     game::{Blast, Dead, Motor, Settings},
@@ -36,7 +37,7 @@ impl Plugin for LightPlugin {
     }
 }
 
-fn knob(profile: &Option<Res<Profile>>, k: Knob) -> f32 {
+pub(crate) fn knob(profile: &Option<Res<Profile>>, k: Knob) -> f32 {
     profile
         .as_ref()
         .map_or(crate::gfx::Graphics::default().get(k), |p| {
@@ -327,7 +328,7 @@ fn flashes(
     profile: Option<Res<Profile>>,
     time: Res<Time>,
     mut vfx: MessageReader<Vfx>,
-    mut blasts: MessageReader<Blast>,
+    (mut blasts, mut booms): (MessageReader<Blast>, MessageReader<Boom>),
     transforms: Query<&GlobalTransform>,
     mut lights: Query<(Entity, &mut PointLight, &mut Flash)>,
     mut commands: Commands,
@@ -398,13 +399,29 @@ fn flashes(
             _ => {}
         }
     }
-    for b in blasts.read() {
+    // realistic explosions bring their own, stronger light (`boom.rs`)
+    let realistic = knob(&profile, Knob::Explosions) > 0.0;
+    for b in blasts.read().filter(|_| !realistic) {
         spawn(
             b.at + Vec3::Y * 0.4,
             Color::srgb(1.0, 0.55, 0.2),
             4_000_000.0,
             16.0,
             0.6,
+        );
+    }
+    for b in booms.read().filter(|_| realistic) {
+        let (peak, range, life) = if b.fire {
+            (6_000_000.0, 22.0, 0.9)
+        } else {
+            (5_000_000.0, 14.0, 0.3)
+        };
+        spawn(
+            b.at + Vec3::Y * 0.6,
+            Color::srgb(1.0, 0.75, 0.5),
+            peak,
+            range,
+            life,
         );
     }
 }

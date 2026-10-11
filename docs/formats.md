@@ -630,36 +630,75 @@ the pause menu / match-end buttons exit with code 3 (back to the menu) or 4 (sam
 the launcher re-executes accordingly. Rules: see "Game modes"; the result is VICTORY / DEFEAT / DRAW
 for the player and the HUD scoreboard stays up with the buttons.
 
-### Dash trail and the PLAYER page stage (`src/dashfx.rs`, `menu::demo`; **not retail**)
+### Dash and slash trails, the EFFECTS panel (`src/dashfx.rs`, `src/slashfx.rs`, `menu::demo`; **not retail**)
 
-- **Settings** (cosmetic, in the profile, not in the graphics presets; `dashfx::Trail`): `dash_style` =
+- **Dash settings** (cosmetic, in the profile, not in the graphics presets; `dashfx::Trail`): `dash_style` =
   `off` / `afterimage` / `particles` / `both` (default `afterimage`), `dash_color` = `team` / `cyan` / `gold` /
   `violet` / `ember` / `toxic` / `rainbow` (default `team`: red for the red team, cyan otherwise, as before), `dash_amount`
   0..1 (default 0.5; 0 sheds nothing). Afterimage opacity is `0.54 * amount` (0.27 at the default, what the GRAPHICS
-  panel's speed effects gave in ENHANCED); particles per burst step are `round(4 + 14 * amount)`, three times that for the first
+  panel's speed effects gave in ENHANCED); particles per burst step are `round(6 + 24 * amount)`, three times that for the first
   piece of a burst. The GRAPHICS speed
-  effects no longer touch the trail (they keep the radial blur, light rays and the wider view); ORIGINAL no longer
-  hides the afterimages, `dash_style=off` does. The colour applies to the player's own trail (`game::Player`), every other
-  actor keeps its team colour with the same style and amount.
-- **One way in**: `dashfx::Dash { model, dir, team, own }` is written once per `dashfx::due` step (0.04 s, inside the first
+  effects no longer touch the trail (they keep the radial blur, light rays and the wider view). The colour applies to the
+  player's own trail (`game::Player`), every other actor keeps its team colour with the same style and amount.
+- **ORIGINAL draws no trail**: when `profile.graphics.which() == Some(gfx::Preset::Original)` (`dashfx::original`) the dash
+  afterimages and particles and every slash style below draw nothing, so ORIGINAL renders as the game did (retail's own blade
+  hit effects `sword_damage*`, `ef_sword_flash` still play). Any other preset, a CUSTOM mix included, shows them; `*_style=off`
+  hides them there too.
+- **One way in (dash)**: `dashfx::Dash { model, dir, team, own }` is written once per `dashfx::due` step (0.04 s, inside the first
   0.3 s = `actor::DASH_BURST` of a tumble) by `actor::dash_trail` in a match and by `menu::demo` on the PLAYER page;
   `DashFxPlugin` (added by `GamePlugin` and by `menu::run`) spawns the pieces. An afterimage is the old ghost: the model's
   visible meshes on world-space copies of the joints, additive, fading over 0.3 s. A particle is an additive streak
-  (one shared mesh, a material per colour at 2.5x the colour so bloom catches it, at most 400 alive) that starts anywhere on the
-  body's height (0.05-1.7 m), flies back against `dir` at 2-7 m/s with drag and a little fall, and shrinks over 0.3-0.7 s.
-  `rainbow` takes `phase = 3 * elapsed` turns of the spectrum per piece.
+  (one shared mesh, a material per colour at 3.5x the colour so bloom catches it, at most 1200 alive) that starts anywhere on the
+  body's height (0.05-1.7 m), flies back against `dir` at 2-7 m/s with drag and a little fall, and shrinks over 0.35-0.85 s.
+  `rainbow` takes `phase = 3 * elapsed` turns of the spectrum per piece. `dashfx::Spray { at, dir, color, n }` asks for `n`
+  streaks of the same kind from a point (the slash's hit sparks).
+- **Slash trail** (`slashfx::Slash`): `slash_style` = `off` / `arc` / `energy` / `fire` (default `arc`), `slash_color` = the
+  dash colours (`dashfx::Hue`, shared; default `team`), `slash_amount` 0..1 (default 0.5; 0 draws nothing). **Retail has no swing
+  trail** (**observed**): `sfx/effect_list.xml` has the looping blade auras `ef_sword_fire/ice/flash/gold/dark/darkforce/poison`
+  (the `effect_melee` customise items, which one an item enables is not in the data, see the `zitem.xml` row above),
+  `sword_slash_effect` (`ef_slash.elu`: `gunz-fx` shows a spiky ball of fur-like streaks, not a sweep), `sword_glaze`
+  (`swordglaze.elu`: one thin streak) and `ef_massive_swing`; none is a ribbon swept by the swing, and the port plays only
+  `ef_sword_flash` (block) and `sword_damage1..3` (hit). So there is no RETAIL style: every style is procedural.
+- **How a blade is trailed**: anything that swings a blade puts `slashfx::Swing { team, own }` on the weapon model's root.
+  `slashfx::mark` does it for every `melee::Melee` actor while `Melee::swinging()` (a `Phase::Blow` clip) plays, to each root of
+  `Actor::weapon_roots()` (a dual blade has two); `menu::demo` does it for its katana. `sweep` measures the blade once per
+  weapon (`Blade`): the longest axis of the union of its meshes' `Aabb`s in the root's frame, the end nearer the root origin
+  (the hand node, `eq_wd_katana` / `eq_wr_*`) is the base. **Observed**: a katana model (`2010000`) spans y -23.3 .. 108.5 cm,
+  x 1.3, z 0 (the blade is along +Y, 1.3 m with the grip). Each frame the blade's world base and tip join a `Ribbon` of the
+  weapon (a new ribbon per swing; points older than `life = 0.1 + 0.2 * amount` s drop, a ribbon whose swing ended fades out
+  and goes). A point carries `speed = clamp((tip speed - 2 m/s) / 5)`: the wind-up and the recovery are too slow to leave
+  anything. The mesh is rebuilt every frame (Catmull-Rom, 3 pieces between samples) as additive rows across the blade with
+  vertex colours: opacity `row * (1 - age / life)^1.5 * speed * (0.4 + 0.6 * amount)`. Rows (blade fraction from the grip,
+  opacity, white): ARC `(0.55,0,0) (1.0,1.0,0.2)`; ENERGY `(0.6,0,0) (0.85,0.35,0) (0.96,1.0,0.9) (1.04,0.25,0)`, a white-hot
+  core in a halo, opacity x `0.7 + 0.3 * noise` per sample and frame (flicker); FIRE `(0.45,0,0) (0.7,0.5,0) (0.9,0.9,0.15)
+  (1.04,0.6,0.7)`, flicker, rises `0.8 m/s` with its age and the vertices fray by up to 0.16 m x blade fraction. The ribbon
+  mesh is added to `Assets` only once it has vertices (an empty mesh made `bevy_render` log "Use-after-free ... slab
+  allocator" errors). The player's blade takes `slash_color`, other actors' the team colour. `slashfx::Hit { attacker, point, dir }`
+  is written by `melee::resolve` for every landed blow (not for a blocked one) and sprays `4 + 20 * amount` streaks in the
+  attacker's colour towards the attacker and a little up.
 - **Stage**: the preview model carries an `Animator` playing `login_idle` of motion type 8 (the bare-handed item set;
   **observed**: the clip is the lobby pose, `gm="0"`, a relaxed stand with the hands at the sides; the weapon sets' `login_idle`
-  poses hold a weapon). Every sex or clothes change respawns the model with the idle again.
-- **Demo**: a DASH TRAIL panel under VIEW (style, colour swatches, an amount slider with -/+, DEMO). The character turns to
-  face the camera and plays `tumbleL` (set 8) while sliding 0.35 m to the screen's right (`DEMO_SPAN`, scaled with the
-  framing distance), then `tumbleR` back; each dash eases out over 0.45 s and sheds the trail for 0.3 s. A run starts 1 s
-  after the page opens, 4 s after the previous one, 0.4 s after a dash setting changed and at once on DEMO. Settings are
-  saved to the profile once a change settles (not while the mouse is held).
+  poses hold a weapon). Every sex or clothes change respawns the model with the idle again, and with the equipped melee weapon
+  (if it is a katana, else the starting katana `2010000`) in the `eq_wd_katana` hand node, hidden until a slash demo.
+  The camera stands so the character is centred in the preview frame between the panels (`orbit`, a third of the view's half
+  width right of the screen centre; it was a quarter, which put the left half of the model behind the CHARACTER panel).
+- **EFFECTS panel** (right column under VIEW, replaces the DASH TRAIL panel; the DASH | SLASH switch sits in the heading
+  row, a segmented control like the GRAPHICS preset's, so the panel is no taller than before): per tab the style buttons, the
+  colour swatches, an amount slider with -/+; below, DEMO and, when the graphics are exactly ORIGINAL, the DIM line
+  "ORIGINAL: no trails" next to it. Settings are saved to the profile once a change settles (not while the mouse is held).
+- **Demo**: the shown tab's. DASH: the character turns to face the camera and plays `tumbleL` (set 8) while sliding 0.2 m to
+  the screen's right (`DEMO_SPAN`, scaled with the framing distance; it was 0.35 m and spilled afterimages over the CHARACTER
+  panel), then `tumbleR` back; each dash eases out over 0.45 s and sheds the trail for 0.3 s. SLASH: the katana appears in the
+  hand and the character plays `attack1..4` of motion type 1 one after the other (each starts when the last has played
+  out, 8 s at most), `Swing` on the sword the whole time, the sword goes away half a second after the last swing and the idle
+  returns. A run starts 1 s after the page opens, 4 s after the previous one, 0.4 s after a setting of the shown tab or the
+  tab itself changed (a running demo of the other tab is cut short) and at once on DEMO. The swing reaches farther than the
+  frame, so the slash trail still crosses the panels' edges.
 - **Headless shots**: `--menu-page player --shot X.png` steps the clock 1/60 s a frame, so the idle pose and the demo are the
-  same on every run; the picture is the frame at `GUNZ_MENU_AT` seconds (default 2). The first run's dashes begin at 1.35 s
-  and 2.7 s; `GUNZ_MENU_AT=1.5` shows the first dash with its trail, `0.5` the idle. Profile files (`GUNZ_PROFILE`) pick the
-  trail.
+  same on every run; the picture is the frame at `GUNZ_MENU_AT` seconds (default 2) and `GUNZ_MENU_TAB=slash` opens the SLASH
+  tab. The first run's dashes begin at 1.35 s and 2.7 s; `GUNZ_MENU_AT=1.5` shows the first dash with its trail, `0.5` the
+  idle; with the SLASH tab the combo runs from 1.0 s (`1.8` and `2.1` are mid-swing). Profile files (`GUNZ_PROFILE`) pick the
+  trail and the preset (`gfx_*` lines of ORIGINAL give the note).
 
 ### Game modes (`src/menu.rs` `Mode`, `src/session.rs`, `src/modes.rs`)
 
@@ -2264,26 +2303,82 @@ melee primary secondary item1 item2 score taunt bow wave laugh cry dance sens_do
 `WheelUp|WheelDown` or `-`. Binding an input takes it off any other action. The browser's touch controls hold
 actions directly (`controls::Pad`), so they work whatever the keys are bound to.
 
+### Explosions (`src/boom.rs`, `gfx::Knob::Explosions`, `light.rs`; **not retail**)
+
+GRAPHICS > WORLD EFFECTS > Explosions, `gfx_explosions` 0..1 (ORIGINAL 0 = RETAIL, ENHANCED 0.6, ULTRA 1). At 0 the game draws
+exactly what it always did (the retail `rocket_effect` / `ef_exgrenade` / `ef_gre_ex` ELU sprite, the `Blast` light of
+`DynLight`, the `hud::Shake` of `Blast`); `boom::BoomPlugin` spawns nothing. Above 0 every detonation of a rocket, frag
+grenade or mine (`projectile::fly` writes `Boom {at, radius, fire}`; radius = 3.5 m rocket, `handweaponcolldist` of a
+grenade, 4 m without) is drawn by the layers below **instead of** the retail fireball sprite (**inferred**: layered on top,
+the sprite's flat yellow blob washed out the realistic one). Flashbang and stun grenades (`fire: false`) keep their retail
+sprite and get the flash, sparks and a shock ring on top; smoke grenades are untouched; the sounds and damage are the
+same at every setting. Everything is procedural; all numbers are by eye.
+
+- **Ramps.** Every puff kind is a `puff_ramp`: 20 materials (unlit, `StandardMaterial`) picked by `age / life`; a particle swaps
+  its handle when the step changes, so no frame mutates a material. Each step has its **own texture**: one 96 px noise
+  density field per seed (`density`: 1.2 at the centre falling to 0 at the quad rim, broken into lobes by domain-warped
+  four-octave value noise) cut at a threshold that rises `erode.0 -> erode.1` as `f^curve`, alpha a smoothstep over `edge`
+  above it, so a puff breaks up and curls away instead of fading; the texel colour comes from `shade(f, depth inside the
+  cut)` (linear HDR, divided by `gain` into the sRGB texture, multiplied back by the material), and the material alpha
+  follows a `fade` curve. Kinds (erode, curve, edge, gain): core additive (0.08-0.95, 1.0, 0.18, 9) with a black-body ramp
+  (dark ember (0.02, 0.008, 0.004) -> red (0.5, 0.08, 0.01) -> orange (2.6, 0.7, 0.08) -> yellow (6, 3.2, 0.6) -> (9, 7.5, 4)
+  at temperature 1), hottest in the middle, alpha 1 -> 0.8 at 60 % -> 0; flame blended and emissive (0.08-0.95, 1.2, 0.07, 9),
+  same black body, cooler with age (`(1-f)^2.4`) and with distance from the heart, alpha 1 until 85 % then 0; soot blended
+  (0.25-0.85, 1.3, 0.1, 2), black-brown (0.012, 0.009, 0.007) -> dark grey (0.12) at 100 %, an orange glow inside for the
+  first 30 %, alpha 0 until 10 %, 0.9 at 20 %, 0.85 at 60 %, 0 at the end; smoke blended (0.1-0.8, 1.2, 0.15, 2), (0.025,
+  0.02, 0.016) -> (0.2) grey, glow for the first 20 %, alpha 0 until 8 %, 0.75 at 20 %, 0.6 at 50 %, 0 at the end; dust
+  blended (0.05-0.5, 1.0, 0.3, 1), tan (0.5, 0.42, 0.33), alpha 0.4 at 10 %, 0.3 at 50 %, 0. Flame, soot and smoke each have
+  two ramps with different seeds (a puff picks one at random), core and dust one. Flash (glow texture, additive, (10, 7, 3.5)
+  alpha 1 -> (1, 0.5, 0.2) alpha 0), shock ring (ring texture, additive, (5, 4, 3) alpha 0.9 -> 0) and sparks (8 untextured
+  materials, additive, (5, 3, 1) -> (2.5, 1, 0.25) at 40 % -> (0.8, 0.1, 0.02)) are plain colour ramps of 20 / 20 / 8 steps.
+  Bloom (`gfx_bloom`) catches everything above 1; TonyMcMapface turns the hottest of it whitish.
+- **Layers** (counts at knob `k`; `r` = radius clamped to 1.5-6 m; puffs grow from the first to the second diameter with an
+  ease-out of exponent 2, flash 3). Flash: one additive glow billboard 0.8 -> 1.8 x r, 0.2 s (0.35 s, 0.7 x as big for a
+  flash-bang), put `min(0.4 r, half the distance)` toward the camera so the map does not cut it. Fire (rocket, frag, mine)
+  adds, all camera-facing quads: core 3 puffs, 0.3 -> 0.65 x r, 0.3-0.45 s, 0.5-1.5 m/s, drag 2/s; flame lobes `8 + 10k`, 0.3 ->
+  0.75 x r (each x 0.7-1.2), 0.8-1.5 s, flung 2.5-7 m/s x r/3.5, drag 3.2, lift 2.5; soot `6 + 10k`, 0.3 -> 0.65 x r, 1.6-3 s,
+  3-6.5 m/s x r/3.5 tilted up, drag 2.2, lift 0.9, spawned 0.3-0.6 r out; plume `5 + 6k`, 0.45 -> 0.95 x r, 4-6.5 s, sideways
+  0.8-2.8 and up 1-3.5 m/s, drag 1.1, lift 0.6. Sparks `30 + 90k` (20 + 30k for a flash-bang): additive streaks, 6-26 m/s x
+  max(r/3.5, 0.6), gravity 14, drag 0.6/s, stretched by speed, 0.5-1.8 s, bounce (0.7 along, 0.35 back) up to three times.
+  Debris `4 + 8k` **rocks** (3 shared meshes: icosphere of radius 0.07 with every corner moved to 0.55-1.45 x and squashed
+  1.3 / 0.7 / 1, flat shaded; 3 dark materials), scale 0.4-1.4, 5-14 m/s, gravity 22, tumbling 4-12 rad/s, bounce 0.6 along /
+  0.35 back, 2.5-3.5 s, shrinking over the last 0.5 s; while flying (first 0.9 s) each leaves a smoke puff (0.2 + 0.15 s ->
+  0.6 + 0.4 s in diameter, 0.9 s) every 0.1 s, only while more than 40 puffs are free. The nearest map surface within
+  `max(1.2, 0.45 r)` along the six axes (`MapCollision::raycast`; the floor ray starts 0.1 m up) gets: a scorch decal
+  (1.2-1.8 x r, `MapEntity`, 16 kept, oldest recycled); on a floor, `8 + 6k` dust puffs racing out along it (5-9 m/s x r/3.5,
+  1.2-2 s); at `k > 0.75` (and for a flash-bang) a thin additive shock ring (0.28 s, 0.5 -> 2.4 x r). Puffs slide along what
+  they meet; sparks and rocks bounce (one map ray per frame each). Budget: 260 puffs (spent in the order flash, core, flame,
+  soot, plume, dust), 700 sparks, 90 rocks alive at once.
+- **Textures** (`paint`, 96-128 px, grey shape under alpha; colour comes from the material): the eroded puff densities above,
+  a glow, a ring, soot with radial streaks.
+- **Light and shake.** With the setting above 0, `light.rs` replaces the 4 000 000 lm / 16 m / 0.6 s `Blast` light by one of
+  6 000 000 lm, 22 m, 0.9 s (flash-bang 5 000 000, 14 m, 0.3 s), colour (1, 0.75, 0.5), still scaled by Dynamic lights
+  and counted in `MAX_FLASHES` (a smoke grenade then has none); `boom` also writes `CameraShake {trauma 0.6 + 0.4k, range
+  12 + 4 r}` for fire booms (`hud::Shake` takes the larger of that and the old `Blast` shake, falling off linearly with distance).
+- **Cost** (**observed before the fireball rewrite, not re-measured**, Mansion rocket at the hall floor, 1280x720,
+  `GUNZ_FRAMETIMES=1`, 371 frames, three runs each): frame p50 1.8-2.0 ms and p99 3.6-4.4 ms at `gfx_explosions` 0, 0.6 and 1:
+  no difference beyond run-to-run noise.
+
 ### Graphics (`src/gfx.rs`, `src/gfx.wgsl`)
 
 No retail file: the retail `config.xml` has no graphics options we use. Everything here is ours (**inferred** values are
 chosen by eye). Saved in the profile as `gfx_*` lines (`Graphics::to_text`), edited live from the main menu's GRAPHICS tab
 and the pause menu's GRAPHICS overlay (same panel, `gfx::fill`), `--gfx original|enhanced|ultra` overrides the preset for
-one run. A missing key keeps the ENHANCED value, so profiles saved before this existed start ENHANCED.
+one run. A missing key keeps the ENHANCED value, so profiles saved before this existed start ENHANCED; the exception is `gfx_explosions` (reading `gfx_tonemap` resets it to 0 first), so a profile saved before the explosions setting keeps the retail explosions.
 
 - **Keys**: `gfx_tonemap` (`none reinhard aces agx tony filmic neutral`), `gfx_aa` (`off fxaa smaa msaa2 msaa4`),
   `gfx_aniso` (`1 2 4 8 16`), `gfx_vsync` (`0|1`), `gfx_fps` (`0 30 60 90 120 144 240`, 0 = no limit), and sliders
   `gfx_exposure` (EV -2..2), `contrast` (0.7..1.5), `saturation` (0..2), `bloom`, `sharpen`, `fog`, `vignette`, `grain`,
-  `aberration`, `motion_blur`, `speed_fx`, `low_health`, `hit_flash`, `light_actors`, `light_dynamic`, `light_shadow` (0..1,
-  0 = off) and `fov` (70..120, horizontal at 16:9, default 90 = the original `2 atan(9/16)` vertical). Bad keys or values are
+  `aberration`, `motion_blur`, `speed_fx`, `low_health`, `hit_flash`, `light_actors`, `light_dynamic`, `light_shadow`,
+  `explosions` (0..1, 0 = RETAIL) and `fov` (70..120, horizontal at 16:9, default 90 = the original `2 atan(9/16)` vertical). Bad keys or values are
   profile errors, like `controls.rs`.
 - **Presets** (`Graphics::preset`; they leave vsync, the frame limit and the field of view alone): ORIGINAL = tonemapping none,
   4x MSAA, nothing else: the camera has exactly the components it had before this module, so the image is the one
   `Tonemapping::None` rendering always gave (**observed**: a Mansion shot differs from one taken before the module in 0 of
   631 050 pixels outside the HUD boxes). ENHANCED = HDR, TonyMcMapface, +0.2 EV, 105 % contrast, 110 % saturation,
   bloom 30 %, sharpening 30 %, vignette 30 %, 8x filtering, speed/low-health/hit effects, character lighting 80 %, dynamic
-  lights 80 %, contact shadows 60 % (new profiles start here). ULTRA = SMAA, 16x filtering, +0.3 EV, bloom 50 %, sharpening
-  50 %, fog 25 %, vignette 40 %, grain 20 %, aberration 20 %, motion blur 40 %, lighting 100 %/100 %/80 %. The panel marks
+  lights 80 %, contact shadows 60 %, explosions 60 % (new profiles start here). ULTRA = SMAA, 16x filtering, +0.3 EV, bloom 50 %, sharpening
+  50 %, fog 25 %, vignette 40 %, grain 20 %, aberration 20 %, motion blur 40 %, lighting 100 %/100 %/80 %, explosions 100 %. The panel marks
   the preset the settings equal, else CUSTOM.
 - **Speed effects** (`speed_fx`, scales all of them; none in ORIGINAL): radial blur and light rays running outward while the
   player tumbles or falls fast; a dash adds a kick (`Fx::kick`, 1 at its start, 0 after 0.35 s) that widens the view up to

@@ -274,6 +274,13 @@ pub struct Melee {
     prev_guard: bool,
 }
 
+impl Melee {
+    /// A blow's clip is playing: the blade is swinging ([`crate::slashfx`] trails it).
+    pub fn swinging(&self) -> bool {
+        matches!(self.phase, Phase::Blow { .. })
+    }
+}
+
 /// A blow reached its hit frame.
 #[derive(Message, Clone, Debug)]
 struct Strike {
@@ -853,6 +860,7 @@ fn resolve(
     mut impact: MessageWriter<Impact>,
     mut req: MessageWriter<ActionRequest>,
     mut vfx: MessageWriter<Vfx>,
+    mut hits: MessageWriter<crate::slashfx::Hit>,
     mut melee: Query<&mut Melee>,
     actors: Query<
         (
@@ -986,6 +994,11 @@ fn resolve(
                 point: p,
                 dir: d,
                 amount,
+            });
+            hits.write(crate::slashfx::Hit {
+                attacker: s.attacker,
+                point: p,
+                dir: d,
             });
             vfx.write(Vfx::Elu {
                 name: ["sword_damage1", "sword_damage2", "sword_damage3"]

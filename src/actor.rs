@@ -506,6 +506,13 @@ pub struct Actor {
     tech: Tech,
 }
 
+impl Actor {
+    /// Every weapon model root of the actor (held and holstered; the holstered are hidden).
+    pub fn weapon_roots(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.weapons.iter().flatten().copied()
+    }
+}
+
 /// What to spawn: `pos` is the feet position in Bevy metres.
 pub struct ActorSpec {
     pub name: String,

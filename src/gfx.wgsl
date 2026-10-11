@@ -1,6 +1,7 @@
 // Screen effects of `gfx.rs`, one fullscreen pass before bloom and tonemapping (scene-linear
-// colours): contrast, camera-turn motion blur, radial blur and speed lines, hit flash, low-health
-// desaturation and heartbeat, film grain. `gfx.rs` removes the pass while every effect is idle.
+// colours): contrast, camera-turn motion blur, radial blur, speed lines and the dash burst, hit
+// flash, low-health desaturation and heartbeat, film grain. `gfx.rs` removes the pass while every
+// effect is idle.
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
 struct Fx {
@@ -13,7 +14,8 @@ struct Fx {
     pulse: f32,
     contrast: f32,
     blur: vec2<f32>,
-    pad2: vec2<f32>,
+    kick: f32,
+    pad: f32,
 }
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -40,7 +42,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     var col = textureSampleLevel(screen, samp, uv, 0.0).rgb;
     // motion blur along the camera's turn, radial blur towards the centre at speed
-    let smear = fx.blur - to_c * (fx.speed * 0.14 * edge);
+    let smear = fx.blur - to_c * ((fx.speed * 0.14 + fx.kick * 0.12) * edge);
     if length(smear) > 0.0004 {
         var acc = vec3(0.0);
         for (var i = 0; i < TAPS; i++) {
@@ -54,9 +56,19 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let g = pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
         col = pow(max((g - 0.5) * fx.contrast + 0.5, vec3(0.0)), vec3(2.2));
     }
-    if fx.speed > 0.01 {
-        let streak = hash(vec2(floor(atan2(to_c.y, to_c.x) * 48.0), floor(fx.time * 18.0)));
-        col += vec3(step(0.86, streak) * smoothstep(0.4, 1.0, r) * fx.speed * 0.22);
+    let rush = fx.speed + fx.kick * 1.5;
+    if rush > 0.01 {
+        // thin rays of light, each running outward from the centre at its own pace
+        let a = atan2(to_c.y, to_c.x * fx.aspect) * 60.0;
+        let h = hash(vec2(floor(a), 3.0));
+        let across = 1.0 - abs(fract(a) - 0.5) * 2.0;
+        let head = fract(h * 7.0 + fx.time * (1.5 + 2.0 * h)) * 1.6 - 0.2;
+        let along = r - head;
+        let dash = smoothstep(-0.25, 0.0, along) * (1.0 - smoothstep(0.0, 0.04, along));
+        let ray = step(0.72, h) * smoothstep(0.55, 1.0, across) * dash * smoothstep(0.35, 1.0, r);
+        col += vec3(0.8, 0.9, 1.0) * ray * rush * 0.35;
+        // the dash's first instant: a cold flash from the edges
+        col += vec3(0.25, 0.45, 0.8) * fx.kick * fx.kick * edge * 0.35;
     }
     // hit flash: red wash, strongest at the edges
     col += vec3(0.55, 0.03, 0.02) * fx.hurt * (0.12 + 0.88 * edge);

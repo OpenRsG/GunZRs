@@ -1648,7 +1648,10 @@ The guides' list, each run headless with the player (`.local/tech/all.sh`; Mansi
 | Wall hang cancel | `W`, `w:0.5;w+jump:0.25;w:0.6;guard:0.5;w+guard+jump:0.4` | wall hang cancel |
 
 The dash itself (`.local/tech/out/dashshot_*.png`, `w+dash` down the corridor): the `tumbleF` pose, the speed streaks and the
-blue `dash_effect` lines on the body in the frames 0.1-0.15 s into it.
+blue `dash_effect` lines on the body in the frames 0.1-0.15 s into it. Dust (the retail `ef_dust_1m`/`ef_dust_2m`, rings of
+about 1.5 and 3.9 m; `ef_dust_5m`/`10m` are large domes, unused): a ground dash (not a light step), a wall kick (the ring on
+the wall where the feet pushed; seen in `.local/tech/out/wk_1.65.png`) and a landing faster than 11 m/s (20 m/s: the
+larger ring; a plain jump lands at 9 m/s, no dust). Where the original shows them is **inferred**.
 
 Verification (headless, `gunz-play Mansion --bots 0 --script S`, `GUNZ_PROFILE` a throwaway; `--at 1391,1460,2 --yaw 270`
 faces a wall 7 m ahead). Observed lines:
@@ -2206,6 +2209,11 @@ one run. A missing key keeps the ENHANCED value, so profiles saved before this e
   lights 80 %, contact shadows 60 % (new profiles start here). ULTRA = SMAA, 16x filtering, +0.3 EV, bloom 50 %, sharpening
   50 %, fog 25 %, vignette 40 %, grain 20 %, aberration 20 %, motion blur 40 %, lighting 100 %/100 %/80 %. The panel marks
   the preset the settings equal, else CUSTOM.
+- **Speed effects** (`speed_fx`, scales all of them; none in ORIGINAL): radial blur and light rays running outward while the
+  player tumbles or falls fast; a dash adds a kick (`Fx::kick`, 1 at its start, 0 after 0.35 s) that widens the view up to
+  14 %, blurs harder, brightens the rays and flashes the edges blue; every 0.04 s of a dash's 0.3 s burst any actor leaves
+  an afterimage (`actor::afterimage`: its visible meshes on world-space copies of the joints, additive, cyan or red for
+  the red team, fading over 0.3 s). Not retail.
 - **Where it applies**: only in a match (`apply`, `drive` and `filtering` run when `game::Settings` exists); the main menu keeps
   its own look, so changing a slider there shows in the next match. The camera is in HDR when tonemapping, bloom, exposure or
   saturation need it (the map material writes scene-linear colour either way; the lightmap `x4` and sRGB maths are unchanged).

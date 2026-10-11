@@ -36,9 +36,10 @@ use crate::{
     view::{self, Shot},
 };
 use bevy::{
+    camera::visibility::NoFrustumCulling,
     ecs::system::SystemParam,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    mesh::skinning::SkinnedMeshInverseBindposes,
+    mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
     prelude::*,
 };
 use std::{collections::HashMap, f32::consts::PI, io, sync::Arc};
@@ -175,6 +176,7 @@ impl Plugin for ActorPlugin {
                         .after(player_input)
                         .run_if(|s: Res<Settings>| s.aim_assist > 0.0),
                     drive.in_set(ActorSet::Drive),
+                    afterimage.after(drive),
                     follow_camera.in_set(ActorSet::Camera),
                 ),
             );
@@ -1883,6 +1885,12 @@ fn drive(
                     on: e,
                     at: Transform::from_rotation(Quat::from_rotation_y(yaw_of(dir) - intent.yaw)),
                 });
+                if a.grounded {
+                    vfx.write(Vfx::Elu {
+                        name: "ef_dust_1m",
+                        at: Transform::from_translation(tf.translation),
+                    });
+                }
             }
             a.state = State::Tumble {
                 dir,
@@ -1956,6 +1964,12 @@ fn drive(
             // every kick is a fresh jump: another wall run, air dash and gravity cancel
             a.wall_spent = false;
             (a.tech.kicked, a.tech.dashed, a.tech.hold_spent) = (true, false, false);
+            // a puff of dust off the wall where the feet pushed (the ring's plane on the wall)
+            vfx.write(Vfx::Elu {
+                name: "ef_dust_1m",
+                at: Transform::from_translation(tf.translation - n * RADIUS + Vec3::Y * 0.6)
+                    .with_rotation(Quat::from_rotation_arc(Vec3::Y, n)),
+            });
             sound.write(ActorSound {
                 actor: e,
                 cue: Cue::Anim("hangonwall".into()),
@@ -2281,6 +2295,7 @@ fn drive(
                 a.wall = Some((n, now));
             }
         }
+        let impact = -a.vel.y;
         a.vel = Vec3::new(hv.x, a.vel.y, hv.z);
         if mv.grounded {
             a.vel.y = a.vel.y.max(0.0);
@@ -2294,6 +2309,17 @@ fn drive(
                     actor: e,
                     cue: Cue::Anim("man_jump".into()),
                 });
+                // dust ring of a hard landing (a plain jump lands at `JUMP` m/s: none)
+                if impact > 11.0 {
+                    vfx.write(Vfx::Elu {
+                        name: if impact > 20.0 {
+                            "ef_dust_2m"
+                        } else {
+                            "ef_dust_1m"
+                        },
+                        at: Transform::from_translation(tf.translation),
+                    });
+                }
             }
             a.air = 0.0;
             a.wall_spent = false;
@@ -2521,6 +2547,125 @@ fn drive(
                 commands.entity(e).remove::<Acting>();
             }
             _ => {}
+        }
+    }
+}
+
+/// Dash afterimage (**not retail**; the GRAPHICS panel's speed effects, off in ORIGINAL): a
+/// frozen, glowing copy of an actor's visible meshes that fades out where it was left.
+#[derive(Component)]
+struct Ghost {
+    age: f32,
+    alpha: f32,
+    mat: Handle<StandardMaterial>,
+}
+
+/// One afterimage per this many seconds of a dash's burst; each fades over `GHOST_LIFE`.
+const GHOST_EVERY: f32 = 0.04;
+const GHOST_LIFE: f32 = 0.3;
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn afterimage(
+    time: Res<Time>,
+    profile: Option<Res<crate::profile::Profile>>,
+    actors: Query<(&Actor, &Motor, Option<&Team>), Without<Dead>>,
+    children: Query<&Children>,
+    parts: Query<(
+        &Mesh3d,
+        Option<&SkinnedMesh>,
+        &InheritedVisibility,
+        &GlobalTransform,
+    )>,
+    globals: Query<&GlobalTransform>,
+    mut ghosts: Query<(Entity, &mut Ghost)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    let dt = time.delta_secs();
+    for (e, mut g) in &mut ghosts {
+        g.age += dt;
+        if g.age >= GHOST_LIFE {
+            commands.entity(e).despawn();
+        } else if let Some(mut m) = materials.get_mut(&g.mat) {
+            m.base_color
+                .set_alpha(g.alpha * (1.0 - g.age / GHOST_LIFE).powi(2));
+        }
+    }
+    let knob = crate::gfx::Knob::SpeedFx;
+    let strength = profile.map_or_else(
+        || crate::gfx::Graphics::default().get(knob),
+        |p| p.graphics.get(knob),
+    );
+    if strength <= 0.0 {
+        return;
+    }
+    for (a, m, team) in &actors {
+        let Some(t) = m.tumble else { continue };
+        if t > DASH_BURST || (t / GHOST_EVERY).floor() == ((t - dt) / GHOST_EVERY).floor() {
+            continue;
+        }
+        let (r, g, b) = if team == Some(&Team::Red) {
+            (1.6, 0.35, 0.2)
+        } else {
+            (0.3, 0.75, 1.6)
+        };
+        let alpha = 0.45 * strength;
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::linear_rgba(r, g, b, alpha),
+            unlit: true,
+            alpha_mode: AlphaMode::Add,
+            ..default()
+        });
+        let root = commands
+            .spawn((
+                Ghost {
+                    age: 0.0,
+                    alpha,
+                    mat: mat.clone(),
+                },
+                Transform::IDENTITY,
+                Visibility::Visible,
+            ))
+            .id();
+        // world-space copies of the joints, shared by every skinned part
+        let mut joints = HashMap::new();
+        for d in children.iter_descendants(a.model) {
+            let Ok((mesh, skin, shown, at)) = parts.get(d) else {
+                continue;
+            };
+            if !shown.get() {
+                continue;
+            }
+            let part = (
+                Mesh3d(mesh.0.clone()),
+                MeshMaterial3d(mat.clone()),
+                ChildOf(root),
+            );
+            match skin {
+                Some(s) => {
+                    let copied = s
+                        .joints
+                        .iter()
+                        .map(|j| {
+                            *joints.entry(*j).or_insert_with(|| {
+                                let at = globals
+                                    .get(*j)
+                                    .map_or(Transform::IDENTITY, |g| g.compute_transform());
+                                commands.spawn((at, ChildOf(root))).id()
+                            })
+                        })
+                        .collect();
+                    commands.spawn((
+                        part,
+                        SkinnedMesh {
+                            inverse_bindposes: s.inverse_bindposes.clone(),
+                            joints: copied,
+                        },
+                        NoFrustumCulling,
+                    ));
+                }
+                None => _ = commands.spawn((part, at.compute_transform())),
+            }
         }
     }
 }

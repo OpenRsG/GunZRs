@@ -447,7 +447,9 @@ struct Fx {
     contrast: f32,
     /// Motion blur smear in screen units.
     blur: Vec2,
-    pad2: Vec2,
+    /// 1 at the start of a dash, easing to 0 over its burst.
+    kick: f32,
+    pad: f32,
 }
 
 impl FullscreenMaterial for Fx {
@@ -580,6 +582,12 @@ fn put<C: Component>(c: &mut EntityCommands, v: Option<C>) {
     };
 }
 
+/// The vertical field of view of the settings: the knob is horizontal at 16:9, the game's way of
+/// saying it.
+fn base_fov(g: &Graphics) -> f32 {
+    2.0 * ((g.get(Knob::Fov).to_radians() / 2.0).tan() * 9.0 / 16.0).atan()
+}
+
 /// Puts the settings on the camera: render components, window present mode and field of view.
 fn apply(
     profile: Option<Res<Profile>>,
@@ -597,9 +605,8 @@ fn apply(
         return;
     }
     let k = |k| g.get(k);
-    // the field of view is horizontal at 16:9, the game's way of saying it
     if let Projection::Perspective(p) = &mut *projection {
-        let want = 2.0 * ((k(Knob::Fov).to_radians() / 2.0).tan() * 9.0 / 16.0).atan();
+        let want = base_fov(&g);
         // (the camera spawns at 90, which then stays bit for bit what it was)
         if (p.fov - want).abs() > 1e-4 {
             p.fov = want;
@@ -778,12 +785,13 @@ struct Live {
     hurt: f32,
     low: f32,
     speed: f32,
+    kick: f32,
     turn: Option<Quat>,
 }
 
 /// Runs the custom effects: hit flash on damage, low-health drain and heartbeat, speed effects
-/// while tumbling or falling fast, motion blur from the camera's turn; the pass stays off the
-/// camera while all of them are idle.
+/// while tumbling or falling fast (a dash's start also widens the view), motion blur from the
+/// camera's turn; the pass stays off the camera while all of them are idle.
 #[allow(clippy::too_many_arguments)]
 fn drive(
     profile: Option<Res<Profile>>,
@@ -795,7 +803,7 @@ fn drive(
         (
             Entity,
             &Transform,
-            &Projection,
+            &mut Projection,
             Option<&mut Fx>,
             Option<&mut ChromaticAberration>,
         ),
@@ -804,7 +812,7 @@ fn drive(
     mut commands: Commands,
     mut live: Local<Live>,
 ) {
-    let Ok((e, transform, projection, fx, aberration)) = camera.single_mut() else {
+    let Ok((e, transform, mut projection, fx, aberration)) = camera.single_mut() else {
         return;
     };
     let g = profile.map_or_else(Graphics::default, |p| p.graphics.clone());
@@ -818,7 +826,7 @@ fn drive(
         }
     }
     live.hurt = (live.hurt - dt * 2.5).max(0.0);
-    let (mut low, mut speed) = (0.0, 0.0);
+    let (mut low, mut speed, mut kick) = (0.0, 0.0, 0.0);
     if let Some((_, v, motor, dead)) = me {
         let hp = v.hp / v.max_hp.max(1.0);
         low = if dead {
@@ -833,16 +841,27 @@ fn drive(
             } else {
                 fall
             };
+            // a dash punches in: wider view, harder blur and streaks, then eases out
+            kick = m.tumble.map_or(0.0, |t| (1.0 - t / 0.35).max(0.0));
         }
     }
     live.low = ease(live.low, low, 5.0);
     live.speed = ease(live.speed, speed, 8.0);
+    live.kick = kick;
+    if let Projection::Perspective(p) = &mut *projection {
+        let want = base_fov(&g) * (1.0 + 0.14 * live.kick * k(Knob::SpeedFx));
+        if (p.fov - want).abs() > 1e-4 {
+            p.fov = want;
+        }
+    }
     // the screen smear of the turn since last frame: where the old view centre now appears
     let mut blur = Vec2::ZERO;
     let turned = transform.rotation;
-    if let (Some(before), Projection::Perspective(p), true) =
-        (live.turn, projection, k(Knob::MotionBlur) > 0.0 && dt > 0.0)
-    {
+    if let (Some(before), Projection::Perspective(p), true) = (
+        live.turn,
+        &*projection,
+        k(Knob::MotionBlur) > 0.0 && dt > 0.0,
+    ) {
         let seen = turned.inverse() * (before * Vec3::NEG_Z);
         if seen.z < -0.2 {
             let tan_v = (p.fov / 2.0).tan();
@@ -864,7 +883,7 @@ fn drive(
         hurt: live.hurt * k(Knob::HitFlash),
         low: live.low * k(Knob::LowHealth),
         speed: live.speed * k(Knob::SpeedFx),
-        aspect: match projection {
+        aspect: match &*projection {
             Projection::Perspective(p) => p.aspect_ratio,
             _ => 16.0 / 9.0,
         },
@@ -873,6 +892,7 @@ fn drive(
             * k(Knob::LowHealth)
             * if me.is_some_and(|m| m.3) { 0.0 } else { 1.0 },
         blur,
+        kick: live.kick * k(Knob::SpeedFx),
         ..default()
     };
     let active = want.grain > 0.0
@@ -880,6 +900,7 @@ fn drive(
         || want.hurt > 0.005
         || want.low > 0.005
         || want.speed > 0.005
+        || want.kick > 0.005
         || blur.length() > 0.0004;
     match (active, fx) {
         (true, Some(mut f)) => *f = want,
@@ -1075,7 +1096,7 @@ fn effects(m: &mut ChildSpawnerCommands) {
             ..default()
         },
         children![text(
-            "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, streaks) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched.",
+            "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, light rays, a dash's wider view and afterimages) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched.",
             13.0,
             DIM
         )],

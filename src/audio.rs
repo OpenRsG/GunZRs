@@ -27,18 +27,11 @@ use std::collections::{BTreeSet, HashMap};
 /// (its default `MAXDISTANCE` is 4000 cm).
 const DEFAULT_REACH: f32 = 40.0;
 /// One-shot entities removed after this long even if no audio device ever consumed them.
-const SOUND_LIFE: f32 = 10.0;
+pub(crate) const SOUND_LIFE: f32 = 10.0;
 /// Simultaneous one-shots; further 3D sounds are dropped (machine guns x bots).
 const MAX_LIVE: usize = 48;
 /// Looping ambient sources playing at once (the nearest win).
 const MAX_AMBIENT: usize = 8;
-/// Kill-streak sound (**inferred**: the retail data has no announcer or multikill clips; the 0.3 s
-/// `if_score_get` score blip fits) and its playback speeds for streak steps 1..4: unison, major
-/// third, fifth, octave. A kill within `STREAK_SECS` of the last continues the streak
-/// (**inferred**); the player's death ends it.
-const STREAK_SOUND: &str = "if_score_get";
-const STREAK_PITCH: [f32; 4] = [1.0, 1.26, 1.5, 2.0];
-const STREAK_SECS: f32 = 10.0;
 /// A shell casing hits the floor this long after the shot (**inferred**).
 const SLUG_DELAY: f32 = 0.45;
 /// Impact sounds per frame (a shotgun blast is eight pellets).
@@ -322,7 +315,7 @@ struct Ambient {
 struct Ambients(Vec<Ambient>);
 
 #[derive(Component)]
-struct Expires(f32);
+pub(crate) struct Expires(pub(crate) f32);
 
 /// Shell casings and other sounds due later: (due `Time::elapsed_secs`, stem, at).
 #[derive(Resource, Default)]
@@ -674,38 +667,18 @@ fn voice(woman: bool) -> &'static str {
     if woman { "fem" } else { "mal" }
 }
 
-/// The player's optional hit and kill feedback: `custom/hitsound.wav` on every hit it lands and
-/// the rising kill-streak sound ([`STREAK_PITCH`]).
-#[allow(clippy::too_many_arguments)]
+/// The player's optional `custom/hitsound.wav` on every hit it lands. (The combo layer's own
+/// kill and spree sounds are `hud/combo.rs`.)
 fn feedback(
-    time: Res<Time>,
     settings: Res<Settings>,
     profile: Res<Profile>,
     mut damage: MessageReader<Damage>,
-    mut killed: MessageReader<Killed>,
     players: Query<(), With<Player>>,
-    mut streak: Local<(u32, f32)>,
     mut sfx: Sfx,
 ) {
     for d in damage.read() {
         if settings.hit_sound && players.contains(d.attacker) && d.attacker != d.target {
             sfx.play_hitsound(&profile);
-        }
-    }
-    let now = time.elapsed_secs();
-    for k in killed.read() {
-        if players.contains(k.victim) {
-            streak.0 = 0;
-        } else if settings.kill_sounds && players.contains(k.killer) {
-            streak.0 = if now - streak.1 > STREAK_SECS {
-                1
-            } else {
-                streak.0 + 1
-            };
-            streak.1 = now;
-            let step = streak.0.min(STREAK_PITCH.len() as u32) as usize;
-            info!("kill streak {} -> step {step}", streak.0);
-            sfx.play_at(STREAK_SOUND, true, Vec3::ZERO, STREAK_PITCH[step - 1]);
         }
     }
 }

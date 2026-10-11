@@ -1052,7 +1052,7 @@ fn effects(m: &mut ChildSpawnerCommands) {
             ..default()
         },
         children![controls::text(
-            "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, light rays, a dash's wider view and afterimages) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched.",
+            "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, light rays, a dash's wider view) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched. The dash trail has its own settings on the PLAYER page.",
             body(13.0),
             DIM
         )],

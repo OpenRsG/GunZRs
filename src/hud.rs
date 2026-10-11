@@ -16,6 +16,7 @@ use crate::{
 use bevy::{image::ImageSampler, prelude::*, transform::TransformSystems};
 use std::collections::VecDeque;
 
+mod combo;
 mod feed;
 mod fx;
 mod panels;
@@ -28,7 +29,7 @@ impl Plugin for HudPlugin {
             .add_message::<Notice>()
             .init_resource::<Hurt>()
             .init_resource::<Shake>()
-            .add_plugins((fx::plugin, feed::plugin))
+            .add_plugins((fx::plugin, feed::plugin, combo::plugin))
             .add_systems(
                 Update,
                 (

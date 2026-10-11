@@ -630,6 +630,37 @@ the pause menu / match-end buttons exit with code 3 (back to the menu) or 4 (sam
 the launcher re-executes accordingly. Rules: see "Game modes"; the result is VICTORY / DEFEAT / DRAW
 for the player and the HUD scoreboard stays up with the buttons.
 
+### Dash trail and the PLAYER page stage (`src/dashfx.rs`, `menu::demo`; **not retail**)
+
+- **Settings** (cosmetic, in the profile, not in the graphics presets; `dashfx::Trail`): `dash_style` =
+  `off` / `afterimage` / `particles` / `both` (default `afterimage`), `dash_color` = `team` / `cyan` / `gold` /
+  `violet` / `ember` / `toxic` / `rainbow` (default `team`: red for the red team, cyan otherwise, as before), `dash_amount`
+  0..1 (default 0.5; 0 sheds nothing). Afterimage opacity is `0.54 * amount` (0.27 at the default, what the GRAPHICS
+  panel's speed effects gave in ENHANCED); particles per burst step are `round(4 + 14 * amount)`, three times that for the first
+  piece of a burst. The GRAPHICS speed
+  effects no longer touch the trail (they keep the radial blur, light rays and the wider view); ORIGINAL no longer
+  hides the afterimages, `dash_style=off` does. The colour applies to the player's own trail (`game::Player`), every other
+  actor keeps its team colour with the same style and amount.
+- **One way in**: `dashfx::Dash { model, dir, team, own }` is written once per `dashfx::due` step (0.04 s, inside the first
+  0.3 s = `actor::DASH_BURST` of a tumble) by `actor::dash_trail` in a match and by `menu::demo` on the PLAYER page;
+  `DashFxPlugin` (added by `GamePlugin` and by `menu::run`) spawns the pieces. An afterimage is the old ghost: the model's
+  visible meshes on world-space copies of the joints, additive, fading over 0.3 s. A particle is an additive streak
+  (one shared mesh, a material per colour at 2.5x the colour so bloom catches it, at most 400 alive) that starts anywhere on the
+  body's height (0.05-1.7 m), flies back against `dir` at 2-7 m/s with drag and a little fall, and shrinks over 0.3-0.7 s.
+  `rainbow` takes `phase = 3 * elapsed` turns of the spectrum per piece.
+- **Stage**: the preview model carries an `Animator` playing `login_idle` of motion type 8 (the bare-handed item set;
+  **observed**: the clip is the lobby pose, `gm="0"`, a relaxed stand with the hands at the sides; the weapon sets' `login_idle`
+  poses hold a weapon). Every sex or clothes change respawns the model with the idle again.
+- **Demo**: a DASH TRAIL panel under VIEW (style, colour swatches, an amount slider with -/+, DEMO). The character turns to
+  face the camera and plays `tumbleL` (set 8) while sliding 0.35 m to the screen's right (`DEMO_SPAN`, scaled with the
+  framing distance), then `tumbleR` back; each dash eases out over 0.45 s and sheds the trail for 0.3 s. A run starts 1 s
+  after the page opens, 4 s after the previous one, 0.4 s after a dash setting changed and at once on DEMO. Settings are
+  saved to the profile once a change settles (not while the mouse is held).
+- **Headless shots**: `--menu-page player --shot X.png` steps the clock 1/60 s a frame, so the idle pose and the demo are the
+  same on every run; the picture is the frame at `GUNZ_MENU_AT` seconds (default 2). The first run's dashes begin at 1.35 s
+  and 2.7 s; `GUNZ_MENU_AT=1.5` shows the first dash with its trail, `0.5` the idle. Profile files (`GUNZ_PROFILE`) pick the
+  trail.
+
 ### Game modes (`src/menu.rs` `Mode`, `src/session.rs`, `src/modes.rs`)
 
 **Every retail game type** (**observed**: `GAMETYPE id` blocks of `system/gametypecfg.xml`, the
@@ -1244,16 +1275,12 @@ a plain stem (97 distinct, all resolve in `sound/effect/`, **observed**; stems a
 `game::PlaySound { stem, at }` message (a position) both play them; the directory part is dropped
 and case ignored.
 
-### Combat options: kill-streak sound, custom hit sound, static spread (`audio.rs`, `combat.rs`)
+### Combat options: custom hit sound, static spread (`audio.rs`, `combat.rs`)
 
-iGunZ-patch-note ideas, own implementation; all three are `game::Settings` toggles (off the pause menu or
-`--[no-]kill-sounds|hit-sound|static-spread`).
+iGunZ-patch-note ideas, own implementation; both are `game::Settings` toggles (off the pause menu or
+`--[no-]hit-sound|static-spread`). The kill-streak sound that used to be here (`if_score_get` stepped in pitch) is
+replaced by the combo layer below (`kill_sounds` now gates its synthesized sounds).
 
-- **Kill-streak sound** (`kill_sounds`, default on). **Observed**: no `sound/effect/` stem is an announcer, multikill
-  or streak clip (names listed; `nar*` files not decoded). **Inferred** choice: `if_score_get` (a 0.3 s
-  UI score blip) at playback speed 1.0, 1.26, 1.5, 2.0 (unison, major third, fifth, octave) for the player's 1st..4th+
-  consecutive kill, 2D. A kill within 10 s of the previous continues the streak (**inferred**); the player's own death
-  ends it. Log line `kill streak N -> step S`.
 - **Custom hit sound** (`hit_sound`, default off): every `Damage` the player deals to another actor plays
   `<profile dir>/custom/hitsound.wav` (2D, in addition to retail `fx_myhit`). PCM WAV or Ogg only (the same decode
   check as retail files); read once on first use, a missing/unplayable file is logged once and stays silent.
@@ -1261,6 +1288,47 @@ iGunZ-patch-note ideas, own implementation; all three are `game::Settings` toggl
   radius, but the bullet offset is a fixed point of a golden-angle (2.39996 rad) spiral over the unit disc,
   `r = sqrt((k+0.5)/n)`: a shotgun's 12 pellets are points 0..11 of 12 (the same rosette every shot), a single-bullet
   gun cycles through 8 points by shot count (**inferred** count). `r >= sqrt(0.5/n)`, so no guaranteed centre bullet.
+
+### Combo and killing spree (`src/hud/combo.rs`, `src/hud/combo/synth.rs`; **not retail**)
+
+An arcade layer over the player's own play, own design: every number below is **inferred**. **Observed**: the retail
+data has no announcer, multikill or streak clips (names listed; `nar*` files not decoded), so the sounds are synthesized.
+Toggles: `combo` (meter, banners, pause menu "Combo", `--[no-]combo`) and `kill_sounds` (all sounds); the rules run
+either way. It replaces the old `if_score_get` kill-streak blip.
+
+- **Source**. A `combat::Wounded` whose attacker is the player and whose target is not (so after friendly-fire,
+  spawn protection and overkill; self damage, NPCs and quest monsters count, allies do not) is a hit worth HP+AP lost.
+  `Killed` with killer = player and victim != player is a kill; `Killed` with victim = player ends everything.
+- **Combo**. Each hit adds 1 and restarts a 2.5 s timer; the combo ends when it runs out or the player dies
+  (`combo: ended hits=H score=S`). Multiplier x1, then x2/x3/x4/x5/x6/x7/x8 at 5/10/20/35/50/70/100 hits. A hit scores
+  `round(HP+AP) x multiplier`. A kill scores `(100 + 50 headshot + 50 melee + banner bonus) x multiplier`
+  (`Killed::head`; melee = `combat::is_melee` of the item's weapon kind). Log: `combo: hits=.. mult=x.. score=.. (+..)`,
+  `combo: kill +P chain=C spree=S score=..`.
+- **Multikill**: kills less than 4 s apart chain (2 DOUBLE KILL, 3 TRIPLE KILL, 4 QUAD KILL, 5 MULTI KILL, 6+ MONSTER
+  KILL; tiers 0..4). **Spree**: kills since the last death (3 KILLING SPREE, 5 RAMPAGE, 7 DOMINATING, 10 UNSTOPPABLE,
+  15 GODLIKE, then GODLIKE again every 5th; tiers 0..4). Each announced event is worth `250 x (tier+1)` x multiplier;
+  a kill that is both shows the higher tier as the headline and the other as the line under it. Log: `spree: TITLE
+  (tier T) SUB`.
+- **Meter** (left of the screen, 24 px in, 34% down: clear of KILLS/DEATHS top left, the clock, the feed from y = 100,
+  the confirmation at 56% and the vitals): hit count (64 px digits, punches +30% for 0.12 s per hit), "COMBO", a
+  multiplier badge (pops +60% for 0.3 s on a step, its box shadow grows with the multiplier), a bar draining over the
+  2.5 s window, the score (rolls up at ~12/s) and "+N" popups (hits white, kills amber, 0.8 s, rising 34 px). Colour
+  ramps INK -> ACCENT -> DANGER with the multiplier. Hidden without a combo.
+- **Banner** (upper centre, 19% down, between the clock and the confirmation): headline 44/52/60/70/82 px by tier in
+  the same ramp (tier 0 pale amber .. tier 4 red), slams in from 2.2x to 0.92x then 1.0x (0.24 s), shakes for 0.4 s,
+  holds, fades out; 2 s in all. A radial screen-edge flash of the tier colour (0.32 alpha at the edge, 0.45 s).
+  A newer banner replaces the old one.
+- **Sounds** (`synth.rs`: sums of sines and additive saws, exponential envelopes, exponential pitch sweeps, one-pole
+  filtered noise; 44.1 kHz 16-bit mono PCM WAV built in memory at startup, played 2D with `PlaybackSettings::DESPAWN`
+  and the `audio::Expires` reaper; headless `--shot` runs log `sfx combo NAME xSPEED` instead of playing):
+  `tick` 0.09 s (hit; playback speed climbs a major pentatonic run, +0/2/4/7/9/12/14/16 semitones by hit number, then
+  holds; skipped on the frame of a kill), `step` 0.5 s (multiplier up: sine sweep 220 -> 1760 Hz, noise whoosh, ding;
+  speed +5% per multiplier above x2), `kill` 0.6 s (190 -> 45 Hz kick, noise snap, C major chord C5 E5 G5 C6), `ping`
+  0.4 s (headshot: 2637/3951 Hz partials), `sting0..4` 1.2/1.375/1.55/1.725/1.9 s (bass drop, noise impact, rising major
+  arpeggio of 4+tier notes, shimmer of high partials; a whole tone higher and louder per tier). Peaks 0.45 (tick) ..
+  0.9 of full scale. Not auditioned: the author could only measure them (duration, peak, spectrum, `ffprobe`).
+- Headless proof: `--mode training --protect 0 --loadout 2010000,2110002,2100001` with pulsed `attack` at the four
+  dummies (yaw -15, +1, +2, -5 degrees from `--at 1391,1300,2 --yaw 0` on Mansion).
 
 ### HUD extras: damage report, teammate bars, screen blood (`src/hud/fx.rs`)
 
@@ -2166,8 +2234,9 @@ Headless shot hooks: `GUNZ_INV_SLOT=N` (9 = quest items) and `GUNZ_INV_SELL=1` (
 
 ### Pause-menu toggles (`profile::OPTS`, `session.rs`)
 
-Six `game::Settings` bools, shown as ON/OFF buttons under the Esc menu's CONTROLS button and saved as
-`opt_kill_sounds`, `opt_hit_sound`, `opt_static_spread`, `opt_team_bars`, `opt_screen_blood`, `opt_killcam`
+Eight `game::Settings` bools, shown as ON/OFF buttons under the Esc menu's CONTROLS button and saved as
+`opt_kill_sounds`, `opt_combo`, `opt_hit_sound`, `opt_static_spread`, `opt_team_bars`, `opt_screen_blood`,
+`opt_killcam`, `opt_realistic_blood`
 (`=0|1`; a missing key keeps the `Settings` default). `gunz-play --NAME` / `--no-NAME` (`_` as `-`) overrides
 the profile for that run only and is not saved; clicking a toggle saves it. The hit sound is the player's own
 file `<profile dir>/custom/hitsound.wav` (`Profile::hitsound_path`; none for a throwaway profile).
@@ -2218,9 +2287,8 @@ one run. A missing key keeps the ENHANCED value, so profiles saved before this e
   the preset the settings equal, else CUSTOM.
 - **Speed effects** (`speed_fx`, scales all of them; none in ORIGINAL): radial blur and light rays running outward while the
   player tumbles or falls fast; a dash adds a kick (`Fx::kick`, 1 at its start, 0 after 0.35 s) that widens the view up to
-  14 %, blurs harder, brightens the rays and flashes the edges blue; every 0.04 s of a dash's 0.3 s burst any actor leaves
-  an afterimage (`actor::afterimage`: its visible meshes on world-space copies of the joints, additive, cyan or red for
-  the red team, fading over 0.3 s). Not retail.
+  14 %, blurs harder, brightens the rays and flashes the edges blue. The dash's afterimages and particles are the separate
+  dash trail settings (see "Dash trail"). Not retail.
 - **Where it applies**: only in a match (`apply`, `drive` and `filtering` run when `game::Settings` exists); the main menu keeps
   its own look, so changing a slider there shows in the next match. The camera is in HDR when tonemapping, bloom, exposure or
   saturation need it (the map material writes scene-linear colour either way; the lightmap `x4` and sRGB maths are unchanged).

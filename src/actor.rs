@@ -36,10 +36,9 @@ use crate::{
     view::{self, Shot},
 };
 use bevy::{
-    camera::visibility::NoFrustumCulling,
     ecs::system::SystemParam,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    mesh::skinning::SkinnedMeshInverseBindposes,
     prelude::*,
 };
 use std::{collections::HashMap, f32::consts::PI, io, sync::Arc};
@@ -68,7 +67,7 @@ pub const FALL: f32 = 30.0;
 /// no state holds a dash, but around a melee dash the position steps reach 12-13 m/s against the
 /// 10 m/s run (`.local/py/gzr_dash2.py`). The old 9 m/s decaying tumble was slower than running.
 const DASH: f32 = 16.0;
-const DASH_BURST: f32 = 0.3;
+pub const DASH_BURST: f32 = 0.3;
 /// A jump pressed this long before landing jumps on landing.
 const JUMP_BUFFER: f32 = 0.15;
 /// Wall kick: horizontal speed away from the wall and takeoff speed up (**observed**: the
@@ -176,7 +175,7 @@ impl Plugin for ActorPlugin {
                         .after(player_input)
                         .run_if(|s: Res<Settings>| s.aim_assist > 0.0),
                     drive.in_set(ActorSet::Drive),
-                    afterimage.after(drive),
+                    dash_trail.after(drive),
                     follow_camera.in_set(ActorSet::Camera),
                 ),
             );
@@ -2551,121 +2550,25 @@ fn drive(
     }
 }
 
-/// Dash afterimage (**not retail**; the GRAPHICS panel's speed effects, off in ORIGINAL): a
-/// frozen, glowing copy of an actor's visible meshes that fades out where it was left.
-#[derive(Component)]
-struct Ghost {
-    age: f32,
-    alpha: f32,
-    mat: Handle<StandardMaterial>,
-}
-
-/// One afterimage per this many seconds of a dash's burst; each fades over `GHOST_LIFE`.
-const GHOST_EVERY: f32 = 0.04;
-const GHOST_LIFE: f32 = 0.3;
-
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn afterimage(
+/// Asks [`crate::dashfx`] for a trail piece every step of a dash's burst (the tumble's first
+/// `DASH_BURST` seconds).
+#[allow(clippy::type_complexity)]
+fn dash_trail(
     time: Res<Time>,
-    profile: Option<Res<crate::profile::Profile>>,
-    actors: Query<(&Actor, &Motor, Option<&Team>), Without<Dead>>,
-    children: Query<&Children>,
-    parts: Query<(
-        &Mesh3d,
-        Option<&SkinnedMesh>,
-        &InheritedVisibility,
-        &GlobalTransform,
-    )>,
-    globals: Query<&GlobalTransform>,
-    mut ghosts: Query<(Entity, &mut Ghost)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut commands: Commands,
+    actors: Query<(&Actor, &Motor, Option<&Team>, Has<Player>), Without<Dead>>,
+    mut out: MessageWriter<crate::dashfx::Dash>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut g) in &mut ghosts {
-        g.age += dt;
-        if g.age >= GHOST_LIFE {
-            commands.entity(e).despawn();
-        } else if let Some(mut m) = materials.get_mut(&g.mat) {
-            m.base_color
-                .set_alpha(g.alpha * (1.0 - g.age / GHOST_LIFE).powi(2));
-        }
-    }
-    let knob = crate::gfx::Knob::SpeedFx;
-    let strength = profile.map_or_else(
-        || crate::gfx::Graphics::default().get(knob),
-        |p| p.graphics.get(knob),
-    );
-    if strength <= 0.0 {
-        return;
-    }
-    for (a, m, team) in &actors {
-        let Some(t) = m.tumble else { continue };
-        if t > DASH_BURST || (t / GHOST_EVERY).floor() == ((t - dt) / GHOST_EVERY).floor() {
-            continue;
-        }
-        let (r, g, b) = if team == Some(&Team::Red) {
-            (1.6, 0.35, 0.2)
-        } else {
-            (0.3, 0.75, 1.6)
-        };
-        let alpha = 0.45 * strength;
-        let mat = materials.add(StandardMaterial {
-            base_color: Color::linear_rgba(r, g, b, alpha),
-            unlit: true,
-            alpha_mode: AlphaMode::Add,
-            ..default()
-        });
-        let root = commands
-            .spawn((
-                Ghost {
-                    age: 0.0,
-                    alpha,
-                    mat: mat.clone(),
-                },
-                Transform::IDENTITY,
-                Visibility::Visible,
-            ))
-            .id();
-        // world-space copies of the joints, shared by every skinned part
-        let mut joints = HashMap::new();
-        for d in children.iter_descendants(a.model) {
-            let Ok((mesh, skin, shown, at)) = parts.get(d) else {
-                continue;
-            };
-            if !shown.get() {
-                continue;
-            }
-            let part = (
-                Mesh3d(mesh.0.clone()),
-                MeshMaterial3d(mat.clone()),
-                ChildOf(root),
-            );
-            match skin {
-                Some(s) => {
-                    let copied = s
-                        .joints
-                        .iter()
-                        .map(|j| {
-                            *joints.entry(*j).or_insert_with(|| {
-                                let at = globals
-                                    .get(*j)
-                                    .map_or(Transform::IDENTITY, |g| g.compute_transform());
-                                commands.spawn((at, ChildOf(root))).id()
-                            })
-                        })
-                        .collect();
-                    commands.spawn((
-                        part,
-                        SkinnedMesh {
-                            inverse_bindposes: s.inverse_bindposes.clone(),
-                            joints: copied,
-                        },
-                        NoFrustumCulling,
-                    ));
-                }
-                None => _ = commands.spawn((part, at.compute_transform())),
-            }
+    for (a, m, team, own) in &actors {
+        if let Some(t) = m.tumble
+            && crate::dashfx::due(t, dt, DASH_BURST)
+        {
+            out.write(crate::dashfx::Dash {
+                model: a.model,
+                dir: m.vel.with_y(0.0).normalize_or_zero(),
+                team: team.copied(),
+                own,
+            });
         }
     }
 }

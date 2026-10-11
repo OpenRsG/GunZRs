@@ -29,6 +29,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::audio::AudioPlugin)
             .add_plugins(crate::music::MusicPlugin)
             .add_plugins(crate::actor::ActorPlugin)
+            .add_plugins(crate::dashfx::DashFxPlugin)
             .add_plugins(crate::combat::CombatPlugin)
             .add_plugins(crate::spy::SpyPlugin)
             .add_plugins(crate::melee::MeleePlugin)
@@ -258,8 +259,10 @@ pub fn friendly(a: (Option<Team>, bool), b: (Option<Team>, bool)) -> bool {
 pub struct Settings {
     /// Background-music loudness, 0..=1 (`music.rs`; **inferred** default).
     pub music: f32,
-    /// Ramping kill sounds on consecutive kills (iGunZ `/killsounds` idea).
+    /// The combo layer's sounds: hit ticks, kill impacts and spree stingers (`hud/combo.rs`).
     pub kill_sounds: bool,
+    /// The combo meter and the multikill/spree banners (`hud/combo.rs`).
+    pub combo: bool,
     /// Play the player's own `.wav` on every hit the player lands (iGunZ `/hitsound` idea).
     pub hit_sound: bool,
     /// Fixed, non-random bullet spread pattern.
@@ -281,6 +284,7 @@ impl Default for Settings {
         Self {
             music: 0.5,
             kill_sounds: true,
+            combo: true,
             hit_sound: false,
             static_spread: false,
             team_bars: true,

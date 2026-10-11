@@ -5,8 +5,11 @@
 //! `docs/formats.md` (menu).
 
 use crate::{
+    ani::Ani,
+    anim::{AnimPlugin, Animator, Loop},
     character::{self, Character, Look, Slot, TINTS, Wardrobe},
     clan::{self, ClanArt},
+    dashfx::{self, HUES, Hue, STYLES, Style, Trail},
     hud::try_image,
     item::Items,
     model::Textures,
@@ -15,7 +18,7 @@ use crate::{
     shop::{self, ShopData},
     ui::{
         ACCENT, Chosen, DIM, INK, LINE, RAISED, SHADOW, body, button, compact, digits, display,
-        heading, hover, panel, primary, shadow, strong,
+        flat, heading, hover, panel, primary, shadow, strong,
     },
     view::{self, Shot},
 };
@@ -23,12 +26,16 @@ use bevy::{
     mesh::skinning::SkinnedMeshInverseBindposes,
     prelude::*,
     text::{Justify, LineBreak},
-    ui::UiTargetCamera,
+    time::TimeUpdateStrategy,
+    ui::{RelativeCursorPosition, UiTargetCamera},
     window::PrimaryWindow,
 };
 use std::{
+    collections::HashMap,
+    f32::consts::TAU,
     str::FromStr,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 /// Removes `flag VALUE` from `args` and parses the value; `Err` if the value is missing/bad.
@@ -729,6 +736,9 @@ enum Field {
     Sac1,
     Sac2,
     Needs,
+    /// The dash trail's amount (a percentage) and colour name.
+    DashAmount,
+    DashColor,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -749,6 +759,11 @@ enum Act {
     Save,
     /// Point the preview camera at a [`FOCUS`] entry.
     Focus(usize),
+    /// Dash trail settings (profile `dash_*` keys) and the demo button.
+    Style(Style),
+    Hue(Hue),
+    Amount(i32),
+    Demo,
     Quit,
 }
 
@@ -789,6 +804,80 @@ struct Orbit {
     zoom: f32,
 }
 
+/// The dash demo (**not retail**) on the player page: the character dashes across the stage
+/// and back with the chosen trail, when a dash setting changes, on DEMO and every so often.
+#[derive(Resource)]
+struct Demo {
+    /// Seconds until the next run starts (counts down while none runs and the page is open).
+    wait: f32,
+    /// Seconds into the running demo.
+    run: Option<f32>,
+    /// `wait` was set during a run and survives its end.
+    again: bool,
+    /// Where the character stands (m along world X at FULL framing) and how far it has turned to
+    /// face the camera (0..=1); [`orbit`] applies both.
+    x: f32,
+    face: f32,
+}
+
+/// Seconds from opening the page to the first run, from a run's end to the next, and from a
+/// settings change to its run.
+const DEMO_FIRST: f32 = 1.0;
+const DEMO_EVERY: f32 = 4.0;
+const DEMO_SETTLE: f32 = 0.4;
+/// Each dash: start second, goal as a share of [`DEMO_SPAN`] (to the screen's right), its clip.
+/// The model faces the camera, so its left is the screen's right. The run ends at `DEMO_END`.
+const DASHES: [(f32, f32, &str); 2] = [(0.35, 1.0, "tumbleL"), (1.7, 0.0, "tumbleR")];
+const DASH_TIME: f32 = 0.45;
+const DEMO_END: f32 = 2.7;
+/// Metres of the dash at FULL framing (the gap between the panels is about 0.8 m wide).
+const DEMO_SPAN: f32 = 0.35;
+/// The clips: the empty-handed lobby pose (`gm="0"` in the character XML; motion type 8 is the
+/// bare-handed item set) and the plain dash clips of that set.
+const IDLE: (u32, &str) = (8, "login_idle");
+const DASH_SET: u32 = 8;
+
+/// Character clips parsed on first use: `(woman, motion type, name)` -> clip and loop mode.
+#[derive(Resource, Default)]
+struct Clips(HashMap<(bool, u32, &'static str), Option<Clip>>);
+
+type Clip = (Arc<Ani>, Loop);
+
+impl Clips {
+    fn get(
+        &mut self,
+        cat: &Catalog,
+        woman: bool,
+        motion: u32,
+        name: &'static str,
+    ) -> Option<(Arc<Ani>, Loop)> {
+        self.0
+            .entry((woman, motion, name))
+            .or_insert_with(|| {
+                let a = cat
+                    .character(woman)
+                    .animations
+                    .iter()
+                    .find(|a| a.name == name && a.motion_type == motion)?;
+                let ani = cat
+                    .vfs
+                    .read(&a.file)
+                    .and_then(|b| crate::ani::load(&b))
+                    .map_err(|e| warn!("{}: {e}", a.file))
+                    .ok()?;
+                Some((Arc::new(ani), Loop::from_xml(&a.loop_type)))
+            })
+            .clone()
+    }
+}
+
+/// The amount slider of the DASH TRAIL panel and its filled part.
+#[derive(Component)]
+struct DashSlider;
+
+#[derive(Component)]
+struct DashFill;
+
 const MAX_BOTS: i32 = 15;
 
 /// Moves `cur` by `d` positions within `list`, clamped.
@@ -799,7 +888,12 @@ fn walk(list: &[u32], cur: u32, d: i32) -> u32 {
 
 fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32) {
     match field {
-        Field::MapName | Field::TimeName | Field::KillsName | Field::Blurb => {}
+        Field::MapName
+        | Field::TimeName
+        | Field::KillsName
+        | Field::Blurb
+        | Field::DashAmount
+        | Field::DashColor => {}
         Field::Time => {
             let secs: Vec<u32> = cfg.mode.limits().minutes.iter().map(|m| m * 60).collect();
             cfg.time_limit = Some(walk(&secs, cfg.time_limit.unwrap_or(0), d)).filter(|&t| t > 0)
@@ -934,6 +1028,12 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
                 }
             }
         }
+        Field::DashAmount if profile.dash.amount <= 0.0 => "OFF".into(),
+        Field::DashAmount => format!("{:.0}%", profile.dash.amount * 100.0),
+        Field::DashColor => format!(
+            "COLOUR  {}",
+            HUES.iter().find(|h| h.0 == profile.dash.hue).unwrap().2
+        ),
         Field::Scenario => cfg
             .scenario
             .clone()
@@ -965,6 +1065,7 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         .cloned();
     cfg.map = cfg.map.filter(|m| cat.maps.contains(m)).or(default_map);
     let pick = Arc::new(Mutex::new(None));
+    let headless = shot.is_some();
     let mut app = view::app_plain("gunz-play", shot);
     crate::music::menu(&mut app, &cat.vfs);
     app.insert_resource(ClearColor(Color::srgb(0.05, 0.05, 0.07)))
@@ -978,6 +1079,16 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
             focus: 0,
             zoom: 1.0,
         })
+        .insert_resource(Demo {
+            wait: DEMO_FIRST,
+            run: None,
+            again: false,
+            x: 0.0,
+            face: 0.0,
+        })
+        .init_resource::<Clips>()
+        .add_plugins(AnimPlugin)
+        .add_plugins(dashfx::DashFxPlugin)
         .add_plugins(shop::ShopPlugin)
         .add_plugins(clan::ClanMenuPlugin)
         .add_plugins(crate::controls::ControlsPlugin)
@@ -986,10 +1097,24 @@ pub fn run(vfs: Vfs, mut cfg: Config, page: Page, shot: Option<String>) -> Optio
         .add_systems(
             Update,
             (
-                act, refresh, hover, tab_look, quiet_look, preview, orbit, fit,
+                act, refresh, hover, tab_look, quiet_look, preview, demo, orbit, fit,
             )
                 .chain(),
-        );
+        )
+        .add_systems(Update, dash_panel);
+    if headless {
+        // Headless shots step the clock 1/60 s a frame, so the idle pose and the demo are the
+        // same on every run; `GUNZ_MENU_AT=SECS` takes the picture SECS into the page (default 2).
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+        if let Some(s) = std::env::var("GUNZ_MENU_AT")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+        {
+            app.world_mut().resource_mut::<Shot>().capture = (s * 60.0).round() as u32;
+        }
+    }
     // in the browser the page takes over when the menu ends (`web::play`, `gunzExit`)
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(crate::web::WebPlugin);
@@ -1400,7 +1525,14 @@ fn build(
                     },
                     BorderColor::all(LINE),
                 ));
-                p.spawn(panel(300.0, AlignItems::FlexStart))
+                // the right column: the view controls and the dash trail settings
+                p.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(16),
+                    ..default()
+                })
+                .with_children(|col| {
+                col.spawn(panel(300.0, AlignItems::FlexStart))
                     .with_children(|m| {
                         m.spawn(heading("VIEW"));
                         m.spawn(Node {
@@ -1424,6 +1556,9 @@ fn build(
                             },
                         ));
                     });
+                col.spawn(panel(300.0, AlignItems::FlexStart))
+                    .with_children(dash_ui);
+                });
             });
             root.spawn(page(Page::Clan))
                 .with_children(|p| clan::fill(p, &clan_art));
@@ -1477,6 +1612,7 @@ fn act(
     mut profile: ResMut<Profile>,
     mut clan_ui: ResMut<clan::Ui>,
     mut orbit: ResMut<Orbit>,
+    mut demo: ResMut<Demo>,
     pick: Res<Pick>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -1532,6 +1668,16 @@ fn act(
             Act::Focus(f) => {
                 orbit.focus = f;
                 orbit.zoom = 1.0;
+            }
+            Act::Style(s) => profile.dash.style = s,
+            Act::Hue(h) => profile.dash.hue = h,
+            Act::Amount(d) => {
+                let n = (profile.dash.amount * 20.0).round() + d as f32;
+                profile.dash.amount = n.clamp(0.0, 20.0) / 20.0;
+            }
+            Act::Demo => {
+                demo.wait = 0.0;
+                demo.again = true;
             }
             Act::Start | Act::Lan(_) => {
                 state.cfg.net = match *a {
@@ -1639,6 +1785,8 @@ fn refresh(
             Act::Mode(m) => m == cfg.mode,
             Act::Sex(w) => w == cfg.woman,
             Act::Focus(f) => f == orbit.focus,
+            Act::Style(s) => s == profile.dash.style,
+            Act::Hue(h) => h == profile.dash.hue,
             _ => false,
         };
         match (on, chosen) {
@@ -1664,10 +1812,12 @@ fn refresh(
 }
 
 /// Respawns the character model when sex or clothes change.
+#[allow(clippy::too_many_arguments)]
 fn preview(
     mut commands: Commands,
     state: Res<State>,
     cat: Res<Catalog>,
+    mut clips: ResMut<Clips>,
     root: Single<(Entity, &mut Visibility), With<Preview>>,
     mut shown: Local<Option<(bool, Look)>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1714,6 +1864,220 @@ fn preview(
         })
         .unwrap_or_else(|e| panic!("{}: {e}", ch.name));
     commands.entity(parent).add_child(model.root);
+    // the lobby pose, so the character is alive on the stage
+    if let Some((ani, looping)) = clips.get(&cat, cfg.woman, IDLE.0, IDLE.1) {
+        let mut idle = Animator::new(ani, looping);
+        idle.root_lock = true;
+        commands.entity(model.root).insert(idle);
+    }
+}
+
+/// Runs the dash demo on the player page: [`Demo::run`] plays [`DASHES`] (a tumble clip while the
+/// character slides across the stage, one trail piece per [`dashfx::due`] step of the burst) and
+/// goes back to the idle pose. A run starts [`DEMO_FIRST`] s after the page opens, every
+/// [`DEMO_EVERY`] s after a run, [`DEMO_SETTLE`] s after a dash setting changed and on DEMO.
+#[allow(clippy::too_many_arguments)]
+fn demo(
+    time: Res<Time>,
+    state: Res<State>,
+    profile: Res<Profile>,
+    cat: Res<Catalog>,
+    mut clips: ResMut<Clips>,
+    mut demo: ResMut<Demo>,
+    model: Option<Single<(Entity, &mut Animator)>>,
+    mut out: MessageWriter<dashfx::Dash>,
+    mut seen: Local<Option<Trail>>,
+) {
+    let dt = time.delta_secs().min(0.05);
+    let changed = seen
+        .replace(profile.dash)
+        .is_some_and(|t| t != profile.dash);
+    if state.page != Page::Player {
+        *demo = Demo {
+            wait: DEMO_FIRST,
+            run: None,
+            again: false,
+            x: 0.0,
+            face: 0.0,
+        };
+        return;
+    }
+    if changed {
+        demo.wait = DEMO_SETTLE;
+        demo.again = true;
+    }
+    let Some(t) = demo.run else {
+        demo.wait -= dt;
+        if demo.wait <= 0.0 {
+            demo.run = Some(0.0);
+            demo.again = false;
+        }
+        return;
+    };
+    let Some(model) = model else {
+        // no clips (a file that cannot be read): nothing to show
+        demo.run = None;
+        demo.wait = DEMO_EVERY;
+        return;
+    };
+    let (root, mut anim) = model.into_inner();
+    let woman = state.cfg.woman;
+    let now = t + dt;
+    let mut from = 0.0;
+    let mut x = 0.0;
+    for (at, to, clip) in DASHES {
+        let u = now - at;
+        if u >= 0.0 {
+            if t < at
+                && let Some((ani, looping)) = clips.get(&cat, woman, DASH_SET, clip)
+            {
+                anim.play(ani, looping, 0.0);
+            }
+            if dashfx::due(u, dt, crate::actor::DASH_BURST) {
+                out.write(dashfx::Dash {
+                    model: root,
+                    dir: Vec3::X * (to - from).signum(),
+                    team: None,
+                    own: true,
+                });
+            }
+            x = from + (to - from) * crate::ui::ease_out(u / DASH_TIME);
+        }
+        from = to;
+    }
+    // back to the idle pose when the tumble has played out
+    if anim.finished()
+        && let Some((ani, looping)) = clips.get(&cat, woman, IDLE.0, IDLE.1)
+    {
+        anim.play(ani, looping, 0.12);
+    }
+    demo.x = x * DEMO_SPAN;
+    let s = ((now / 0.3).min((DEMO_END - now) / 0.4)).clamp(0.0, 1.0);
+    demo.face = s * s * (3.0 - 2.0 * s);
+    if now >= DEMO_END {
+        demo.run = None;
+        demo.x = 0.0;
+        demo.face = 0.0;
+        if !demo.again {
+            demo.wait = DEMO_EVERY;
+        }
+    } else {
+        demo.run = Some(now);
+    }
+}
+
+/// The amount slider (drag), its filled part, and saving the dash settings once they settle.
+fn dash_panel(
+    mouse: Res<ButtonInput<MouseButton>>,
+    slider: Query<(&Interaction, &RelativeCursorPosition), With<DashSlider>>,
+    mut fill: Query<&mut Node, With<DashFill>>,
+    mut profile: ResMut<Profile>,
+    mut dragging: Local<bool>,
+    mut saved: Local<Option<Trail>>,
+) {
+    if let Ok((i, rel)) = slider.single() {
+        if !mouse.pressed(MouseButton::Left) {
+            *dragging = false;
+        } else if *i == Interaction::Pressed {
+            *dragging = true;
+        }
+        if *dragging && let Some(n) = rel.normalized {
+            let v = ((n.x + 0.5).clamp(0.0, 1.0) * 20.0).round() / 20.0;
+            if profile.dash.amount != v {
+                profile.dash.amount = v;
+            }
+        }
+    }
+    let w = percent(profile.dash.amount * 100.0);
+    for mut n in &mut fill {
+        if n.width != w {
+            n.width = w;
+        }
+    }
+    match &*saved {
+        None => *saved = Some(profile.dash),
+        Some(t) if *t != profile.dash && !mouse.pressed(MouseButton::Left) => {
+            profile.save();
+            *saved = Some(profile.dash);
+        }
+        _ => {}
+    }
+}
+
+/// The DASH TRAIL panel: style, colour, amount and the demo button.
+fn dash_ui(m: &mut ChildSpawnerCommands) {
+    m.spawn(heading("DASH TRAIL"));
+    m.spawn(Node {
+        flex_wrap: FlexWrap::Wrap,
+        column_gap: px(6),
+        row_gap: px(6),
+        ..default()
+    })
+    .with_children(|g| {
+        for (s, _, label) in STYLES {
+            g.spawn(button(131.0, 28.0, label, 14.0, Act::Style(s)));
+        }
+    });
+    m.spawn((
+        Value(Field::DashColor),
+        crate::controls::text("", compact(14.0), DIM),
+    ));
+    m.spawn(Node {
+        column_gap: px(6),
+        ..default()
+    })
+    .with_children(|g| {
+        for (h, _, label) in HUES {
+            if h == Hue::Team {
+                g.spawn(button(52.0, 28.0, label, 13.0, Act::Hue(h)));
+                continue;
+            }
+            let c = h.color(None, 0.0);
+            let mut dot = Node {
+                width: px(16),
+                height: px(16),
+                border_radius: BorderRadius::all(px(8)),
+                ..default()
+            };
+            dot.border = UiRect::ZERO;
+            g.spawn((Act::Hue(h), flat(30.0, 28.0))).with_children(|b| {
+                let mut e = b.spawn((
+                    dot,
+                    BackgroundColor(Color::linear_rgb(
+                        c.red.min(1.0),
+                        c.green.min(1.0),
+                        c.blue.min(1.0),
+                    )),
+                ));
+                if h == Hue::Rainbow {
+                    let stop = |i: f32| {
+                        let c = Color::hsl(i * 60.0, 1.0, 0.5);
+                        ColorStop::new(c, percent(i * 100.0 / 6.0))
+                    };
+                    e.insert(BackgroundGradient::from(LinearGradient::to_right(
+                        (0..=6).map(|i| stop(i as f32)).collect(),
+                    )));
+                }
+            });
+        }
+    });
+    m.spawn(crate::controls::row()).with_children(|r| {
+        r.spawn(crate::controls::boxed("Amount", compact(14.0), INK, 52.0));
+        r.spawn((DashSlider, crate::controls::slider_track(100.0)))
+            .with_children(|t| {
+                t.spawn(crate::controls::slider_groove(6.0))
+                    .with_children(|g| {
+                        g.spawn((DashFill, crate::controls::slider_fill()));
+                    });
+            });
+        r.spawn(button(22.0, 24.0, "-", 15.0, Act::Amount(-1)));
+        r.spawn(button(22.0, 24.0, "+", 15.0, Act::Amount(1)));
+        r.spawn((
+            Value(Field::DashAmount),
+            crate::controls::text("", digits(14.0), ACCENT),
+        ));
+    });
+    m.spawn(button(268.0, 30.0, "DEMO", 16.0, Act::Demo));
 }
 
 /// Shrinks the menu to fit windows smaller than its 1280 x 720 layout (phones, small browser
@@ -1756,6 +2120,7 @@ fn fit_by(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScal
 #[allow(clippy::too_many_arguments)]
 fn orbit(
     time: Res<Time>,
+    demo: Res<Demo>,
     shot: Option<Res<Shot>>,
     state: Res<State>,
     mut orbit: ResMut<Orbit>,
@@ -1787,9 +2152,12 @@ fn orbit(
         None if shot.is_none() => time.elapsed_secs() * 0.5,
         None => 0.0,
     };
+    // the demo turns the character to face the camera and moves it along the stage
+    let yaw = yaw + ((yaw / TAU).round() * TAU - yaw) * demo.face;
     model.rotation = Quat::from_rotation_y(yaw);
     let (_, h, d) = FOCUS[if player { orbit.focus } else { 0 }];
     let d = d * if player { orbit.zoom } else { 1.0 };
+    model.translation.x = demo.x * d / FOCUS[0].2;
     // the character stands right of the screen centre (about 15 % of the width), clear of the
     // CHARACTER panel: tan(22.5 deg) * aspect * d is half the view's width at distance d
     let aspect = window

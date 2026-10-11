@@ -17,7 +17,8 @@
 //! SECONDS` and `--kill-limit N` (0 = none; the defaults are `gametypecfg.xml`'s, none in
 //! headless runs), `--map NAME` (with no MAP: preselect it in the menu).
 //! TOGGLES (also in the pause menu, saved in the profile as `opt_NAME=0|1`; a flag overrides the
-//! profile for this run): `--kill-sounds`/`--no-kill-sounds` (default on), `--hit-sound` (plays
+//! profile for this run): `--kill-sounds`/`--no-kill-sounds` (default on: the combo layer's
+//! synthesized sounds), `--combo` (on: combo meter and multikill/spree banners), `--hit-sound` (plays
 //! `<profile dir>/custom/hitsound.wav`, default off), `--static-spread` (off), `--team-bars` (on),
 //! `--screen-blood` (on), `--killcam` (on), `--realistic-blood` (on: simulated gore, off: retail
 //! blood sprites and marks); each has a `--no-` form.
@@ -184,7 +185,7 @@ fn main() -> AppExit {
     let usage = || {
         eprintln!(
             "usage: gunz-play [GAME_DIR] [MAP] [--char man|woman] [--look LOOK] [--loadout ID,..] [--bots N]\n       \
-             [--bots-ahead M] [--skill 0..1] [--[no-]kill-sounds|hit-sound|static-spread|team-bars|screen-blood|killcam|realistic-blood] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
+             [--bots-ahead M] [--skill 0..1] [--[no-]kill-sounds|combo|hit-sound|static-spread|team-bars|screen-blood|killcam|realistic-blood] [--mode dm|tdm|gladiator|team-gladiator|elimination|assassinate|duel|training|berserker|tournament|gunman|spy|blitzkrieg|clanwar|gungame|infected|dynduel]\n       \
              [--time-limit S] [--kill-limit N] [--respawn S] [--protect S] [--round-time S] [--ready S] [--host | --join ADDR|lan]\n       \
              [--mode quest --scenario NAME [--dice N] [--sacrifice A,B]]\n       \
              gunz-play [GAME_DIR] [MAP] --shot OUT.png [--script SCRIPT] [--time S] [--at X,Y,Z] [--yaw DEG]\n       \

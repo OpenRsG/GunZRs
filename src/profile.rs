@@ -10,6 +10,7 @@ use crate::{
     character::Look,
     clan::Clan,
     controls::Controls,
+    dashfx::Trail,
     game::{Killed, Player, QuestLoot, Reward, Settings, Vitals},
     gfx::Graphics,
     level::Level,
@@ -90,8 +91,9 @@ pub fn result_reward(headline: &str) -> (u32, u32) {
 /// The `Settings` bools the pause menu toggles: profile key (also the `--KEY`/`--no-KEY` flag
 /// with `_` as `-`) and label. Order = [`opt_mut`]. `hit_sound` plays
 /// `<profile dir>/custom/hitsound.wav` ([`Profile::hitsound_path`]).
-pub const OPTS: [(&str, &str); 7] = [
+pub const OPTS: [(&str, &str); 8] = [
     ("kill_sounds", "Kill sounds"),
+    ("combo", "Combo"),
     ("hit_sound", "Hit sound"),
     ("static_spread", "Fixed spread"),
     ("team_bars", "Team bars"),
@@ -103,6 +105,7 @@ pub const OPTS: [(&str, &str); 7] = [
 pub fn opt_mut(s: &mut Settings, i: usize) -> &mut bool {
     [
         &mut s.kill_sounds,
+        &mut s.combo,
         &mut s.hit_sound,
         &mut s.static_spread,
         &mut s.team_bars,
@@ -142,6 +145,8 @@ pub struct Profile {
     pub controls: Controls,
     /// Graphics settings (`gfx_*` keys).
     pub graphics: Graphics,
+    /// Dash trail settings (`dash_*` keys), cosmetic and apart from the graphics presets.
+    pub dash: Trail,
     /// Where [`Profile::save`] writes; `None` = throwaway.
     path: Option<PathBuf>,
 }
@@ -169,6 +174,7 @@ impl Profile {
             clan: None,
             controls: Controls::default(),
             graphics: Graphics::default(),
+            dash: Trail::default(),
             path: None,
         }
     }
@@ -254,6 +260,7 @@ impl Profile {
         }
         text += &self.controls.to_text();
         text += &self.graphics.to_text();
+        text += &self.dash.to_text();
         text
     }
 
@@ -333,6 +340,7 @@ impl Profile {
                 }
                 k if p.controls.set(k, v)? => {}
                 k if p.graphics.set_text(k, v)? => {}
+                k if p.dash.set_text(k, v)? => {}
                 _ => return Err(format!("unknown key {k:?}")),
             }
         }
@@ -650,12 +658,13 @@ mod tests {
         back.path = p.path.clone();
         assert_eq!(back, p);
         let mut p = Profile::new();
-        p.opts = [false, true, true, false, false, true, true];
+        p.opts = [false, true, true, true, false, false, true, true];
         let q = Profile::parse(&p.to_text()).unwrap();
         assert!(p.to_text().contains("opt_hit_sound=1\n") && q.opts == p.opts);
         let mut s = Settings::default();
         q.apply(&mut s);
-        assert!(!s.kill_sounds && s.hit_sound && s.static_spread && !s.team_bars && s.killcam);
+        assert!(!s.kill_sounds && s.combo && s.hit_sound && s.static_spread && !s.team_bars);
+        assert!(s.killcam);
         assert!(Profile::parse("bogus=1").is_err());
         assert!(Profile::parse("equipped=1,2").is_err());
         assert!(Profile::parse("clan=Phoenix|1|2|3").is_err());

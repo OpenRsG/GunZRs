@@ -78,13 +78,26 @@ ORIGINAL draws the image exactly as the game always did (no tonemapping, no effe
 ENHANCED (the default) and ULTRA add HDR with tonemapping, bloom, SMAA, sharpening, anisotropic
 filtering, distance fog, vignette, film grain, chromatic aberration and camera-turn motion blur;
 every screen effect has its own strength (OFF costs nothing): speed effects (light rays and radial
-blur while dashing or falling, a dash that widens the view for a moment and leaves glowing
-afterimages of the character), a hit flash, and a drained, throbbing screen at low health. Dust
+blur while dashing or falling, and a dash that widens the view for a moment), a hit flash, and a
+drained, throbbing screen at low health. Dust
 rings from the game's own effects mark ground dashes, wall kicks and hard landings. LIGHTING lights the characters
 from the map's own lightmap colours (with a rim light), lights up the walls, floor and characters
 around muzzle flashes and explosions, and puts a soft contact shadow under every character.
 Also field of view, vsync and a frame limit (not in the browser). Changes show in the match at once
 and are saved in the profile; `gunz-play --gfx original|enhanced|ultra` picks a preset for one run.
+
+PLAYER (a main-menu tab) shows your character idling in its lobby pose. Its DASH TRAIL panel picks
+what a dash leaves behind (afterimages, glowing sparks, both, or nothing), the colour (team, cyan,
+gold, violet, ember, toxic or rainbow) and how much; the character dashes across the stage to show
+each change, and DEMO replays it. Your colour is used for your own dashes; other players keep
+team colours.
+
+Combo meter and killing sprees (not in the original game; the `Combo` option or `--no-combo` hides
+them): every hit you land within 2.5 s of the last grows a combo whose multiplier climbs from x1 to
+x8 (at 5, 10, 20, 35, 50, 70 and 100 hits), and damage and kills score points times it. Kills less
+than 4 s apart announce DOUBLE, TRIPLE, QUAD, MULTI and MONSTER KILL; kills without dying announce
+KILLING SPREE (3), RAMPAGE (5), DOMINATING (7), UNSTOPPABLE (10) and GODLIKE (15). Each banner
+slams in with a screen-edge flash, a shake and its own sound. The sounds are synthesized in code.
 
 Dead in a round mode? Space or click cycles the player you spectate.
 
@@ -147,9 +160,9 @@ climb a wall with a hang to reach an enemy on a ledge.
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
 | Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall hang climbs), grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
-| Menus and HUD | One look throughout (`src/ui.rs`, rules in [`DESIGN.md`](DESIGN.md)): Barlow type, amber accent, sharp plates. Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS, quest picker) with tabs, a player strip (level, XP bar, bounty, medals) and a 3D character preview; pause menu as a side panel. HUD: health and armour bottom left (the bar trails behind damage), weapon and ammo bottom right with low-ammo and RELOAD warnings, clock and team scores top centre, KILLS / DEATHS top left, a crosshair that opens with running, jumping and shots, hit and kill markers, damage direction arcs, status effect timers, a ranked scoreboard with K/D; a sliding kill feed at the top right with the retail kill-log weapon icons, HEADSHOT tags and clan emblems in a clan war; ELIMINATED and the victim's name under the crosshair when you kill; a KILLED BY screen with the damage each attacker dealt and a respawn bar; round banners; end-of-match screen with XP and bounty earned |
-| Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; a rising kill-streak sound and your own hit sound (`custom/hitsound.wav` next to the profile) |
-| Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars, screen blood and realistic blood; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
+| Menus and HUD | One look throughout (`src/ui.rs`, rules in [`DESIGN.md`](DESIGN.md)): Barlow type, amber accent, sharp plates. Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS, quest picker) with tabs, a player strip (level, XP bar, bounty, medals) and an animated 3D character preview with a dash-trail demo; pause menu as a side panel. HUD: health and armour bottom left (the bar trails behind damage), weapon and ammo bottom right with low-ammo and RELOAD warnings, clock and team scores top centre, KILLS / DEATHS top left, a crosshair that opens with running, jumping and shots, hit and kill markers, damage direction arcs, status effect timers, a ranked scoreboard with K/D; a sliding kill feed at the top right with the retail kill-log weapon icons, HEADSHOT tags and clan emblems in a clan war; ELIMINATED and the victim's name under the crosshair when you kill; a combo meter at the left with its multiplier, score and "+N" popups, and multikill and killing-spree banners; a KILLED BY screen with the damage each attacker dealt and a respawn bar; round banners; end-of-match screen with XP and bounty earned |
+| Sound and music | Weapon sounds, surface footsteps, voices, monster sounds, map ambience, background music with crossfades; synthesized combo, kill and killing-spree sounds and your own hit sound (`custom/hitsound.wav` next to the profile) |
+| Options | Pause-menu toggles for killcam, kill sounds, hit sound, fixed spread, teammate bars, screen blood, realistic blood and the combo meter; saved in the profile, and `--NAME` / `--no-NAME` flags override them for one run |
 | Blood | Simulated gore (on by default, `--no-realistic-blood` / the pause menu for the retail sprites and marks): droplet sprays scaled by damage that fly with gravity, splatter walls and floors by impact angle, run down walls in drips, pool under corpses, trail from hurt bots, and splash drops and a dark vignette on your screen |
 | LAN multiplayer | HOST LAN / JOIN LAN in the menu (or `--host` / `--join ADDR`, `--join lan` finds the host by broadcast): deathmatch, team deathmatch, gladiator and team gladiator with the host's bots. The host decides hits, deaths and scores; each player moves their own character. TCP and UDP port 7790 must be open on the host |
 

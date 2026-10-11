@@ -32,6 +32,7 @@ of the game; the port only reads its `.mrs` archives and never runs `Gunz.exe`.
 git clone https://github.com/OpenRsG/GunZRs && cd GunZRs
 cargo run --release --bin gunz-play                       # main menu, game found via Steam
 cargo run --release --bin gunz-play -- "/path/to/GUNZ THE DUEL"
+./start.sh                                               # same, also tries the Flatpak install (GUNZ_GAME=DIR overrides)
 ```
 
 | Steam install | `GAME` folder |

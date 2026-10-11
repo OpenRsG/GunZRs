@@ -6,8 +6,8 @@ use bevy::{
     app::ScheduleRunnerPlugin,
     asset::RenderAssetUsages,
     camera::{
-        visibility::{InheritedVisibility, ViewVisibility},
         RenderTarget,
+        visibility::{InheritedVisibility, ViewVisibility},
     },
     core_pipeline::tonemapping::Tonemapping,
     image::{CompressedImageFormats, ImageSampler, ImageType},
@@ -17,8 +17,8 @@ use bevy::{
     render::{
         render_resource::TextureFormat,
         view::{
-            screenshot::{save_to_disk, Screenshot},
             NoIndirectDrawing,
+            screenshot::{Screenshot, save_to_disk},
         },
     },
     window::{ExitCondition, PresentMode},

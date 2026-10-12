@@ -526,6 +526,11 @@ pub struct Actor {
 }
 
 impl Actor {
+    /// A reload is running.
+    pub fn reloading(&self) -> bool {
+        matches!(self.state, State::Reload { .. })
+    }
+
     /// Every weapon model root of the actor (held and holstered; the holstered are hidden).
     pub fn weapon_roots(&self) -> impl Iterator<Item = Entity> + '_ {
         self.weapons.iter().flatten().copied()

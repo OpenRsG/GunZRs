@@ -33,7 +33,8 @@ Big Shoulders Display ExtraBold (`ui::display`) for titles, tabs, big values and
 Chakra Petch (`ui::body` Medium for sentences, `ui::compact` SemiBold for rows, `ui::strong` Bold for
 buttons and names); JetBrains Mono Bold (`ui::mono`, `ui::digits`) for every number, index, key cap
 and caption. Captions (`ui::caption`) are letter-spaced mono capitals (`ui::tracking(0.14, size)`).
-All SIL OFL, `assets/fonts`. Nothing in the HUD is smaller than 13 px.
+All SIL OFL, `assets/fonts`. HUD captions follow the HUD mock (9-11 px letter-spaced capitals next
+to big display numbers); menu text stays at 13 px or more.
 
 ## Layout
 
@@ -58,8 +59,13 @@ short toast, not a permanent line.
 
 ## HUD placement
 
-Vitals bottom left, weapon and ammo bottom right, clock and scores top centre, kill feed top right,
-crosshair with hit markers and the kill confirmation in the centre, round banners upper centre.
+After the user's HUD mock, at 1 px per screen pixel (`menu::fit_hud` shrinks it only for windows
+smaller than 1280 x 720), 28 px from the edges: mode line and KILLS / DEATHS / K/D top left
+(`hud/top.rs`), compass, clock and scores top centre, kill feed top right (`hud/feed.rs`), vitals
+bottom left (`hud/vitals.rs`), weapon and ammo bottom right (`hud/weapon.rs`), crosshair, hit X
+and damage numbers in the centre (`hud/reticle.rs`), the death screen as a band across the middle
+(`hud/death.rs`), round banners upper centre. START and RESUME are metal plates
+(`ui::metal`, `src/metal.wgsl`).
 
 ## Code
 

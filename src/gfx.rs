@@ -461,7 +461,8 @@ struct Fx {
     blur: Vec2,
     /// 1 at the start of a dash, easing to 0 over its burst.
     kick: f32,
-    pad: f32,
+    /// 1 while dead: the view goes grey, dark and soft (the death screen's backdrop).
+    gray: f32,
 }
 
 impl FullscreenMaterial for Fx {
@@ -798,6 +799,7 @@ struct Live {
     low: f32,
     speed: f32,
     kick: f32,
+    gray: f32,
     turn: Option<Quat>,
 }
 
@@ -860,6 +862,11 @@ fn drive(
     live.low = ease(live.low, low, 5.0);
     live.speed = ease(live.speed, speed, 8.0);
     live.kick = kick;
+    live.gray = ease(
+        live.gray,
+        if me.is_some_and(|m| m.3) { 1.0 } else { 0.0 },
+        6.0,
+    );
     if let Projection::Perspective(p) = &mut *projection {
         let want = base_fov(&g) * (1.0 + 0.14 * live.kick * k(Knob::SpeedFx));
         if (p.fov - want).abs() > 1e-4 {
@@ -905,6 +912,7 @@ fn drive(
             * if me.is_some_and(|m| m.3) { 0.0 } else { 1.0 },
         blur,
         kick: live.kick * k(Knob::SpeedFx),
+        gray: live.gray,
         ..default()
     };
     let active = want.grain > 0.0
@@ -913,6 +921,7 @@ fn drive(
         || want.low > 0.005
         || want.speed > 0.005
         || want.kick > 0.005
+        || want.gray > 0.005
         || blur.length() > 0.0004;
     match (active, fx) {
         (true, Some(mut f)) => *f = want,

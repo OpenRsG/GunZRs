@@ -1,20 +1,22 @@
-//! Kill feed: one row per kill at the top right, newest at the bottom: killer, the retail
-//! kill-log weapon icon (`Ingame_KillLogArrow_N` of `bitmapalias.xml`, cut from
-//! `ingame_01.png`), a HEADSHOT tag, victim; clan wars add each side's emblem. Rows slide/fade
-//! in, then fade out and collapse. The player's own kill also shows a kill confirmation below
-//! the crosshair: "ELIMINATED" over the victim's name, with a HEADSHOT or MELEE tag when it
+//! Kill feed: one slanted row per kill at the top right, newest at the bottom: killer, a light
+//! chip with the weapon's short type, a red HEADSHOT tag, victim; clan wars add each side's
+//! emblem. The player's kills are orange, the player's deaths dark red, the rest dark. Rows slide
+//! and fade in, then fade out and collapse. The player's own kill also shows a kill confirmation
+//! below the crosshair: "ELIMINATED" over the victim's name, with a HEADSHOT or MELEE tag when it
 //! applies. A child of `hud.rs`.
 
-use super::{Root, try_image};
+use super::{
+    Root,
+    top::{Edge, back},
+    weapon::short,
+};
 use crate::phase::MatchSystems;
 use crate::{
     actor::ActorData,
     clan::{ClanArt, ClanWar, Member, mark},
     combat::is_melee,
     game::{Killed, Player, Team},
-    item::WeaponKind,
-    level::Level,
-    ui::{self, ACCENT, BLUE, DANGER, DIM, INK, PLATE, RED},
+    ui::{self, ACCENT, BLUE, INK, ON_ACCENT, PLATE, RED},
 };
 use bevy::prelude::*;
 
@@ -23,7 +25,7 @@ pub(super) fn plugin(app: &mut App) {
         Update,
         (
             spawn.run_if(any_with_component::<Root>.and_then(not(any_with_component::<FeedBox>))),
-            (add, animate).chain().run_if(resource_exists::<FeedArt>),
+            (add, animate).chain(),
         )
             .in_set(MatchSystems),
     );
@@ -31,37 +33,40 @@ pub(super) fn plugin(app: &mut App) {
 
 /// Seconds a row stays, its slide/fade in and fade out, and how many rows show at once.
 const LIFE: f32 = 6.0;
-const ENTER: f32 = 0.15;
+const ENTER: f32 = 0.25;
 const LEAVE: f32 = 0.3;
-const LINES: usize = 6;
-const ROW_H: f32 = 30.0;
+const LINES: usize = 4;
+const ROW_H: f32 = 28.0;
 /// Pixels a row slides in from.
-const ENTER_X: f32 = 56.0;
+const ENTER_X: f32 = 30.0;
 
 /// Kill confirmation timing: scale-in, hold at full size, then fade.
 const CONFIRM_IN: f32 = 0.12;
 const CONFIRM_HOLD: f32 = 1.4;
 const CONFIRM_OUT: f32 = 0.25;
 
-#[derive(Resource)]
-struct FeedArt {
-    log: Handle<Image>,
-}
+/// The mock's row fills, name colours and the HEADSHOT red.
+const DEATH_FILL: Color = Color::srgba(0.588, 0.07, 0.047, 0.75);
+const LIGHT: Color = Color::srgb(0.941, 0.945, 0.953);
+const SOFT: Color = Color::srgb(0.769, 0.78, 0.8);
+const PINK: Color = Color::srgb(1.0, 0.816, 0.784);
+const HEAD: Color = Color::srgb(1.0, 0.353, 0.29);
+/// The weapon chip's text (`#0b0c0e`).
+const CHIP_INK: Color = Color::srgb(0.043, 0.047, 0.055);
 
 #[derive(Component)]
 struct FeedBox;
 
-/// A child text/icon/tag that fades with its row or the kill confirmation: `0` is its full
-/// opacity colour, restored each frame and multiplied by the current fade fraction.
+/// A child text/chip that fades with its row or the kill confirmation: `0` is its full opacity
+/// colour, restored each frame and multiplied by the current fade fraction.
 #[derive(Component)]
 struct Fade(Color);
 
-/// A feed row: when it came, when it started to leave, and its left accent bar colour.
+/// A feed row: when it came and when it started to leave.
 #[derive(Component)]
 struct Row {
     born: f32,
     leave: Option<f32>,
-    edge: Color,
 }
 
 /// The kill confirmation below the crosshair; `start` is when the latest kill set it.
@@ -78,88 +83,58 @@ struct ConfirmName;
 #[derive(Component)]
 struct ConfirmTag;
 
-/// Retail kill-log icon index (the comments in `bitmapalias.xml` name each one).
-fn log_icon(kind: WeaponKind) -> usize {
-    use WeaponKind::*;
-    match kind {
-        Dagger => 0,
-        Katana | SpyCase => 1,
-        DoubleKatana => 2,
-        Pistol => 3,
-        PistolX2 => 4,
-        Revolver => 5,
-        RevolverX2 => 6,
-        Smg => 7,
-        SmgX2 => 8,
-        Shotgun => 9,
-        Rifle => 10,
-        MachineGun => 11,
-        Rocket => 12,
-        Frag | Flashbang | Smoke | Stun | Mine => 13,
-        Medikit | Potion | RepairKit => FALL,
-    }
-}
-
-/// The falling man: suicides and falls.
-const FALL: usize = 14;
-
-/// Icon `i` of the 4-wide grid of 108 x 29 cells from (0, 799) of `ingame_01.png`.
-fn log_rect(i: usize) -> Rect {
-    let (x, y) = ((i % 4) as f32 * 109.0, 799.0 + (i / 4) as f32 * 30.0);
-    Rect::new(x, y, x + 108.0, y + 29.0)
-}
-
-/// A killer/victim name, or the fallback "killed" label.
-fn text(s: &str, color: Color) -> impl Bundle {
+/// A killer/victim name.
+fn name(s: &str, color: Color) -> impl Bundle {
     (
         Fade(color),
         Text::new(s),
-        ui::strong(16.0),
+        ui::strong(14.0),
         TextColor(color),
-        ui::shadow(),
     )
 }
 
-/// A small caps tag (HEADSHOT, MELEE): a hairline box in `color`.
-fn tag(label: impl Into<String>, color: Color) -> impl Bundle {
+/// The light chip with the weapon's short type.
+fn chip(label: &str) -> impl Bundle {
     (
-        Fade(color),
         Node {
-            padding: UiRect::axes(px(6), px(1)),
-            border: UiRect::all(px(1)),
-            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(7), px(2)),
             ..default()
         },
-        BorderColor::all(color),
-        Text::new(label.into()),
-        ui::strong(12.0),
-        TextColor(color),
-        ui::shadow(),
+        children![
+            (Fade(INK), back(INK, Edge::Both, 4)),
+            (
+                Fade(CHIP_INK),
+                Text::new(label),
+                ui::mono(9.0),
+                ui::tracking(0.08, 9.0),
+                TextColor(CHIP_INK),
+            ),
+        ],
     )
 }
 
-fn spawn(
-    mut commands: Commands,
-    level: Res<Level>,
-    mut images: ResMut<Assets<Image>>,
-    root: Single<Entity, With<Root>>,
-) {
-    let Some(log) = try_image(&level.vfs, &mut images, "ingame_01.png") else {
-        error!("kill feed: interface/default/ingame_01.png missing");
-        commands.spawn(FeedBox);
-        return;
-    };
+/// A small red caps tag (HEADSHOT, MELEE).
+fn tag(label: &str, size: f32) -> impl Bundle {
+    (
+        Fade(HEAD),
+        Text::new(label),
+        ui::strong(size),
+        ui::tracking(0.14, size),
+        TextColor(HEAD),
+    )
+}
+
+fn spawn(mut commands: Commands, root: Single<Entity, With<Root>>) {
     commands.spawn((
         FeedBox,
         ChildOf(*root),
         Node {
             position_type: PositionType::Absolute,
-            right: px(12),
-            // below the clock, and on a phone below the touch layer's top buttons
-            top: px(100),
+            right: px(28),
+            top: px(24),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexEnd,
-            row_gap: px(4),
+            row_gap: px(3),
             ..default()
         },
     ));
@@ -191,7 +166,8 @@ fn spawn(
                     (
                         Fade(ACCENT),
                         Text::new("ELIMINATED"),
-                        ui::strong(14.0),
+                        ui::strong(12.0),
+                        ui::tracking(0.3, 12.0),
                         TextColor(ACCENT),
                         ui::shadow(),
                     ),
@@ -203,18 +179,16 @@ fn spawn(
                         TextColor(INK),
                         ui::shadow(),
                     ),
-                    (ConfirmTag, Visibility::Hidden, tag("", DANGER)),
+                    (ConfirmTag, Visibility::Hidden, tag("", 12.0)),
                 ],
             ));
         });
-    commands.insert_resource(FeedArt { log });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn add(
     mut commands: Commands,
     time: Res<Time>,
-    art: Res<FeedArt>,
     data: Res<ActorData>,
     mut killed: MessageReader<Killed>,
     feed: Single<Entity, With<FeedBox>>,
@@ -233,17 +207,6 @@ fn add(
         let suicide = k.killer == k.victim;
         let you = players.contains(k.killer) && !suicide;
         let died = players.contains(k.victim);
-        let color = |e| {
-            if players.contains(e) {
-                ACCENT
-            } else {
-                match teams.get(e) {
-                    Ok(Team::Red) => RED,
-                    Ok(Team::Blue) => BLUE,
-                    _ => INK,
-                }
-            }
-        };
         let kind = data
             .items
             .get(k.item)
@@ -269,33 +232,16 @@ fn add(
                 (false, false) => **vis = Visibility::Hidden,
             }
         }
-        let edge = match (you, died) {
-            (true, _) => ACCENT,
-            (_, true) => DANGER,
-            _ => Color::NONE,
+        let tint = |e: Entity, base: Color| match teams.get(e) {
+            Ok(Team::Red) => RED,
+            Ok(Team::Blue) => BLUE,
+            _ => base,
         };
-        let row = commands
-            .spawn((
-                Row {
-                    born: now,
-                    leave: None,
-                    edge,
-                },
-                ChildOf(*feed),
-                UiTransform::from_translation(Val2::px(ENTER_X, 0.0)),
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    height: px(ROW_H),
-                    padding: UiRect::axes(px(12), px(0)),
-                    border: UiRect::left(px(3)),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                BackgroundColor(PLATE),
-                BorderColor::all(edge),
-            ))
-            .id();
+        let (fill, killer_ink, victim_ink) = match (you, died) {
+            (true, _) => (ACCENT.with_alpha(0.8), ON_ACCENT, ON_ACCENT),
+            (_, true) => (DEATH_FILL, tint(k.killer, LIGHT), PINK),
+            _ => (PLATE, tint(k.killer, LIGHT), tint(k.victim, SOFT)),
+        };
         // in a clan war: the side's emblem and the name without the clan tag
         let who = |e: Entity| {
             let member = war.as_ref().zip(clan_art.as_ref()).zip(members.get(e).ok());
@@ -307,77 +253,84 @@ fn add(
                 let s = &w.sides[m.side];
                 mark(a, s.emblem, s.bg, 20.0)
             });
-            (name, emblem, color(e))
+            (name, emblem)
         };
-        commands.entity(row).with_children(|r| {
-            let name = |r: &mut ChildSpawnerCommands, e| {
-                let (n, emblem, c) = who(e);
-                if let Some(m) = emblem {
-                    r.spawn(m);
+        let label = match kind {
+            Some(kind) => short(kind),
+            None if suicide => "FALL",
+            None => "KILLED",
+        };
+        commands
+            .spawn((
+                Row {
+                    born: now,
+                    leave: None,
+                },
+                ChildOf(*feed),
+                UiTransform::from_translation(Val2::px(ENTER_X, 0.0)),
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(10),
+                    height: px(ROW_H),
+                    padding: UiRect::new(px(16), px(12), px(0), px(0)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ))
+            .with_children(|r| {
+                r.spawn((Fade(fill), back(fill, Edge::Left, 8)));
+                let person = |r: &mut ChildSpawnerCommands, e, ink| {
+                    let (n, emblem) = who(e);
+                    if let Some(m) = emblem {
+                        r.spawn(m);
+                    }
+                    r.spawn(name(&n, ink));
+                };
+                if !suicide {
+                    person(r, k.killer, killer_ink);
                 }
-                r.spawn(text(&n, c));
-            };
-            if !suicide {
-                name(r, k.killer);
-            }
-            let icon = match kind {
-                _ if suicide => Some(FALL),
-                Some(kind) => Some(log_icon(kind)),
-                None => None,
-            };
-            match icon {
-                Some(i) => drop(r.spawn((
-                    Fade(Color::WHITE),
-                    Node {
-                        width: px(82),
-                        height: px(22),
-                        ..default()
-                    },
-                    ImageNode {
-                        rect: Some(log_rect(i)),
-                        image_mode: NodeImageMode::Stretch,
-                        ..ImageNode::new(art.log.clone())
-                    },
-                ))),
-                None => drop(r.spawn(text("killed", DIM))),
-            }
-            if k.head {
-                r.spawn(tag("HEADSHOT", DANGER));
-            }
-            name(r, k.victim);
-        });
+                r.spawn(chip(label));
+                if k.head {
+                    r.spawn(tag("HEADSHOT", 9.0));
+                }
+                person(r, k.victim, victim_ink);
+            });
     }
 }
 
-/// Applies `frac` (1 = full opacity) to every direct [`Fade`] child of a row or the confirmation.
-fn fade_children(
-    children: &Children,
-    frac: f32,
-    parts: &mut Query<
-        (
-            &Fade,
-            Option<&mut TextColor>,
-            Option<&mut BorderColor>,
-            Option<&mut ImageNode>,
-        ),
-        Without<Row>,
-    >,
-) {
+type Parts<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Fade,
+        Option<&'static mut TextColor>,
+        Option<&'static mut ImageNode>,
+    ),
+    Without<Row>,
+>;
+
+/// Applies `frac` (1 = full opacity) to every [`Fade`] below a row or the confirmation.
+fn fade(children: &Children, frac: f32, kids: &Query<&Children>, parts: &mut Parts) {
     for &e in children {
-        let Ok((fade, text, border, img)) = parts.get_mut(e) else {
-            continue;
-        };
-        let c = fade.0.with_alpha(fade.0.alpha() * frac);
-        if let Some(mut t) = text {
-            t.0 = c;
+        if let Ok((f, text, img)) = parts.get_mut(e) {
+            let c = f.0.with_alpha(f.0.alpha() * frac);
+            if let Some(mut t) = text {
+                t.0 = c;
+            }
+            if let Some(mut i) = img {
+                i.color = c;
+            }
         }
-        if let Some(mut b) = border {
-            b.set_all(c);
-        }
-        if let Some(mut i) = img {
-            i.color = c;
+        if let Ok(k) = kids.get(e) {
+            fade(k, frac, kids, parts);
         }
     }
+}
+
+/// A row's slide (px from its place) and opacity `age` seconds after it came.
+fn slide(age: f32) -> (f32, f32) {
+    let f = ui::ease_out(age / ENTER);
+    (ENTER_X * (1.0 - f), f)
 }
 
 #[allow(clippy::type_complexity)]
@@ -385,26 +338,11 @@ fn animate(
     mut commands: Commands,
     time: Res<Time>,
     mut rows: Query<
-        (
-            Entity,
-            &mut Row,
-            &mut UiTransform,
-            &mut Node,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &Children,
-        ),
+        (Entity, &mut Row, &mut UiTransform, &mut Node, &Children),
         (Without<Confirm>, Without<Fade>),
     >,
-    mut parts: Query<
-        (
-            &Fade,
-            Option<&mut TextColor>,
-            Option<&mut BorderColor>,
-            Option<&mut ImageNode>,
-        ),
-        Without<Row>,
-    >,
+    kids: Query<&Children>,
+    mut parts: Parts,
     mut confirm: Single<(&mut Confirm, &mut Visibility, &mut UiTransform, &Children), Without<Row>>,
 ) {
     let now = time.elapsed_secs();
@@ -423,7 +361,7 @@ fn animate(
             row.leave = Some(now);
         }
     }
-    for (e, row, mut tf, mut node, mut bg, mut border, children) in &mut rows {
+    for (e, row, mut tf, mut node, children) in &mut rows {
         if row.leave.is_none() && now - row.born >= ENTER {
             // fully entered and not leaving: settled, nothing changes until it leaves
             continue;
@@ -438,15 +376,10 @@ fn animate(
                 node.height = px(ROW_H * (1.0 - ui::ease_out(t)));
                 (0.0, 1.0 - ui::ease_out(t))
             }
-            None => {
-                let f = ui::ease_out((now - row.born) / ENTER);
-                (ENTER_X * (1.0 - f), f)
-            }
+            None => slide(now - row.born),
         };
         tf.translation = Val2::px(x, 0.0);
-        bg.0 = PLATE.with_alpha(PLATE.alpha() * frac);
-        border.set_all(row.edge.with_alpha(row.edge.alpha() * frac));
-        fade_children(children, frac, &mut parts);
+        fade(children, frac, &kids, &mut parts);
     }
     let (c, vis, tf, children) = &mut *confirm;
     let age = now - c.start;
@@ -463,16 +396,16 @@ fn animate(
     if age < CONFIRM_IN {
         let f = ui::ease_out(age / CONFIRM_IN);
         tf.scale = Vec2::splat(0.82 + 0.18 * f);
-        fade_children(children, f, &mut parts);
+        fade(children, f, &kids, &mut parts);
     } else if age < CONFIRM_IN + CONFIRM_HOLD {
         // steady hold: apply once, not every frame
         if tf.scale != Vec2::ONE {
             tf.scale = Vec2::ONE;
-            fade_children(children, 1.0, &mut parts);
+            fade(children, 1.0, &kids, &mut parts);
         }
     } else {
         let f = 1.0 - ui::ease_out((age - CONFIRM_IN - CONFIRM_HOLD) / CONFIRM_OUT);
-        fade_children(children, f, &mut parts);
+        fade(children, f, &kids, &mut parts);
     }
 }
 
@@ -481,11 +414,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn log_icons_match_the_atlas() {
-        // bitmapalias.xml: icon 4 at (0, 829), 11 at (327, 859), 14 at (218, 889)
-        assert_eq!(log_rect(4).min, Vec2::new(0.0, 829.0));
-        assert_eq!(log_rect(11).min, Vec2::new(327.0, 859.0));
-        assert_eq!(log_rect(FALL).min, Vec2::new(218.0, 889.0));
-        assert_eq!(log_icon(WeaponKind::Rocket), 12);
+    fn rows_slide_in_from_the_right_and_settle() {
+        assert_eq!(slide(0.0), (ENTER_X, 0.0));
+        let (x, f) = slide(ENTER);
+        assert!(x.abs() < 1e-4 && (f - 1.0).abs() < 1e-4);
+        let (mid_x, mid_f) = slide(ENTER / 2.0);
+        assert!(mid_x > 0.0 && mid_x < ENTER_X && mid_f > 0.0 && mid_f < 1.0);
     }
 }

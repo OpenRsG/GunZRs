@@ -17,6 +17,7 @@ use bevy::{prelude::*, transform::TransformSystems, ui::UiSystems};
 
 pub(super) fn plugin(app: &mut App) {
     app.init_match_resource::<Taken>()
+        .init_match_resource::<Report>()
         .init_match_resource::<Blood>()
         .add_systems(
             Update,
@@ -47,26 +48,36 @@ pub(super) fn plugin(app: &mut App) {
 // ---------------------------------------------------------------------------------------------
 // Death damage report
 
-/// Damage the player took this life: attacker, HP lost, AP lost. Cleared on death and new round.
+/// Damage the player took this life: attacker, HP lost, AP lost, hits. Cleared on death and new
+/// round.
 #[derive(Resource, Default)]
-struct Taken(Vec<(Entity, f32, f32)>);
+struct Taken(Vec<(Entity, f32, f32, u32)>);
 
-/// The report under the death text.
-#[derive(Component)]
-pub(super) struct ReportText;
+/// What the death screen (`death.rs`) reports, filled when the player dies.
+#[derive(Resource, Default)]
+pub(super) struct Report {
+    /// The killer's name and weapon (empty if it has none); `None` for a fall or a suicide.
+    pub by: Option<(String, String)>,
+    /// HP and AP lost to everyone this life.
+    pub taken: (f32, f32),
+    /// The killer's HP and AP at the moment of death.
+    pub left: Option<(f32, f32)>,
+    /// Hits the killer landed on the player this life.
+    pub hits: u32,
+}
 
-/// Attackers listed in the report (the rest are summed in "others").
-const REPORT_ROWS: usize = 6;
-
+#[allow(clippy::too_many_arguments)]
 fn report(
     mut wounded: MessageReader<Wounded>,
     mut killed: MessageReader<Killed>,
     mut rounds: MessageReader<NewRound>,
     mut taken: ResMut<Taken>,
+    mut out: ResMut<Report>,
+    data: Option<Res<ActorData>>,
     player: Query<Entity, With<Player>>,
     names: Query<&Name>,
+    vitals: Query<&Vitals>,
     time: Res<Time>,
-    mut text: Single<&mut Text, With<ReportText>>,
 ) {
     let Ok(me) = player.single() else {
         return;
@@ -76,37 +87,43 @@ fn report(
     }
     for w in wounded.read().filter(|w| w.target == me) {
         match taken.0.iter_mut().find(|t| t.0 == w.attacker) {
-            Some(t) => (t.1, t.2) = (t.1 + w.hp, t.2 + w.ap),
-            None => taken.0.push((w.attacker, w.hp, w.ap)),
+            Some(t) => (t.1, t.2, t.3) = (t.1 + w.hp, t.2 + w.ap, t.3 + 1),
+            None => taken.0.push((w.attacker, w.hp, w.ap, 1)),
         }
     }
-    for _ in killed.read().filter(|k| k.victim == me) {
-        taken.0.sort_by(|a, b| (b.1 + b.2).total_cmp(&(a.1 + a.2)));
-        let mut s = String::new();
-        let (mut hp, mut ap) = (0.0, 0.0);
-        for (i, &(by, h, a)) in taken.0.iter().enumerate() {
-            if i < REPORT_ROWS {
-                let who = if by == me {
-                    "yourself"
-                } else {
-                    names.get(by).map_or("?", |n| n.as_str())
-                };
-                s += &format!("\n{who}: {h:.0} HP  {a:.0} AP");
-            }
-            (hp, ap) = (hp + h, ap + a);
-        }
-        if taken.0.len() > REPORT_ROWS {
-            s += &format!("\n+{} more", taken.0.len() - REPORT_ROWS);
-        }
-        if !s.is_empty() {
-            s = format!("Damage taken: {hp:.0} HP  {ap:.0} AP{s}");
-            info!(
-                "t={:.2} damage report: {}",
-                time.elapsed_secs(),
-                s.replace('\n', " | ")
-            );
-        }
-        text.0 = s;
+    for k in killed.read().filter(|k| k.victim == me) {
+        let by = (k.killer != me).then(|| {
+            let weapon = data
+                .as_ref()
+                .and_then(|d| d.items.get(k.item))
+                .and_then(|i| i.name.clone());
+            let name = names.get(k.killer).map_or("?", |n| n.as_str());
+            (name.to_owned(), weapon.unwrap_or_default())
+        });
+        *out = Report {
+            taken: taken
+                .0
+                .iter()
+                .fold((0.0, 0.0), |s, t| (s.0 + t.1, s.1 + t.2)),
+            left: by
+                .as_ref()
+                .and_then(|_| vitals.get(k.killer).ok())
+                .map(|v| (v.hp.max(0.0), v.ap.max(0.0))),
+            hits: taken
+                .0
+                .iter()
+                .find(|t| t.0 == k.killer && k.killer != me)
+                .map_or(0, |t| t.3),
+            by,
+        };
+        info!(
+            "t={:.2} damage report: {:.0} HP {:.0} AP from {} hits by {}",
+            time.elapsed_secs(),
+            out.taken.0,
+            out.taken.1,
+            out.hits,
+            out.by.as_ref().map_or("yourself", |b| b.0.as_str())
+        );
         taken.0.clear();
     }
 }
@@ -722,11 +739,11 @@ fn spawn_lens(
 
 /// Hits on the player throw a cluster of drops (and spatters for the bigger ones) on the lens
 /// near the screen edges; big drops slide down, everything darkens and fades out; the edges
-/// darken with damage and low health.
+/// flash with damage.
 #[allow(clippy::too_many_arguments)]
 fn lens(
     mut wounded: MessageReader<Wounded>,
-    player: Query<(Entity, &Vitals, Has<Dead>), With<Player>>,
+    player: Query<(Entity, Has<Dead>), With<Player>>,
     settings: Res<Settings>,
     real: Res<Time<Real>>,
     art: Res<LensArt>,
@@ -789,9 +806,7 @@ fn lens(
             }
         }
     }
-    let (me, frac, dead) = player.single().map_or((None, 1.0, true), |(e, v, d)| {
-        (Some(e), v.hp / v.max_hp.max(1.0), d)
-    });
+    let (me, dead) = player.single().map_or((None, true), |(e, d)| (Some(e), d));
     for w in wounded
         .read()
         .filter(|w| Some(w.target) == me && w.hp > 0.0)
@@ -871,12 +886,8 @@ fn lens(
             }
         }
     }
-    let level = if dead || !on {
-        0.0
-    } else {
-        ((1.0 - frac / 0.5).clamp(0.0, 1.0) * 0.8 + *flash).min(1.0)
-    };
-    let pulse = 0.9 + 0.1 * (real.elapsed_secs() * (2.0 + 3.0 * (1.0 - frac))).sin();
+    // Hits flash the edges; the low-health vignette is `vitals.rs`.
+    let level = if dead || !on { 0.0 } else { *flash };
     if let Ok((mut img, mut vis)) = vignette.single_mut() {
         let want = if level > 0.0 {
             Visibility::Inherited
@@ -886,6 +897,6 @@ fn lens(
         if *vis != want {
             *vis = want;
         }
-        img.color = Color::srgba(1.0, 1.0, 1.0, level * pulse);
+        img.color = Color::srgba(1.0, 1.0, 1.0, level);
     }
 }

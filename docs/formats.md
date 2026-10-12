@@ -582,7 +582,7 @@ textures (`crosshair02`, `hit_marker`, `kill_marker`, `ingame_hpbar`, `ingame_ti
   0..3 for >=75% / >=50% / >=25% / below (**inferred**). The armour bar uses the blue of the retail
   segments (40,111,162)->(64,150,220) as one bar.
 - **Weapon icons**: the shop's item icons (`itemicon.xml` cells of `interface/loadable/*`, loaded
-  through `shop::Icons`) for the weapon strip; the kill feed still uses the kill-log atlas.
+  through `shop::Icons`) for the weapon strip; the kill feed uses text chips, no retail art.
 - **Fonts**: none in the archives. `ui.rs` embeds Chakra Petch (running text, rows, buttons; it
   replaces Bevy's default font), Big Shoulders Display (titles) and JetBrains Mono (numbers,
   captions), all SIL OFL in `assets/fonts`.
@@ -594,12 +594,14 @@ armour bar; the number pops on a hit and turns red under 30%); weapon strip (up 
 with their key numbers, the selected one framed and underlined in the accent) over the weapon plate
 (weapon name, 44 px magazine, reserve; the magazine turns red and pulses at or below a quarter of its
 size, RELOAD or NO AMMO shows when it is empty; melee weapons show the name only) bottom right, bottom
-centre on touch screens; the match header (a plate holding the clock, with the red and blue scores in
-team chips either side in team modes; the clan emblems of `clan.rs` hang off it) and KILLS / DEATHS
-top left. The header stacks the timer over the mode line (round, leader; hidden when the mode has
-none): `session::Clock.timer`, `.header` and `.team_score`. A kill by the player shows ELIMINATED and
-the victim's name below the crosshair for 1.4 s (`feed.rs`; HEADSHOT / MELEE tags when they apply);
-the death screen is a plate with KILLED BY, the damage rows and a draining RESPAWN IN bar.
+centre on touch screens; top left the mode and map line and the KILLS / DEATHS / K/D plates, top centre
+(`top.rs`) a compass strip (bearing 0 = N = the way yaw 0 faces, growing clockwise; ticks every 15
+degrees), the clock between two chips (YOU / LEAD in free-for-all modes, RED / BLUE in team modes; the
+clock turns red in the last minute of a countdown) and the mode's status line (`FIRST TO 50`, round,
+leader; hidden when the mode has none): `session::Clock.timer`, `.header` and `.team_score`. A kill by
+the player shows ELIMINATED and the victim's name below the crosshair for 1.4 s (`feed.rs`; HEADSHOT /
+MELEE tags when they apply);
+the death screen is a grey, darkened view with an ELIMINATED band, the killer, the damage report and a RESPAWN IN bar (`death.rs`, below).
 Damage direction is a thin arc of nine glowing segments on a 140 px ring around the crosshair,
 turned towards the attacker and fading over the last 0.75 s. The HUD draws no full-screen red wash
 (the graphics page's hit flash and low-health effect and the screen blood already tint the frame);
@@ -1265,16 +1267,13 @@ the player characters and is not used by `gunz-play`.
 - **Visual**: bullet-hole / blood-mark decals from `sfx/*bulletmark*`, `sfx/blood-mark*` at the
   collision hit point along its normal; red damage-direction arcs; red edge vignette below low HP
   that pulses faster as health falls; hit marker and centre kill notice.
-- **Kill feed** (`src/hud/feed.rs`): one row per kill, newest at the bottom, sliding in and out:
-  killer, weapon icon, victim. The icons are the retail kill log's (`bitmapalias.xml`
-  `Ingame_KillLogArrow_0..14` = dagger, sword, blade, pistol, 2 pistols, revolver, 2 revolvers,
-  SMG, 2 SMGs, shotgun, rifle, machine gun, rocket, grenade, fall: 108 x 29 cells of
-  `ingame_01.png` from (0, 799), 4 per row, 109 x 30 apart); grenades of every kind and mines use
-  13, suicides 14. A gun kill whose last bullet hit at 1.5 m or more above the victim's feet is a
-  headshot (**inferred**: retail counts headshot kills and has the `Ingame_KillDirection_HeadShot`
-  banner, `ingame_00.png` (0, 596, 411 x 62), but no head zone in the data): the row gets a
-  HEAD SHOT tag cut from that banner, and the player's own headshot flashes the banner. Clan wars
-  add each side's emblem. LAN protocol 3 carries the headshot flag with each kill.
+- **Kill feed** (`src/hud/feed.rs`): up to four rows at the top right, newest at the bottom, sliding in
+  (30 px, 0.25 s) and fading out: killer, a light chip with the weapon's short type (SWORD, RIFLE,
+  SHOTGUN, ...; FALL for a world kill), a red HEADSHOT tag, victim. The player's kills are orange,
+  the player's deaths dark red with a pink victim, the rest dark. A gun kill whose last bullet hit at
+  1.5 m or more above the victim's feet is a headshot (**inferred**: retail counts headshot kills but
+  has no head zone in the data). Clan wars add each side's emblem. LAN protocol 3 carries the
+  headshot flag with each kill.
 - **Coverage** (headless run log): surface sets 35/35, voices 13/13, misc cues 16/16, zitem
   `snd_fire/reload/dryfire` 19/19 (`swing`, the one name without a file, is aliased to
   `blade_swing`: **inferred**, every other melee item and `animationevent.xml` `melee_attack` use
@@ -1405,10 +1404,20 @@ either way. It replaces the old `if_score_get` kill-streak blip.
 iGunZ-patch-note ideas, own implementation (labels: **observed** = retail file, **inferred** = ours).
 
 - **Damage report**. `combat::Wounded {target, attacker, hp, ap}` is written by `apply_damage` with what a hit
-  really took (after armour, mods and overkill). The HUD sums the player's per attacker, and on death sorts by
-  HP+AP, shows `Damage taken: H HP A AP` and one `name: H HP A AP` row per attacker (6 at most, then `+N more`)
-  under "You died" and logs `damage report: ...`. Cleared on each death and on `NewRound`; self damage is
-  "yourself".
+  really took (after armour, mods and overkill). The HUD sums the player's per attacker (and counts the hits);
+  on death `fx::Report` keeps the total HP / AP lost, the killer's name, weapon (`Killed.item`), HP / AP at that
+  moment and its hit count, and logs `damage report: ...`. Cleared on each death and on `NewRound`; a suicide
+  or fall has no killer, so its screen reads YOU DIED and shows no BY row, LEFT ON or HITS. Shown by
+  `src/hud/death.rs` (below).
+- **Death screen** (`src/hud/death.rs`, mock `GunZ HUD.html`; the timings and look are the mock's). While the
+  player is `Dead` (and the match is not over, the scoreboard key not held): `gfx.rs` eases `Fx::gray` to 1,
+  and `gfx.wgsl` blurs the view (16 golden-angle taps, 12 px at 1080 lines) and drops its colour before
+  bloom, only while `gray` > 0 so a live frame is unchanged; a UI veil (rgba(5,5,6) at 0.87, the mock's
+  .55 in display space is 0.83 in Bevy's linear blending) darkens the view and the HUD under it; a 240 px band at
+  y 380 (1080 canvas) opens from scaleY 0 in 0.25 s with 4 px red 135° hazard lines on both edges, both
+  faded at the ends (a 1920x4 image); ELIMINATED (display 110, #ff3b30) slams in from 1.3x in 0.35 s; BY +
+  killer + weapon chip; DAMAGE TAKEN / `<KILLER> LEFT ON` / HITS (each hidden without data); RESPAWN IN n over
+  a 300 px bar that fills as the wait runs out (`WAITING TO REJOIN` and no bar in a round mode's hold).
 - **Teammate bars** (`team_bars`, Red/Blue modes only). One UI stack per teamed actor, spawned once (marker
   `Barred` on the actor), positioned every frame after transform propagation with `Camera::world_to_viewport`
   of the point 0.25 m over the capsule top: 64 px HP bar (the retail HP tier colours), 4 px AP bar, the
@@ -1472,10 +1481,8 @@ chest, then smoothsteps to the killer over `FLY_SECS` 0.9 s and orbits it at `DI
 `HitShape`), looking at its chest from a pitch of -0.25 rad. The mouse (`Intent` yaw/pitch, so `--script yaw=`
 works too) turns it on top of a slow drift of one turn per `ORBIT_SECS` 24, the wheel zooms 1.5-9 m by 0.5 m per
 notch, and `MapCollision::sweep_sphere` (radius `actor::CAM_RADIUS`) pulls it in front of walls; the flight itself
-is an unswept blend. The killer carries a UI tag (`<name> killed` over a yellow 64 px `YOU`) on a blot generated
-once at startup (9 overlapping discs plus 16 droplets, 256x128, soft alpha edge), pinned 0.1 m over its head every
-frame with `Camera::world_to_viewport` (hidden when behind the camera). It ends at the respawn, when the killer
-disappears, when the option is switched off, or `KILLCAM_SECS` 3 s after the death once round-mode spectating has
+is an unswept blend. The killer's name is on the death screen (`hud/death.rs`); the camera has no tag of its own.
+It ends at the respawn, when the killer disappears, when the option is switched off, or `KILLCAM_SECS` 3 s after the death once round-mode spectating has
 a target (`game::Spectate`; then `follow_camera` shows that actor, with no spectate target the killcam lasts
 until the next round). The numbers are tuning, not data. Check:
 `gunz-play GAME Citadel --mode dm --bots 1 --skill 1 --bots-ahead 8 --hp 1 --ap 0 --script "wait:1;yaw=100;wait:2"

@@ -1429,8 +1429,8 @@ Not played (no matching UI in the port, or role unclear): `if_click` (0.44 s) an
 (1.25 s, mono; too long for a hover, so `mouse_*` serve every screen), `if_score_flyby`,
 `match_click`, `match_found`, `match_reject`, `league_*`, `tier_down`,
 `pop_up_complete_achievement`, `pop_up_hidden_achievement`, `result_placement_widget`.
-There is no effects-volume setting in the port (`Settings.music` only scales music), so these play
-at full level. `UiSound` plays through `ui::sounds` (the `Mount` archive, non-spatial), which
+They play at the GRAPHICS & SOUND page's Effects level (`music::level_new`, like every sound but
+the music; the announcer has its own slider). `UiSound` plays through `ui::sounds` (the `Mount` archive, non-spatial), which
 loads and decodes all of them at the first frame and logs one `ui sound: <stem>: ... decodes` line
 each; `--shot` runs log `ui sound: play <stem>` instead of playing. Check: `cargo test --release
 interface_stems` decodes every stem from `.local/extract`.
@@ -2332,7 +2332,10 @@ translation; forward is -Z. All numbers **observed** from keys except where mark
   The capsule climbs by that profile (`climb`), so the drawn `runW` keeps `Bip01` at its frame-0
   height (`Animator::lift_lock`); before, the model rose with the clip on top of the capsule's
   climb, ending 3.2 m above it and through ceilings (**port rule**). Tumble and kick distances are
-  therefore gameplay values (inferred).
+  therefore gameplay values (inferred). `runLW`/`runRW` do shift `Bip01` sideways, away from the
+  wall: 0 -> 25 cm within 0.4 s, then held; their `_down` clips start 14 cm out and return to 0
+  (**observed**, man and woman). The port draws that offset (no `root_lock` for these four clips;
+  the capsule does not move by it); pinned at frame 0 the body sank 25 cm into the wall.
 - Melee root motion (forward m / clip s): katana attack1 .97/.30, attack2 .76/.30, attack3 1.04/.40,
   attack4 1.25/.80, slash .98/.83, charge .55; returns +.55/+.24/-.81; sword .78 .89 1.31 1.01, slash 1.0;
   blade .74 .85 .98 .59, slash .81; air clips and 2h dagger 0.

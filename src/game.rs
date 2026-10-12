@@ -261,8 +261,6 @@ pub fn friendly(a: (Option<Team>, bool), b: (Option<Team>, bool)) -> bool {
 /// profile's `controls::Controls`.
 #[derive(Resource, Clone, Debug)]
 pub struct Settings {
-    /// Background-music loudness, 0..=1 (`music.rs`; **inferred** default).
-    pub music: f32,
     /// The combo layer's sounds: hit ticks, kill impacts and spree stingers (`hud/combo.rs`).
     pub kill_sounds: bool,
     /// The combo meter and the multikill/spree banners (`hud/combo.rs`).
@@ -286,7 +284,6 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            music: 0.5,
             kill_sounds: true,
             combo: true,
             hit_sound: false,

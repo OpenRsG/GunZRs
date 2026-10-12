@@ -36,7 +36,7 @@ pub(super) const TABS: [(&str, Page); 7] = [
     ("INVENTORY", Page::Inventory),
     ("CLAN", Page::Clan),
     ("CONTROLS", Page::Controls),
-    ("GRAPHICS", Page::Graphics),
+    ("GRAPHICS & SOUND", Page::Graphics),
 ];
 
 /// 20240 -> `20,240`.

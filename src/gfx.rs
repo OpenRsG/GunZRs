@@ -73,9 +73,12 @@ pub enum Knob {
     DynLight,
     Shadow,
     Explosions,
+    Music,
+    Effects,
+    Announcer,
 }
 
-pub const N: usize = 19;
+pub const N: usize = 22;
 
 impl Knob {
     pub const ALL: [Knob; N] = [
@@ -98,6 +101,9 @@ impl Knob {
         Knob::DynLight,
         Knob::Shadow,
         Knob::Explosions,
+        Knob::Music,
+        Knob::Effects,
+        Knob::Announcer,
     ];
 
     fn row(self) -> &'static Row {
@@ -135,6 +141,7 @@ impl Knob {
             Knob::HudScale => format!("x{v:.1}"),
             Knob::Contrast | Knob::Saturation => format!("{:.0}%", v * 100.0),
             Knob::Explosions if v == 0.0 => "RETAIL".into(),
+            Knob::Music | Knob::Effects | Knob::Announcer if v == 0.0 => "OFF".into(),
             _ => format!("{:.0}%", v * 100.0),
         }
     }
@@ -192,6 +199,19 @@ const KNOBS: [Row; N] = [
     ),
     // 0 draws only the game's own explosion sprite; above, the realistic layers scale with it
     ("explosions", "Explosions", 0.0, 1.0, 0.05, [0.0, 0.6, 1.0]),
+    // loudness, not graphics, but the same sliders and `gfx_` profile keys; presets keep them
+    ("music", "Music", 0.0, 1.0, 0.05, [0.5, 0.5, 0.5]),
+    ("effects", "Effects", 0.0, 1.0, 0.05, [1.0, 1.0, 1.0]),
+    ("announcer", "Announcer", 0.0, 1.0, 0.05, [1.0, 1.0, 1.0]),
+];
+
+/// Knobs a preset leaves alone.
+const KEEP: [Knob; 5] = [
+    Knob::Fov,
+    Knob::HudScale,
+    Knob::Music,
+    Knob::Effects,
+    Knob::Announcer,
 ];
 
 /// Value, profile text and label of each option of a choice setting.
@@ -368,18 +388,19 @@ impl Graphics {
         self.knobs[k as usize] = round2((v / s).round() * s).clamp(lo, hi);
     }
 
-    /// Takes a preset's settings; vsync, the frame limit and the field of view stay.
+    /// Takes a preset's settings; vsync, the frame limit and the [`KEEP`] knobs stay.
     pub fn preset(&mut self, p: Preset) {
-        let (fov, hud) = (self.get(Knob::Fov), self.get(Knob::HudScale));
+        let kept = KEEP.map(|k| self.get(k));
         self.tone = p.tone();
         self.aa = p.aa();
         self.aniso = p.aniso();
         self.knobs = KNOBS.map(|k| k.5[p as usize]);
-        self.knobs[Knob::Fov as usize] = fov;
-        self.knobs[Knob::HudScale as usize] = hud;
+        for (k, v) in KEEP.into_iter().zip(kept) {
+            self.knobs[k as usize] = v;
+        }
     }
 
-    /// The preset these settings are (ignoring vsync, frame limit, field of view and HUD size).
+    /// The preset these settings are (ignoring vsync, frame limit and the [`KEEP`] knobs).
     pub fn which(&self) -> Option<Preset> {
         Preset::ALL.into_iter().find(|&p| {
             let mut q = self.clone();
@@ -1231,6 +1252,14 @@ fn lighting(m: &mut ChildSpawnerCommands) {
             }
         });
         choices(m, "Frame limit", &FPS, 70.0, Ctl::Fps);
+    }
+    m.spawn(Node {
+        height: px(8),
+        ..default()
+    });
+    m.spawn(heading("Sound"));
+    for k in [Knob::Music, Knob::Effects, Knob::Announcer] {
+        slider(m, k);
     }
 }
 

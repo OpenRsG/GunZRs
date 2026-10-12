@@ -698,14 +698,20 @@ impl Sfx<'_, '_> {
         if self.live.iter().count() >= MAX_LIVE {
             return;
         }
-        self.commands.spawn((
+        let sound = (
             AudioPlayer::new(h),
             PlaybackSettings::DESPAWN
                 .with_spatial(spatial)
                 .with_speed(speed),
             Transform::from_translation(at),
             Expires(self.time.elapsed_secs() + SOUND_LIFE),
-        ));
+        );
+        // in the spawn itself: the start level is set when `PlaybackSettings` is added
+        if stem.starts_with("nar") {
+            self.commands.spawn((sound, crate::music::Narration));
+        } else {
+            self.commands.spawn(sound);
+        }
     }
 
     fn surface(&self, p: Vec3, facing: Option<Vec3>) -> Surf {

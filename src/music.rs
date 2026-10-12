@@ -6,14 +6,16 @@
 //! theme" ones; lobby and character-select tracks excluded) picked by a hash of the map
 //! directory (the same map always gets the same track); Duel plays `leagueloop`; the
 //! match-end screen crossfades into the `fin` stinger. A change of wanted track crossfades.
-//! Headless `--shot` runs only log the choice. Loudness is `Settings::music`.
+//! Headless `--shot` runs only log the choice. Loudness is the profile's `Knob::Music`; every
+//! other sound plays at `Knob::Effects` ([`Narration`]: `Knob::Announcer`), see [`levels`].
 
 use crate::{
-    game::Settings,
+    gfx::Knob,
     level::Level,
     menu::Mode,
     mrs::Vfs,
     phase::{MatchSystems, Persist},
+    profile::Profile,
     session::{Clock, Rules},
     view::Shot,
 };
@@ -53,15 +55,18 @@ pub struct MusicPlugin;
 
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Want>().add_systems(
-            Update,
-            (
-                choose.run_if(resource_exists::<Level>).in_set(MatchSystems),
-                play.run_if(resource_changed::<Want>),
-                fade,
-            )
-                .chain(),
-        );
+        app.init_resource::<Want>()
+            .add_observer(level_new)
+            .add_systems(
+                Update,
+                (
+                    choose.run_if(resource_exists::<Level>).in_set(MatchSystems),
+                    play.run_if(resource_changed::<Want>),
+                    fade,
+                    levels.run_if(resource_exists_and_changed::<Profile>),
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -237,11 +242,11 @@ fn play(
 /// Real time, so the end-of-match freeze (paused virtual time) does not stop the crossfade.
 fn fade(
     time: Res<Time<Real>>,
-    settings: Option<Res<Settings>>,
+    profile: Option<Res<Profile>>,
     mut commands: Commands,
     mut voices: Query<(Entity, &mut Voice, Option<&mut AudioSink>)>,
 ) {
-    let loud = settings.map_or(Settings::default().music, |s| s.music);
+    let loud = loudness(profile.as_deref(), Knob::Music);
     let step = time.delta_secs() / FADE;
     for (e, mut v, sink) in &mut voices {
         let to = v.target;
@@ -259,6 +264,56 @@ fn fade(
     }
 }
 
+/// An announcer line: plays at `Knob::Announcer` instead of `Knob::Effects`.
+#[derive(Component)]
+pub struct Narration;
+
+fn loudness(profile: Option<&Profile>, k: Knob) -> f32 {
+    profile.map_or_else(
+        || crate::gfx::Graphics::default().get(k),
+        |p| p.graphics.get(k),
+    )
+}
+
+fn effect_level(profile: Option<&Profile>, narration: bool) -> Volume {
+    Volume::Linear(loudness(
+        profile,
+        if narration {
+            Knob::Announcer
+        } else {
+            Knob::Effects
+        },
+    ))
+}
+
+/// A new sound (not music) starts at its slider's level.
+fn level_new(
+    add: On<Add, PlaybackSettings>,
+    profile: Option<Res<Profile>>,
+    mut sounds: Query<(&mut PlaybackSettings, Has<Narration>), Without<Voice>>,
+) {
+    if let Ok((mut s, n)) = sounds.get_mut(add.entity) {
+        s.volume = s.volume * effect_level(profile.as_deref(), n);
+    }
+}
+
+/// A moved slider reaches the sounds already playing (the ambience loops).
+// ponytail: assumes every non-music sound spawns at volume 1 (all do); keep a base volume per
+// sound if one ever spawns quieter.
+fn levels(
+    profile: Option<Res<Profile>>,
+    mut flat: Query<(&mut AudioSink, Has<Narration>), Without<Voice>>,
+    mut spatial: Query<(&mut SpatialAudioSink, Has<Narration>)>,
+) {
+    let p = profile.as_deref();
+    for (mut s, n) in &mut flat {
+        s.set_volume(effect_level(p, n));
+    }
+    for (mut s, n) in &mut spatial {
+        s.set_volume(effect_level(p, n));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +324,32 @@ mod tests {
         for s in ["theme rock(d)", "intro retake2(d-r)", "fin", "leagueloop"] {
             assert!(RESERVED.contains(&s), "{s}");
         }
+    }
+
+    /// New sounds start at the effects or announcer slider; music keeps its own volume.
+    #[test]
+    fn sounds_start_at_their_slider() {
+        let mut world = World::new();
+        let mut p = Profile::default();
+        p.graphics.set(Knob::Effects, 0.25);
+        p.graphics.set(Knob::Announcer, 0.0);
+        world.insert_resource(p);
+        world.add_observer(level_new);
+        let fx = world.spawn(PlaybackSettings::DESPAWN).id();
+        let nar = world.spawn((PlaybackSettings::DESPAWN, Narration)).id();
+        let bgm = world
+            .spawn((
+                Voice {
+                    level: 0.0,
+                    target: 1.0,
+                },
+                PlaybackSettings::LOOP.with_volume(Volume::Linear(0.8)),
+            ))
+            .id();
+        let v = |e| world.get::<PlaybackSettings>(e).unwrap().volume.to_linear();
+        assert_eq!(v(fx), 0.25);
+        assert_eq!(v(nar), 0.0);
+        assert_eq!(v(bgm), 0.8);
     }
 
     #[test]

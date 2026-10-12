@@ -2494,7 +2494,9 @@ fn drive(
         a.flinch = None;
         let reload_clip = a.upper == Some("reload");
         if let Some(an) = an.as_mut() {
-            an.root_lock = true;
+            // the side wall-run clips carry `Bip01` 25 cm out from the wall (and their `_down`
+            // clips back in, **observed**); locked at frame 0 the body sank into the wall
+            an.root_lock = !matches!(name, "runLW" | "runRW" | "runLW_down" | "runRW_down");
             // the capsule climbs by `climb()`; the clip's own 3.2 m rise would double it
             an.lift_lock = name == "runW";
             if want != a.playing || a.restart {

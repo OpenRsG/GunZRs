@@ -554,7 +554,7 @@ fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
                         };
                         p.spawn(row()).with_children(|b| {
                             b.spawn(notch(253.0, "CONTROLS", Act::Controls));
-                            b.spawn(notch(253.0, "GRAPHICS", Act::Graphics));
+                            b.spawn(notch(253.0, "GRAPHICS & SOUND", Act::Graphics));
                         });
                         p.spawn(row()).with_children(|b| {
                             // in the browser MAIN MENU is the page itself: nothing else to quit to

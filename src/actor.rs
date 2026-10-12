@@ -440,6 +440,10 @@ struct Tech {
     /// Dash held last frame; when jump was last pressed (a jump buffered before landing).
     prev_dash: bool,
     jump_at: f32,
+    /// The capsule is the small phantom one (tumble, lunge).
+    small: bool,
+    /// Extended lunge: the velocity the lunge slides at until its hit frame.
+    slide: Option<Vec3>,
 }
 
 impl Default for Tech {
@@ -459,6 +463,8 @@ impl Default for Tech {
             silent: false,
             prev_dash: false,
             jump_at: f32::MIN,
+            small: false,
+            slide: None,
         }
     }
 }
@@ -531,6 +537,26 @@ impl Actor {
     /// A reload is running.
     pub fn reloading(&self) -> bool {
         matches!(self.state, State::Reload { .. })
+    }
+
+    /// The weapon in hand was drawn this instant by cancelling a reload that followed a shot (the
+    /// draw delay is skipped: reload shot, shimmer shot, yoyo step).
+    pub fn quick_draw(&self, now: f32) -> bool {
+        now - self.tech.rs_at < 0.1
+    }
+
+    /// The direction (0 forward, 1 back, 2 left, 3 right) of the dash that `intent` starts this
+    /// frame, if any: a fresh Dash press or the second tap of a direction. Read before the
+    /// controller's own tap bookkeeping of the frame.
+    pub fn dash_wanted(&self, now: f32, intent: &Intent) -> Option<usize> {
+        let walk = intent.walk;
+        if intent.dash && !self.tech.prev_dash {
+            return Some(dash_dir(walk));
+        }
+        [walk.y > 0.5, walk.y < -0.5, walk.x < -0.5, walk.x > 0.5]
+            .iter()
+            .enumerate()
+            .position(|(d, &p)| p && !self.held[d] && now - self.taps[d] < DOUBLE_TAP)
     }
 
     /// Every weapon model root of the actor (held and holstered; the holstered are hidden).
@@ -758,6 +784,7 @@ struct Gear {
     speed: f32,
     /// No `limitwall`: wall runs and wall kicks allowed.
     wall: bool,
+    dagger: bool,
 }
 
 fn is_melee(kind: WeaponKind) -> bool {
@@ -806,6 +833,7 @@ fn gear(items: &Items, id: u32) -> Gear {
                 p as f32 / 100.0
             }),
         wall: !w.limit_wall,
+        dagger: w.kind == WeaponKind::Dagger,
     }
 }
 
@@ -853,6 +881,17 @@ fn fresh_slot(items: &Items, id: u32) -> Slot {
 
 pub(crate) fn yaw_of(dir: Vec3) -> f32 {
     f32::atan2(-dir.x, -dir.z)
+}
+
+/// The direction of a Dash press (0 forward, 1 back, 2 left, 3 right): the held one with the
+/// larger part, forward if none.
+fn dash_dir(walk: Vec2) -> usize {
+    match walk {
+        w if w.x.abs() > w.y.abs() && w.x < 0.0 => 2,
+        w if w.x.abs() > w.y.abs() => 3,
+        w if w.y < -0.1 => 1,
+        _ => 0,
+    }
 }
 
 fn approach(cur: Vec3, target: Vec3, max: f32) -> Vec3 {
@@ -1203,7 +1242,7 @@ fn aim_assist(
     col: Option<Res<MapCollision>>,
     player: Single<(&Transform, &mut Intent, Option<&Team>), (With<Player>, Without<Dead>)>,
     others: Query<
-        (&Transform, Option<&Team>, Has<Bot>),
+        (&Transform, Option<&Team>),
         (
             With<Intent>,
             Without<Player>,
@@ -1222,7 +1261,7 @@ fn aim_assist(
     let (origin, dir) = aim(tf.translation, &intent, true);
     let target = others
         .iter()
-        .filter(|(_, t, bot)| !friendly((team.copied(), false), (t.copied(), *bot)))
+        .filter(|(_, t)| !friendly(team.copied(), t.copied()))
         .filter_map(|(o, ..)| {
             let d = o.translation + Vec3::Y * 1.2 - origin;
             let dist = d.length();
@@ -1690,6 +1729,24 @@ fn drive(
             && let Some(c) = data.clip(woman, g.motion, r.clip)
         {
             let speed = r.speed.max(0.05);
+            // extended lunge (dagger): a lunge that comes in a dash, or on the press that starts
+            // one, slides on at the dash's velocity and direction (not the facing)
+            a.tech.slide = None;
+            if g.dagger && r.clip == "uppercut" {
+                a.tech.slide = match a.state {
+                    State::Tumble { .. } => Some(Vec3::new(a.vel.x, 0.0, a.vel.z)),
+                    _ => a
+                        .dash_wanted(now, &intent)
+                        .map(|d| [fwd, -fwd, -right, right][d] * DASH),
+                };
+                if let Some(v) = a.tech.slide {
+                    debug!(
+                        "t={now:.2} tech: extended lunge {who} slides at {:.1} m/s (facing {:.0} deg off)",
+                        v.length(),
+                        v.angle_between(fwd).to_degrees()
+                    );
+                }
+            }
             if blow_clip(r.clip) {
                 match a.state {
                     State::Tumble { .. } => {
@@ -1877,13 +1934,7 @@ fn drive(
             a.held[d] = pressed[d];
         }
         if intent.dash && !a.tech.prev_dash {
-            // the held direction with the larger part, forward if none
-            want = Some(match walk {
-                w if w.x.abs() > w.y.abs() && w.x < 0.0 => 2,
-                w if w.x.abs() > w.y.abs() => 3,
-                w if w.y < -0.1 => 1,
-                _ => 0,
-            });
+            want = Some(dash_dir(walk));
         }
         a.tech.prev_dash = intent.dash;
         // one air dash per jump (a slash out of a dash gives it back); super dash: always after
@@ -1914,13 +1965,15 @@ fn drive(
                 a.tech.dashed = true;
                 a.vel.y = a.vel.y.max(0.0);
             }
-            if matches!(
-                a.state,
-                State::Action {
-                    clip: "uppercut",
-                    ..
-                }
-            ) {
+            if !g.dagger
+                && matches!(
+                    a.state,
+                    State::Action {
+                        clip: "uppercut",
+                        ..
+                    }
+                )
+            {
                 debug!("t={now:.2} tech: extended flip {who} (a dash out of the uppercut)");
             }
             // light step: a dash right after a slash makes no dash sound and no dust
@@ -1959,6 +2012,16 @@ fn drive(
             a.grounded = false;
             if matches!(a.state, State::Tumble { .. }) {
                 debug!("t={now:.2} tech: jump cancel {who} (dash cooldown cancelled)");
+            } else if matches!(a.state, State::Action { clip, .. } if blow_clip(clip)) {
+                debug!(
+                    "t={now:.2} tech: {} {who} (a jump out of the {})",
+                    if g.dagger {
+                        "float step"
+                    } else {
+                        "jump cancel"
+                    },
+                    if g.dagger { "stab" } else { "slash" }
+                );
             }
             if matches!(a.state, State::Action { .. } | State::Tumble { .. }) {
                 a.state = State::Free;
@@ -1996,6 +2059,8 @@ fn drive(
                 );
             } else if matches!(a.state, State::Wall { .. }) {
                 debug!("t={now:.2} tech: multi wall jump {who} (a kick off a second wall)");
+            } else if matches!(a.state, State::WallRun { .. }) {
+                debug!("t={now:.2} tech: wall spring {who} (a jump out of the wall run)");
             } else if matches!(a.state, State::Tumble { .. }) {
                 debug!("t={now:.2} tech: wall cancel {who} (a dash back to the wall, kick again)");
             } else if now - a.tech.ss_at < TECH_SHOT {
@@ -2163,6 +2228,7 @@ fn drive(
                     a.shot = true;
                     if matches!(a.state, State::Tumble { .. }) {
                         a.state = State::Free;
+                        a.tech.dashed = false;
                         debug!("t={now:.2} tech: dash shot {who} (the shot cuts the dash)");
                     }
                     {
@@ -2204,6 +2270,29 @@ fn drive(
             }
         }
 
+        // Phantom: a tumbling or lunging (dagger `uppercut`) actor has half the hit capsule.
+        let small = alive
+            && (matches!(a.state, State::Tumble { .. })
+                || g.dagger
+                    && matches!(
+                        a.state,
+                        State::Action {
+                            clip: "uppercut",
+                            ..
+                        }
+                    ));
+        if small != a.tech.small {
+            a.tech.small = small;
+            if small {
+                debug!("t={now:.2} tech: phantom {who} (the hit capsule is halved)");
+                commands.entity(e).insert(HitShape {
+                    radius: RADIUS * 0.5,
+                    height: HEIGHT * 0.5,
+                });
+            } else {
+                commands.entity(e).remove::<HitShape>();
+            }
+        }
         // Movement.
         let mut an = animators.get_mut(a.model).ok();
         let root = an.as_mut().map_or(Vec3::ZERO, |an| an.take_root_motion());
@@ -2270,6 +2359,12 @@ fn drive(
             _ if a.grounded => hv = wish,
             _ if wish != Vec3::ZERO => hv = approach(hv, wish, 10.0 * dt),
             _ => {}
+        }
+        // extended lunge: the lunge goes on at the dash's velocity until its hit frame
+        if let Some(v) = a.tech.slide
+            && matches!(a.state, State::Action { clip: "uppercut", t, cancel_from, .. } if t < cancel_from)
+        {
+            hv = v;
         }
         if let Ok(p) = pushes.get(e) {
             hv += Vec3::new(p.0.x, 0.0, p.0.z);

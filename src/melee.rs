@@ -7,14 +7,17 @@
 //!
 //! Controls (the same `Intent` bots write): a click (`attack` pressed) slashes, `attack`
 //! held from the click charges; `guard` held raises the guard; `attack` while guarding is the
-//! uppercut. Bots hold `attack` to chain slashes.
+//! uppercut. Bots hold `attack` to chain slashes. A dagger has no guard: its `guard` press is the
+//! alternative fire, a lunge on the ground (its `uppercut` clip launches); its click stabs
+//! (`attackS`) on the ground and in the air.
 
 use crate::{
-    actor::{ActorData, ActorSet},
+    actor::{Actor, ActorData, ActorSet},
     ani::FPS,
     col::MapCollision,
-    combat::{HIT_RADIUS, SWITCH_DELAY, Vfx, is_melee, rnd},
+    combat::{SWITCH_DELAY, Vfx, is_melee, rnd, shape},
     game::*,
+    item::WeaponKind,
     phase::MatchSystems,
 };
 use bevy::prelude::*;
@@ -196,6 +199,24 @@ const MASSIVE: Blow = Blow {
     effect: Effect::Massive,
     ..SLASH
 };
+/// The dagger's alternative fire (guard key, on the ground): its `uppercut` clip is a lunge that
+/// launches (`blast_dagger`); *inferred*.
+const LUNGE: Blow = Blow {
+    name: "lunge",
+    arc: 70.0,
+    effect: Effect::Launch,
+    ..SLASH
+};
+/// The extended lunge (a lunge that starts in a dash, or on the press that starts one): twice the
+/// reach of the plain one (the guides' "about 2x", *inferred*).
+const E_LUNGE: Blow = Blow {
+    name: "extended lunge",
+    reach: 2.0,
+    ..LUNGE
+};
+/// A blocked blow recoils a dagger stabber (its `damage` clip) unless it looks up or down at
+/// least this steeply, radians (block tap; *inferred*).
+const TAP_PITCH: f32 = 1.2;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Stage {
@@ -264,6 +285,8 @@ pub struct Melee {
     flash: f32,
     /// The guard went up in the air (air butterfly): it may stay up there until the actor lands.
     air_guard: bool,
+    /// A dagger's guard press (alternative fire) is pending until this time.
+    lunge_until: f32,
     /// Air hits taken since landing.
     juggle: u8,
     /// Item last seen in hand (weapon switches restart the state).
@@ -335,11 +358,14 @@ fn drive(
         Has<Dead>,
         Has<Bot>,
         Has<Guarding>,
+        &Actor,
         Option<&Name>,
     )>,
 ) {
     let (now, dt) = (time.elapsed_secs(), time.delta_secs().min(0.05));
-    for (e, mut m, intent, load, motor, tf, acting, dead, bot, has_guard, name) in &mut actors {
+    for (e, mut m, intent, load, motor, tf, acting, dead, bot, has_guard, actor, name) in
+        &mut actors
+    {
         let m = &mut *m;
         let who = name.map_or("?", |n| n.as_str());
         let click = intent.attack && !m.prev_attack;
@@ -347,7 +373,8 @@ fn drive(
         if click {
             m.down_at = now;
         }
-        if intent.guard && !m.prev_guard {
+        let guard_press = intent.guard && !m.prev_guard;
+        if guard_press {
             m.guard_at = now;
         }
         m.prev_guard = intent.guard;
@@ -371,7 +398,7 @@ fn drive(
                         "t={now:.2} melee {who}: tech: flash step (quick slash after a switch cancel)"
                     );
                 }
-                m.ready = if air_cancel || flash {
+                m.ready = if air_cancel || flash || actor.quick_draw(now) {
                     now
                 } else {
                     m.ready.max(now + SWITCH_DELAY)
@@ -396,6 +423,9 @@ fn drive(
             m.queued_until = now + BUFFER;
         }
         let queued = now < m.queued_until;
+        if guard_press && w.kind == WeaponKind::Dagger {
+            m.lunge_until = now + BUFFER;
+        }
         let grounded = motor.grounded;
         let guard_ok = intent.guard && grounded && !motor.wall && secs("guard_idle").is_some();
         // Air butterfly: the guard also cancels an air slash in the air; that guard stays up
@@ -440,12 +470,26 @@ fn drive(
             && secs("charge").is_some();
         let blow_from = |m: &Melee, power: f32| plan(&data, woman, motion, m, now, motor, power);
         let free = motor.tumble.is_none_or(|t| t > DASH_SLASH);
+        // the dagger's alternative fire on the ground: the `uppercut` clip as a lunge, the extended
+        // one when a dash is on (`Actor::dash_wanted`: the same press) or just began
+        let extended = motor.tumble.is_some() || actor.dash_wanted(now, intent).is_some();
+        let lunge =
+            (now < m.lunge_until && grounded && secs("uppercut").is_some()).then_some(Next::Blow {
+                blow: if extended { E_LUNGE } else { LUNGE },
+                clip: "uppercut",
+                ret: None,
+                dive: false,
+                combo: 0,
+                power: 0.0,
+            });
 
         let next = match m.phase {
             Phase::Idle if !free => None,
             Phase::Idle => {
                 if guard_ok {
                     Some(Next::Guard(Stage::Start))
+                } else if lunge.is_some() && now >= m.ready {
+                    lunge
                 } else if queued && now >= m.ready {
                     blow_from(m, 0.0)
                 } else if charge_ready {
@@ -481,9 +525,11 @@ fn drive(
                         power: m.power,
                     });
                     debug!(
-                        "t={now:.2} melee {who}: {} strikes at {t:.3}s (hit frame {:.1})",
+                        "t={now:.2} melee {who}: {} strikes at {t:.3}s (hit frame {:.1}) at ({:.2}, {:.2})",
                         blow.name,
-                        strike * FPS
+                        strike * FPS,
+                        tf.translation.x,
+                        tf.translation.z
                     );
                 }
                 if !m.struck {
@@ -491,6 +537,8 @@ fn drive(
                 } else if cancel_guard {
                     // butterfly: the guard cancels the recovery
                     Some(Next::Guard(Stage::Start))
+                } else if lunge.is_some() && now >= m.ready {
+                    lunge
                 } else if queued && now >= m.ready && !dive {
                     blow_from(m, 0.0)
                 } else if dive && grounded && secs("jump_slash2").is_some() {
@@ -647,9 +695,11 @@ fn drive(
                 let strike = strike_secs(motion, clip, len);
                 let dash = motor.tumble.is_some();
                 debug!(
-                    "t={now:.2} melee {who}: {} ({clip}, {len:.2}s, strike {strike:.2}s){}",
+                    "t={now:.2} melee {who}: {} ({clip}, {len:.2}s, strike {strike:.2}s){} at ({:.2}, {:.2})",
                     blow.name,
-                    if dash { " from a dash" } else { "" }
+                    if dash { " from a dash" } else { "" },
+                    tf.translation.x,
+                    tf.translation.z
                 );
                 m.phase = Phase::Blow {
                     blow,
@@ -662,6 +712,7 @@ fn drive(
                 m.combo = combo;
                 m.combo_until = f32::INFINITY;
                 m.queued_until = 0.0;
+                m.lunge_until = 0.0;
                 m.ready = now + w.delay as f32 / 1000.0;
                 // K-style: a jump or dash may cut the recovery once the blade has landed.
                 let moving = if dive || clip == "attack_Jump" {
@@ -750,7 +801,10 @@ fn drive(
                 }
             },
             Next::Idle => {
-                debug!("t={now:.2} melee {who}: idle");
+                debug!(
+                    "t={now:.2} melee {who}: idle at ({:.2}, {:.2})",
+                    tf.translation.x, tf.translation.z
+                );
                 if !matches!(m.phase, Phase::Guard(_)) {
                     m.combo_until = now;
                 }
@@ -792,6 +846,17 @@ fn plan(
 ) -> Option<Next> {
     let has = |c: &str| data.clip_secs(woman, motion, c).is_some();
     if !motor.grounded {
+        // a dagger stabs in the air as on the ground (no `attack_Jump`, only `attackS`)
+        if !has("attack_Jump") && has("attackS") {
+            return Some(Next::Blow {
+                blow: SLASH,
+                clip: "attackS",
+                ret: None,
+                dive: false,
+                combo: 0,
+                power,
+            });
+        }
         return if motor.vel.y > 0.0 && has("attack_Jump") {
             Some(Next::Blow {
                 blow: AIR,
@@ -870,10 +935,11 @@ fn resolve(
             Option<&Intent>,
             Option<&Motor>,
             Option<&Team>,
-            Has<Bot>,
             Has<Guarding>,
             Has<Protected>,
             Option<&Loadout>,
+            Option<&HitShape>,
+            Has<Npc>,
             Option<&Name>,
         ),
         (With<Vitals>, Without<Dead>),
@@ -888,10 +954,11 @@ fn resolve(
         let Some(w) = data.items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
             continue;
         };
-        let Ok((_, g, Some(intent), _, team, bot, _, _, _, aname)) = actors.get(s.attacker) else {
+        let Ok((_, g, Some(intent), am, team, _, _, _, _, _, aname)) = actors.get(s.attacker)
+        else {
             continue;
         };
-        let me = (team.copied(), bot);
+        let me = team.copied();
         let centre = g.translation() + Vec3::Y;
         let fwd = Quat::from_rotation_y(intent.yaw) * Vec3::NEG_Z;
         let range = w.range.unwrap_or(150) as f32 * 0.01 * s.blow.reach;
@@ -904,32 +971,35 @@ fn resolve(
                 1.0
             };
         let mut landed = 0;
-        for (e, tg, vi, vm, vteam, vbot, guarding, protected, vload, vname) in &actors {
-            if e == s.attacker || protected || friendly(me, (vteam.copied(), vbot)) {
+        let mut recoil = false;
+        for (e, tg, vi, vm, vteam, guarding, protected, vload, vshape, npc, vname) in &actors {
+            if e == s.attacker || protected || friendly(me, vteam.copied()) {
                 continue;
             }
-            let p = tg.translation() + Vec3::Y * 0.9;
+            // phantom: a tumbling or lunging actor has a smaller capsule (`actor.rs`)
+            let (vr, vh) = shape(vshape.filter(|_| !npc));
+            let p = tg.translation() + Vec3::Y * vh * 0.5;
             let to = Vec3::new(p.x - centre.x, 0.0, p.z - centre.z);
             let dist = to.length();
             debug!(
                 "t={now:.2} melee: candidate {}: {dist:.2} m (reach {:.2}), {:.0} deg off (half {:.0}), dy {:.2}, protected {protected}",
                 vname.map_or("?", |n| n.as_str()),
-                range + HIT_RADIUS,
+                range + vr,
                 fwd.angle_between(to).to_degrees(),
                 half.to_degrees(),
                 p.y - centre.y,
             );
-            if dist - HIT_RADIUS > range || (p.y - centre.y).abs() > REACH_Y {
+            if dist - vr > range || (p.y - centre.y).abs() > REACH_Y {
                 continue;
             }
-            if dist > HIT_RADIUS && fwd.angle_between(to) > half {
+            if dist > vr && fwd.angle_between(to) > half {
                 continue;
             }
             let v = p - centre;
             let d = v.normalize_or(fwd);
             if col
                 .raycast(centre, d, v.length())
-                .is_some_and(|h| h.distance < v.length() - HIT_RADIUS)
+                .is_some_and(|h| h.distance < v.length() - vr)
             {
                 continue;
             }
@@ -978,6 +1048,7 @@ fn resolve(
                     "t={now:.2} melee: {} blocked by {label} ({clip})",
                     aname.map_or("?", |n| n.as_str())
                 );
+                recoil = true;
                 continue;
             }
 
@@ -1031,6 +1102,13 @@ fn resolve(
                 }
                 Some(((_, vm), vstate)) => match s.blow.effect {
                     Effect::Flinch | Effect::Knockdown => {
+                        if w.kind == WeaponKind::Dagger
+                            && matches!(vstate.phase, Phase::Hurt { .. })
+                        {
+                            debug!(
+                                "t={now:.2} melee: tech: dagger machine ({label} is stabbed again inside its flinch)"
+                            );
+                        }
                         let (clip, stand, push) = if s.blow.effect == Effect::Knockdown {
                             ("damage_down", true, KNOCKDOWN_PUSH)
                         } else {
@@ -1073,6 +1151,26 @@ fn resolve(
                 s.blow.name,
                 reaction
             );
+        }
+        if recoil && w.kind == WeaponKind::Dagger {
+            let who = aname.map_or("?", |n| n.as_str());
+            if intent.pitch.abs() >= TAP_PITCH {
+                debug!("t={now:.2} melee: tech: block tap {who} (looking up or down, no recoil)");
+            } else if let Ok(mut st) = melee.get_mut(s.attacker)
+                && let Some(len) = am.and_then(|m| data.clip_secs(m.woman, 7, "damage"))
+            {
+                debug!("t={now:.2} melee: {who} recoils off the block");
+                (st.phase, st.t0, st.secs, st.queued_until) =
+                    (Phase::Hurt { stand: false }, now, len, 0.0);
+                req.write(ActionRequest {
+                    actor: s.attacker,
+                    clip: "damage",
+                    speed: 1.0,
+                    moving: ActionMove::Locked,
+                    cancel_from: f32::INFINITY,
+                });
+                commands.entity(s.attacker).insert(Push(-fwd * FLINCH_PUSH));
+            }
         }
         if landed == 0
             && let Some(h) = col.raycast(centre, fwd, WALL_SPARK.min(range))

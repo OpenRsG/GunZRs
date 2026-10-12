@@ -121,12 +121,13 @@ Your profile (level, XP, bounty, inventory, equipped items) is saved in
 `$XDG_DATA_HOME/gunzrs/profile.txt` (`%APPDATA%\gunzrs\profile.txt` on Windows). Kills and match
 results pay XP and bounty; spend the bounty in the SHOP tab and equip items in INVENTORY.
 
-### K-style techniques
+### K-style and D-style techniques
 
 The original game's bug-born movement tech works as ordinary features, always on, for you and the
-bots (timings are estimates, see `docs/formats.md` "K-style techniques"). With the default
-loadout (katana, revolver, rifle) and the keys above, every technique of the usual guide works;
-each input sequence was played headless and its log checked (the juggle's last hit only by bots):
+bots (timings are estimates, see `docs/formats.md` "K-style and D-style techniques"). With the
+default loadout (katana, revolver, rifle) and the keys above, every technique of the usual K-style
+guide works; with a dagger in a slot (`--loadout 2000000,2050000,2100001`, or the dagger from the
+shop) so does the D-style one. Each input sequence was played headless and its log checked:
 
 | Technique | How |
 |---|---|
@@ -134,7 +135,7 @@ each input sequence was played headless and its log checked (the juggle's last h
 | Dash cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
 | Flying / wall climbing | Wall kick, slash, jump off the wall again, repeat (flash climb: slash, switch to a gun and back, jump) |
 | Switch cancel | Switch weapons during an air slash: slash shot (jump, slash, switch to a gun, shoot), flash step (slash, gun, back to the blade: no draw delay) |
-| Reload shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon |
+| Reload shot, shimmer shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon, a dagger or sword too |
 | Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |
 | Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump |
 | Wall hang | In the air against a wall, or running up or along one, hold guard (Shift / right mouse) with any weapon that allows wall moves: you cling for up to 1.2 s, once per jump; forward + jump climbs up to 2 m, jump alone kicks off the wall, letting go drops |
@@ -147,12 +148,30 @@ each input sequence was played headless and its log checked (the juggle's last h
 | Wall cancel, advanced wall cancel | Dash back into a wall and kick off it again (with a switch cancel in between for the advanced one) |
 | Multi wall run | Dash at a wall at about 45 degrees and jump twice: a second kick off another wall |
 | Wall hang cancel | Guard against a wall ends a wall run or a kick's flight in a hang |
+| Wall spring | Jump out of a wall run: a plain kick off the wall |
 | Insta-kill | Uppercut, then switch to a gun right after it hits and shoot the airborne enemy |
 | Light step | A dash right after a slash makes no dash sound |
 
-Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly, up to the quadruple
-butterfly and forbidden step from 0.85; the better the bot, the more often it tries them. They also
-climb a wall with a hang to reach an enemy on a ledge.
+D-style (dagger; it has no guard, so the right mouse / Shift is its alternative fire):
+
+| Technique | How |
+|---|---|
+| Stab | Click, on the ground and in the air; it cancels dashes, wall runs and hangs like a slash does |
+| Dagger train, hop, flash | Dash + stab; jump + dash + stab; then a second dash to the other side + stab in the same jump |
+| Float step, gear tap, triple stab | Dash, stab, jump; dash, jump; float step then two more dash + stab |
+| Wall cancel, hells climb, wall raid | Kick, stab, dash back at the wall, kick again; hang, forward + jump, stab, jump; wall run, stab, jump at once |
+| Shimmer shot, jump shot dash | Gun, shot, reload, dagger, dash; the same after a jump |
+| Yoyo step, yoyo half and quarter, blink step | Jump with the gun, dash at the top, shot, reload; then dagger, dash to the other side, stab, dash (a shot cuts a dash and gives it back); blink step: jump with the dagger, dash, switch to the gun, shot |
+| Lunge, extended lunge | Alternative fire on the ground lunges and launches. Start it in a dash, or on the press of a direction's second tap (or Dash): the lunge slides about 5 m in the dash's direction (forward, sideways, backwards) before it strikes, with twice the reach (a target 8 m away is hit; a plain lunge reaches 2.25 m) |
+| Dagger machine, dagger juggle | Stab every 0.33 s and the target stays flinched; stab a launched target to keep it up |
+| Block tap | A guarded stab recoils you; look all the way up or down while stabbing and it does not |
+| Phantom | A dash or a lunge halves your hitbox for its duration |
+
+Not in: Walk Charge (needs the chat box) and macros, Ghost Evade, Magic Switch, Massive Tap.
+
+Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly (dagger carriers: the dagger
+train), up to the quadruple butterfly and forbidden step (yoyo half) from 0.85; the better the bot, the
+more often it tries them. They also climb a wall with a hang to reach an enemy on a ledge.
 
 ## Status
 
@@ -164,7 +183,7 @@ climb a wall with a hang to reach an enemy on a ledge.
 | Collision | Retail `.RS.col` BSP: stairs, slopes, walls, ceilings |
 | Characters | Man and woman models; every clothing piece of the item data (102 chests, 50 legs, 33 hair/hats... for the man) chosen per slot with optional dyes on the PLAYER page, live preview (drag to turn, zoom, framing per body part); bots wear random clothes; skinned animation with cross-fades, upper-body layer and aim pitch; 63 of the 71 character clips in use, including emotes |
 | Movement | Run, jump, tumble, air dash, wall kick, wall run, wall hang and climb, falls; run speed, jump, gravity, fall speed and wall kicks measured from public match replays; rocket launchers and machine guns slow you and block wall moves, as their item data says |
-| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, juggle, and the K-style cancels (see "K-style techniques") |
+| Melee | Slash combos, uppercut, massive attack, guard and block, butterfly, juggle, dagger stab and lunge, and the K-style and D-style cancels (see "K-style and D-style techniques") |
 | Guns | Pistols, revolvers, SMGs, shotguns, rifles, machine guns, rocket launchers; magazines, reloads, weapon switching, armour piercing (estimated from the monsters' attack data) |
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera; optional fixed (non-random) bullet spread |

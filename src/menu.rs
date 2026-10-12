@@ -71,7 +71,7 @@ pub enum Mode {
     /// the player and bot allies against scripted NPC sectors (`quest.rs`).
     Quest,
     /// id 8 (`GAMETYPE_BERSERKER`; its `gametypecfg.xml` block is commented out but the
-    /// `champion` channel rule lists it): one berserker against everyone; kill it to become it.
+    /// `champion` channel rule lists it): deathmatch where the first killer turns berserker.
     Berserker,
     /// id 11 (`GAMETYPE_DUELTOURNAMENT`, the `dueltournament` channel): a knockout bracket of
     /// duels, the loser is out.
@@ -258,7 +258,9 @@ impl Mode {
             Mode::Duel => "One on one. The winner stays, the loser queues, the rest watch.",
             Mode::Training => "No bots: slash and shoot the dummy targets.",
             Mode::Quest => "Clear NPC sectors with bot allies, then take the portal.",
-            Mode::Berserker => "One berserker, everyone else hunts it. Kill it to become it.",
+            Mode::Berserker => {
+                "Free for all. The first killer turns berserker: 150% damage, draining health. Kill it to take over."
+            }
             Mode::DuelTournament => {
                 "Knockout bracket of one-on-one duels. More damage wins on time."
             }

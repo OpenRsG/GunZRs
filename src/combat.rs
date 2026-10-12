@@ -799,13 +799,7 @@ fn resolve_fire(
     col: Res<MapCollision>,
     time: Res<Time>,
     actors: Query<
-        (
-            Entity,
-            &GlobalTransform,
-            Option<&Team>,
-            Has<Bot>,
-            Option<&HitShape>,
-        ),
+        (Entity, &GlobalTransform, Option<&Team>, Option<&HitShape>),
         (With<Vitals>, Without<Dead>),
     >,
     mut spreads: Query<(&mut Spread, Has<Player>)>,
@@ -826,11 +820,8 @@ fn resolve_fire(
             continue;
         }
         let amount = w.damage as f32;
-        let mine = actors
-            .get(f.shooter)
-            .ok()
-            .map(|(_, _, t, b, _)| (t.copied(), b));
-        let ally = |t: Option<&Team>, b: bool| mine.is_some_and(|m| friendly(m, (t.copied(), b)));
+        let mine = actors.get(f.shooter).ok().map(|(_, _, t, _)| t.copied());
+        let ally = |t: Option<&Team>| mine.is_some_and(|m| friendly(m, t.copied()));
         let shooter_pos = actors
             .get(f.shooter)
             .map_or(f.origin, |(_, g, ..)| g.translation());
@@ -865,9 +856,9 @@ fn resolve_fire(
             let wall = col.raycast(f.origin, d, GUN_RANGE);
             let mut best = wall.as_ref().map_or(GUN_RANGE, |h| h.distance);
             let mut who = None;
-            for (e, g, team, bot, hs) in &actors {
+            for (e, g, team, hs) in &actors {
                 if let Some(dist) = ray_capsule(f.origin, d, g.translation(), shape(hs))
-                    .filter(|t| e != f.shooter && *t < best && !ally(team, bot))
+                    .filter(|t| e != f.shooter && *t < best && !ally(team))
                 {
                     (best, who) = (dist, Some(e));
                 }
@@ -982,7 +973,7 @@ fn apply_damage(
     mut scores: Query<&mut Score>,
     protected: Query<(), With<Protected>>,
     names: Query<&Name>,
-    sides: Query<(Option<&Team>, Has<Bot>)>,
+    sides: Query<Option<&Team>>,
     mods: Query<&Mods>,
     humans: Query<(), Or<(With<Player>, With<Bot>)>>,
     bodies: Query<(&GlobalTransform, Option<&HitShape>)>,
@@ -995,8 +986,8 @@ fn apply_damage(
     for d in msgs.read() {
         // Your own blast hurts you; anybody else's side is protected from friendly fire.
         if d.attacker != d.target
-            && let (Ok((ta, ba)), Ok((tt, bt))) = (sides.get(d.attacker), sides.get(d.target))
-            && friendly((ta.copied(), ba), (tt.copied(), bt))
+            && let (Ok(ta), Ok(tt)) = (sides.get(d.attacker), sides.get(d.target))
+            && friendly(ta.copied(), tt.copied())
         {
             continue;
         }

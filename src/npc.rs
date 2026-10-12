@@ -437,7 +437,6 @@ struct Foe {
     guarding: bool,
     protected: bool,
     team: Option<Team>,
-    bot: bool,
     /// Hit capsule (metres).
     radius: f32,
     height: f32,
@@ -458,7 +457,6 @@ type Hostiles<'w, 's> = Query<
         Entity,
         &'static GlobalTransform,
         Option<&'static Team>,
-        Has<Bot>,
         Has<Guarding>,
         Has<Protected>,
         Option<&'static HitShape>,
@@ -469,14 +467,13 @@ type Hostiles<'w, 's> = Query<
 
 fn foes(q: &Hostiles) -> Vec<Foe> {
     q.iter()
-        .map(|(e, g, team, bot, guarding, protected, shape, npc)| Foe {
+        .map(|(e, g, team, guarding, protected, shape, npc)| Foe {
             e,
             feet: g.translation(),
             face: g.rotation() * Vec3::NEG_Z,
             guarding,
             protected,
             team: team.copied(),
-            bot,
             radius: shape.map_or(HIT_RADIUS, |s| s.radius),
             height: shape.map_or(HIT_HEIGHT, |s| s.height),
             solid: npc.is_some_and(|n| {
@@ -569,9 +566,7 @@ impl Brain {
 
     fn hostile(&self, f: &Foe) -> bool {
         // A crate belongs to nobody (and is not worth a soldier's time).
-        !f.protected
-            && (f.team.is_some() || !f.solid)
-            && !friendly((Some(self.spec.team), false), (f.team, f.bot))
+        !f.protected && (f.team.is_some() || !f.solid) && !friendly(Some(self.spec.team), f.team)
     }
 
     /// The nearest hostile within `max` metres (and `dy` metres of height difference).
@@ -2131,7 +2126,7 @@ fn fly(
         let mut best: Option<(f32, Foe)> = None;
         for f in foes
             .iter()
-            .filter(|f| !f.protected && !friendly((Some(m.team), false), (f.team, f.bot)))
+            .filter(|f| !f.protected && !friendly(Some(m.team), f.team))
         {
             let s = ((f.chest() - pos).dot(step) / (len * len)).clamp(0.0, 1.0);
             let q = pos + step * s;
@@ -2176,7 +2171,7 @@ fn fly(
         if m.splash > 0.0 {
             for f in foes
                 .iter()
-                .filter(|f| !f.protected && !friendly((Some(m.team), false), (f.team, f.bot)))
+                .filter(|f| !f.protected && !friendly(Some(m.team), f.team))
             {
                 let (lo, hi) = (f.radius.min(f.height * 0.5), (f.height - f.radius).max(0.0));
                 let c = f.feet + Vec3::Y * (at.y - f.feet.y).clamp(lo, hi.max(lo));

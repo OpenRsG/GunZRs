@@ -809,15 +809,16 @@ Spectating, spawn points and protection are carried by the shared components `ga
 refill). `--die-at S` kills the player at match time S (headless checks).
 
 **Berserker** (`--mode berserker`; id 8). **Observed**: only the limits above, the name, the id in the
-`champion` channel and message 9910 "Deathmatch + Berserker"; every rule is **inferred**. One actor is the
-berserker: its own team (Red) with 300 HP / 150 AP (three times the normal 100 / 50), name tagged
-"[BERSERKER]"; everybody else is Blue, so the others never hurt each other and everybody (bots included)
-hunts the berserker. Whoever kills it becomes the berserker (full 300 / 150, the old one reverts to Blue and
-100 / 50 at its respawn); a berserker's death by its own hand changes nothing. The first berserker is the
-lowest-id bot (the player when there are no bots). Scoring is combat's own kill count, which is exactly the
-berserker's kills plus kills of the berserker. Respawns as in deathmatch. Check:
-`gunz-play GAME Mansion --mode berserker --bots 7 --skill 1 --loadout 2010000,2050000,2100001 --time 50
---script wait:50 --shot OUT.png` logs `berserker: Bot 3 killed the berserker and becomes it` 7 times in 50 s.
+`champion` channel, message 9910 "Deathmatch + Berserker" and the effect `ef_berserker` (`sfx/effect_list.xml`, a
+looping blue flame). **External** (public mode descriptions, e.g. StrategyWiki "GunZ The Duel/Modes"): deathmatch rules
+(free for all), the first player to kill becomes the berserker, glows blue, deals 150 % damage, loses armour and then
+health over time but cannot die of it, refills by killing, and whoever kills the berserker becomes it with full health
+and armour. The port does exactly that (`modes.rs` `berserker`): `Mods.dealt` 1.5, a drain of `BERSERKER_DRAIN`
+2 points/s (**inferred**) from AP, then HP down to 1, a full refill per kill, `ef_berserker` riding on the chest at
+twice its size (**inferred** placement) and a "[BERSERKER]" name tag. A berserker's death by its own hand ends the
+reign; the next kill crowns. Scoring is the kill count. Check: `gunz-play GAME Mansion --mode berserker --bots 6
+--skill 1 --time 50 --script wait:50 --shot OUT.png` logs `berserker: ToxicAvenger drew first blood` at 9.6 s, its
+hits at 36 against the usual 24, AP 50 -> 33 in 8.4 s, and `berserker: Pyon killed the berserker and becomes it`.
 
 **Duel tournament** (`--mode tournament`; id 11). **Observed**: the `dueltournament` channel (maps Hall,
 Catacomb, Jail, Shower Room: `bOnlyDuelMap="true"` in `map.xml`, SkirmishHall id 27 too), message 2034 "$1 has
@@ -853,8 +854,8 @@ blade alone on the last step). Ladder, 12 steps, first named item with a model a
 pistols, pistol, dagger, katana. Rules: every kill (not a suicide) moves the killer up one step and swaps its
 weapon at once (ammo refilled); a kill with a melee weapon also drops the victim one step (not below the
 first; the victim's weapon is swapped too); a kill by an actor already on the last step wins (`VICTORY` for the
-player, else `DEFEAT`). A respawn keeps the step. Everyone carries `Team::Duel(0)` (one arena: all enemies, so bots
-fight each other, unlike plain deathmatch where they only target the player). The header shows
+player, else `DEFEAT`). A respawn keeps the step. Free for all as in deathmatch (no `Team`: everyone is an enemy).
+The header shows
 `STEP n/N   LEADER name m/N`. `GUNZ_GUNGAME_STEPS=N` shortens the ladder to its first N-1 steps and the last (test
 runs). Check: `GUNZ_GUNGAME_STEPS=3 gunz-play GAME Mansion --mode gungame --bots 6 --skill 1 --respawn 2 --time 60`
 logs `gungame: Bot 3 promoted to step 2/3 (Nico MG-K8 MK1)`, `gungame: Bot 3 demoted to step 2` and
@@ -1600,7 +1601,7 @@ No new file format; how the retail character animations are used (**observed** =
   backwards run), jump 9 m/s up, gravity 25 m/s^2, terminal speed 30 m/s, wall kick 3 m/s away
   plus 14 m/s up (jump within 0.15 s of touching a wall in the air, **inferred** window);
   dash 16 m/s easing to the run speed over 0.3 s (double-tap of a direction within 0.3 s or the Dash
-  action, **inferred**: no replay state identified, see "K-style techniques"), instant start and stop
+  action, **inferred**: no replay state identified, see "K-style and D-style techniques"), instant start and stop
   on the ground (**observed**),
   capsule radius 0.35 m / height 1.75 m (**inferred**).
 - Steps (**observed** with a probe over Dungeon, Castle, Catacomb, Mansion, Prison: scan col
@@ -1632,7 +1633,7 @@ No new file format; how the retail character animations are used (**observed** =
   (a butterfly's guard too; in the air it keeps its momentum). `melee.rs` asks for the next guard
   clip a frame before the controller's action ends (`clip_over`), so the body never runs free
   between `guard_start` and `guard_idle`. Combat writes `Blocked(entity)` to play a
-  block clip. In the air against a wall the same key is the wall hang ("K-style techniques").
+  block clip. In the air against a wall the same key is the wall hang ("K-style and D-style techniques"); a dagger has no guard, its press is the lunge.
   Camera: swept sphere (0.25 m) instead of a ray, and it ducks under low ceilings.
 - Weapon use: shots at `delay` ms; magazine / reserve from `magazine` and `maxbullet - magazine`
   (**inferred** that `maxbullet` counts the magazine); a reload lasts the character's `reload`
@@ -1812,7 +1813,7 @@ Cross-check with the clips (`.local/py/rootmo.py`, **observed**): `runLW` 2.0 s 
 side wall run (2.1 s) and the up-wall apex (0.68 s); `jumpwall*` 1.33 s matches a kick's flight (1.12 s up and
 down); `jumpU` 0.33 s is only the take-off pose (a jump lasts 0.72 s), so clips do not pin v0 themselves.
 
-## K-style techniques (`src/actor.rs`, `src/melee.rs`, `src/bot.rs`; **inferred**)
+## K-style and D-style techniques (`src/actor.rs`, `src/melee.rs`, `src/bot.rs`; **inferred**)
 
 The original's bug-born movement tech (public player guides, gameplay descriptions only; no client code) as ordinary
 rules of the actor controller, always on, for the player and the bots. No timing is documented anywhere: **every
@@ -1826,14 +1827,14 @@ the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=d
 | Jump cancel (dash cooldown) | A jump from a ground tumble ends it (jump no longer waits for the tumble); the air dash is still unspent | `tech: jump cancel` |
 | Jump buffer | A jump pressed up to `JUMP_BUFFER` 0.15 s before landing jumps on landing (triple butterfly: jump, slash, block three times) | - |
 | Dash cancel (slash) | A slash out of a tumble gives the air dash back and ends the burst (horizontal speed down to the run speed at most); `melee.rs` starts slashes from a tumble after `DASH_SLASH` 0.05 s | `tech: dash cancel` |
-| Dash shot (half step) | A gun shot during a tumble fires and cuts the tumble (the body keeps its speed) | `tech: dash shot` |
+| Dash shot (half step, yoyo step) | A gun shot during a tumble fires, cuts the tumble (the body keeps its speed) and gives the air dash back, like a slash does (the yoyo half and quarter dash again after their shot) | `tech: dash shot` |
 | Super dash | The air dash is always available after `SUPER_FALL` 1.5 s of falling | `tech: super dash` |
 | Wall slash cancel, flying | A slash during a wall kick, wall run or hang cancels it (full control, switch, guard); the actor stays at the wall (0.5 m/s into it) and a jump within `FLY_WINDOW` 0.5 s kicks off it again; a kick restores wall run, air dash and gravity cancel | `tech: wall slash cancel`, `tech: wall flying` |
 | Wall cancel, advanced wall cancel | A kick may also start from a tumble: wall jump, slash, dash back to the wall, kick again (with a switch to a gun and back between slash and dash: the advanced one). The wall run that a dash into a wall with forward held would start waits a frame after the dash | `tech: wall cancel` |
 | Multi wall jump | During a kick's flight a jump kicks off another wall (normals more than 60 degrees apart): multi wall run, wall run, slash, dash to another wall, jump twice | `tech: multi wall jump` |
 | Flash climb | After a switch cancel (below) a wall jump inside `TECH_SHOT` 1.5 s | `tech: flash climb` |
 | Switch cancel (slash shot, quick slash / flash step) | While an air slash plays, a weapon switch is accepted and cancels the slash; the gun drawn so has no draw delay (slash shot, half step, forbidden step). Switching back to the blade within `FLASH_WINDOW` 1.5 s has no draw delay and no blade delay. A switch is also accepted during a tumble (the tumble goes on) | `tech: switch cancel`, `tech: slash shot`, `tech: flash step` |
-| Reload shot | A reload started within `RS_WINDOW` 0.5 s of a shot, cancelled by a switch, skips the `SWITCH_DELAY` 0.3 s of the next weapon (the magazine stays as it was) | `tech: reload cancel`, `tech: reload shot` |
+| Reload shot, shimmer shot | A reload started within `RS_WINDOW` 0.5 s of a shot, cancelled by a switch, skips the `SWITCH_DELAY` 0.3 s of the next weapon, a blade included (`Actor::quick_draw`; the magazine stays as it was): reload shot, shimmer shot (gun, shot, reload, dagger, dash), jump shot dash, yoyo half and quarter (stab right after the reload cancel) | `tech: reload cancel`, `tech: reload shot` |
 | Swapshot | Every loadout slot has its own fire delay (`Actor::ready`); a shot from another gun within 0.6 s of the last shot | `tech: swapshot` |
 | Gravity cancel | A slash started in the air at a rising speed <= 4 m/s (near the top of a jump, or falling) zeroes the vertical speed and the gravity for 0.25 s, once per jump | `tech: gravity cancel` |
 | Wall hang, wall hang cancel | Guard held (Shift / right mouse) in the air with any weapon that allows wall moves (a gun's guard has no other use; rocket launchers and machine guns block wall moves), a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, height pinned, pressed into the wall, faces it; plays `runW_downF`). It lasts exactly as long as the guard is held: no time limit and no slide-off (the capsule pressed into a leaning wall would creep up or down it, so its height is held). Forward + jump held climbs at 4 m/s (plays `runW`); a jump without forward kicks off the wall (`jumpwall*`, as from a wall run); releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel` |
@@ -1846,8 +1847,20 @@ the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=d
 | Insta-kill | After the hit frame of an uppercut (`Acting::cancel_from`) a weapon switch is accepted on the ground as well and cancels the launch recovery (the gun still has the 0.3 s draw delay: the launched actor is airborne for about 0.5 s) | `tech: insta-kill`, `tech: insta-kill shot` |
 | Light step / silent jump | A dash that comes out of a slash (the actor is in a blow action) starts its tumble clip without the clip's `fx_dash` cue (`Tech::silent`) | `tech: light step` |
 | Juggle | A hit on a launched actor that is still in the air lifts it again (`JUGGLE_UP` 5.5 m/s; an uppercut `UPPERCUT_UP` 7 and `UPPERCUT_BACK` 3 m/s away, was 1: a target 1 m away could not be reached by jump, dash, slash without passing it), at most `MAX_JUGGLE` 3 times per landing; a lying actor is left alone. A jump or dash on the hit frame itself still lands the blow | `tech: juggle` |
+| Wall spring | A jump out of a wall run (up or along a wall) is a plain kick off the wall (not in the wiki text: the name is the task's; **inferred** as that) | `tech: wall spring` |
+| Dagger stab (air) | The dagger has only `attackS` (no `attack_Jump`): the click stabs on the ground and in the air (it used to dive with `jump_slash1`, 1.3 s). Every slash rule applies to it: a stab out of a dash gives the air dash back (dagger train, hop, flash), gravity cancel, wall slash cancel (wall cancel, wall raid), switch cancel | `tech: dash cancel`, `tech: gravity cancel`, `tech: wall slash cancel` |
+| Dagger train, hop, flash, float step, gear tap, triple stab | Dash + stab on the ground (the stab roots the actor: `ActionMove::Root`); jump + dash + stab; a second dash to the other side + stab in the same jump (two or three dashes per jump through the dash cancel); dash, stab, jump out of the stab (float step; the jump takes over once the blade has landed); dash, jump (gear tap: jump cancel); float step plus two more dash + stab | `tech: dash cancel`, `tech: float step`, `tech: jump cancel` |
+| Hells climb, wall raid | Wall hang (guard), forward + jump climbs, a stab out of the hang or the wall run is a wall slash cancel and a jump within `FLY_WINDOW` kicks off again (`wall flying`). The port limits (one hang per jump, 1.2 s, 2 m of climbing) stay, so the climb cannot repeat forever | `tech: wall hang cancel`, `tech: wall slash cancel`, `tech: wall flying` |
+| Lunge | A dagger has no guard (no `guard_idle`): its guard press is the alternative fire (`Melee::lunge_until`, remembered `BUFFER` 0.4 s like a click) and starts, on the ground, the `uppercut` clip (1.5 s, hit at frame 10) as `LUNGE`: it launches (`blast_dagger`) like the flip. The clip's root motion comes after its hit frame: the blade lands where the actor stood (reach 1.9 m + 0.35 m capsule = 2.25 m), then the body travels 5.1 m | `melee ...: lunge strikes at ... at (x, z)`, `idle at (x, z)` |
+| Extended lunge (E-lunge) | A lunge that starts in a dash (tumble running), or on the press that starts one (a direction's second tap, or Dash, with the alternative fire the same frame: `Actor::dash_wanted`), is `E_LUNGE`: it slides on at the dash's horizontal velocity and direction, not the facing (`Tech::slide`: the tumble's current speed, or `DASH` 16 m/s for the same-press case), until its hit frame, and its reach doubles (`reach` 2.0: 3.8 m + 0.35 m). Both numbers are **inferred** from the guides' "about 2x range, about 4x distance"; the slide direction is the dash's, so a lunge forward, sideways or backwards each travels 5 m before it strikes (a wall stops it; turning the camera meanwhile aims the blade and the clip's root motion elsewhere, which is the curved E-lunge's extra manoeuvrability; its larger hitbox is not modelled) | `tech: extended lunge ... slides at`, `melee: extended lunge strikes` |
+| Dagger machine | A stab flinches its victim for the `damage` clip (0.33 s) and the plain dagger's `delay` is 0.326 s (0.356 s for the 38-damage ones), so a stab every 0.326 s lands inside the last flinch: the victim stays locked, as the guide says (the 0.356 s daggers leave a 0.02 s gap: "the delay times decide") | `melee: tech: dagger machine` |
+| Dagger juggle | The lunge launches and a stab that hits the airborne victim lifts it again (the juggle rule above) | `melee: tech: juggle` |
+| Block recoil, block tap | A blow that hits a guard recoils a dagger stabber (its `damage` clip and a push back), unless it looks up or down by at least `TAP_PITCH` 1.2 rad (69 degrees): the block tap (the guides' second way, stab and dash, is not modelled: the recoil lands on the hit frame). Blades have no recoil (**inferred**; the guides only describe it for daggers) | `melee: Player recoils off the block`, `melee: tech: block tap` |
+| Phantom | A tumbling actor and a dagger lunging have half the hit capsule (`HitShape` radius 0.175 m, height 0.9 m, put on and taken off by `actor.rs`): bullets, blasts and blades miss over it (melee reads it for human actors; quest monsters keep their own) | `tech: phantom` |
 
-Not done: Wall Spring (a wall run cancelled early is already a slash cancel).
+Not done: Walk Charge (needs the chat box: outside the game's rules) and macros; Massive Tap, Ghost Evade and Magic Switch (a
+massive's recoil and a turned hitbox: no such mechanics here); the curved E-lunge's larger hitbox; Fade Shot (gun, tumble,
+shot, reload, dagger, dash) is the same chain as the shimmer and yoyo shots.
 
 Network (`src/net.rs`): the snapshot carries `Intent::dash` (flag bit 6); every other state is derived from the `Intent`
 the host already gets every frame (`walk` taps for the dash, `jump`, `guard`, `slot` through `current`, `reload`,
@@ -1877,6 +1890,12 @@ tdm --bots 8 --skill S --script wait:90 --time 90` (`RUST_LOG=gunz::bot=debug`, 
 skill 0.5 6 and 2 moves (wall cancel, half step, juggle, double butterfly, wall hang cancel), skill 1 23 (12 of the 15
 kinds, forbidden step and advanced wall cancel among them) and 7.
 
+*D-style moves* (`bot.rs` `DAGGER_MOVES`, a bot that holds a dagger plays these instead of the sword moves, same form and
+rules): dagger train 0.2, dagger machine and dagger hop 0.3, float step and extended lunge 0.4, dagger flash and
+shimmer shot 0.5, jump shot dash 0.6, yoyo step 0.7, yoyo half 0.85. Observed in one run of `gunz-play Mansion --mode
+gunman --bots 8 --skill 1 --script wait:60 --time 60` (`bot X: move NAME`): float step 4, yoyo half 2, dagger flash 2,
+dagger machine 1, extended lunge 1 (plus the sword moves of the sword carriers), no panics.
+
 The guides' list, each run headless with the player (`.local/tech/all.sh`; Mansion, `W` = `--at 1391,1460,2 --yaw 270`,
 `T` = `--bots 1 --bots-ahead 1.8 --skill 0`, corridor = `--at 1391,1300,2 --yaw 0`) and the observed `tech:` lines:
 
@@ -1889,14 +1908,44 @@ The guides' list, each run headless with the player (`.local/tech/all.sh`; Mansi
 | Juggle | `T`, `wait:0.2;guard:0.2;guard+attack:0.05;wait:0.25;guard:0.1;jump:0.15;w+dash:0.03;w+attack:0.05;wait:0.12;guard:0.4` | uppercut hits, quick launch, air dash, dash cancel, block cancel, air butterfly; the scripted dash passes beside the launched target (the bots, which aim, log `tech: juggle`) |
 | Slashshot | `wait:0.3;jump:0.1;w+dash:0.12;w+attack:0.1;2:0.05;attack:0.1` | switch cancel, slash shot in the same frame |
 | Half step | `...;w+attack:0.05;wait:0.1;2:0.05;w+dash:0.12;attack:0.1` | switch cancel, air dash, dash shot + slash shot |
+| Half half step | `wait:0.3;jump:0.1;attack:0.05;wait:0.1;2:0.05;w+dash:0.12;attack:0.1` | switch cancel, air dash, dash shot + slash shot (no dash before the slash) |
 | Reload half step | the same, then `wait:0.2;reload:0.1` | dash shot, slash shot, `reload: ... (mag 7+24)` |
 | Flash step | `wait:0.3;jump:0.1;attack:0.05;wait:0.1;2:0.05;1:0.05;w+dash:0.15` twice | switch cancel, flash step, air dash, dash cancel, again |
+| Advanced flash step (double) | the flash step twice with `w+attack:0.05` after the second dash | switch cancel, flash step, air dash, dash cancel, twice |
 | Forbidden step | `wait:0.3;jump:0.1;attack:0.05;wait:0.1;2:0.05;attack:0.05;1:0.05;w+dash:0.12;w+attack:0.05;wait:0.1;3:0.05;w+dash:0.12;attack:0.1` | switch cancel, slash shot, flash step, air dash, dash cancel, switch cancel, air dash, dash shot + slash shot |
 | Extended flip | `T`, `w:0.3;guard+w:0.1;guard+w+attack:0.1;w:0.15;w+dash:0.15` | extended flip |
 | Wall cancel | `W`, `w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;dash:0.15;jump:0.1` | wall slash cancel, air dash, wall cancel |
 | Advanced wall cancel | `W`, kick, `attack:0.05;wait:0.1;2:0.05;1:0.05;w+dash:0.15;w+jump:0.1`, twice | wall slash cancel, switch cancel, flash step, air dash, flash climb, twice |
 | Multi wall run | corridor, `d+w:0.2;d+w+jump:0.1;w:0.3;attack:0.05;wait:0.15;a+dash:0.1;a:0.15;jump:0.05`, then `wait:0.05;jump:0.05` repeated | `runRW`, wall slash cancel, air dash, wall cancel (`jumpwallL` off the pillars), multi wall jump (`jumpwallR` off the wall across, 0.9 s later) |
 | Wall hang cancel | `W`, `w:0.5;w+jump:0.25;w:0.6;guard:0.5;w+guard+jump:0.4` | wall hang cancel |
+| Wall spring | corridor, `d+w:0.2;d+w+jump:0.1;d+w:0.3;d+w+jump:0.1` | `runRW`, wall spring (`jumpwallR` out of the wall run) |
+
+D-style, a dagger in slot 1 (`D` = `--loadout 2000000,2050000,2100001`: dagger, revolver, rifle; `T` as above):
+
+| Technique | Script | Observed |
+|---|---|---|
+| Dagger train | `D`, `wait:0.3;w+dash:0.1;w+attack:0.05;wait:0.2` three times (the last with `s`) | dash cancel + `attackS` each time, light step from the second |
+| Dagger hop | `wait:0.3;jump:0.1;w+dash:0.12;w+attack:0.05` | air dash, dash cancel, `attackS` in the air (no dive) |
+| Dagger flash | `...;w+attack:0.05;wait:0.1;d+dash:0.12;d+attack:0.05` | air dash, dash cancel, air dash (`tumbleR`, light step), dash cancel, gravity cancel: 2 dashes in 1 jump |
+| Float step | `wait:0.3;w+dash:0.12;w+attack:0.05;wait:0.1;jump:0.1` | dash cancel, `attackS`, float step |
+| Gear tap | `wait:0.3;w+dash:0.12;jump:0.1` | jump cancel |
+| Triple stab | float step, then `d+dash:0.12;d+attack:0.05;wait:0.1;a+dash:0.12;a+attack:0.05` | float step, air dash, dash cancel, air dash, dash cancel, gravity cancel |
+| Wall cancel (dagger) | `W`, `D`, `w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;dash:0.15;jump:0.1` | wall spring, wall slash cancel (`attackS`), air dash, light step, wall cancel (`jumpwallF` again); stab, then dash + stab at the wall (`w+attack:0.05` instead of the jump) logs dash cancel |
+| Hells climb | `W`, kick, `w:0.6;guard:0.3;w+guard+jump:0.3;attack:0.05;wait:0.1;w+jump:0.1` | wall hang cancel (climbs), wall slash cancel, wall flying |
+| Wall raid | corridor, `d+w:0.2;d+w+jump:0.1;d+w:0.5;d+w+attack:0.05;d+w:0.1;d+w+jump:0.05;d+w:1.4` | `runRW`, wall slash cancel, gravity cancel, wall flying (`jumpwallR`); the kick restores the wall run, but the 3 m/s away from the wall does not carry back to it in this corridor |
+| SHS (shimmer shot) | `2:0.1;wait:0.3;attack:0.05;reload:0.1;1:0.05;dash:0.15` | shot, reload, reload cancel, `tumbleF` |
+| JSD | `wait:0.3;jump:0.1;2:0.05;wait:0.3;attack:0.05;reload:0.1;1:0.05;w+dash:0.15` | shot, reload, reload cancel, air dash |
+| YS (yoyo step) | `wait:0.3;jump+2:0.1;wait:0.1;w+dash:0.1;attack:0.05;reload:0.1` | air dash, dash shot, shot, reload |
+| YS half | the yoyo, then `1:0.05;d+dash:0.1;d+attack:0.05;wait:0.1;a+dash:0.1` | air dash, dash shot, reload cancel, air dash (`tumbleR`), dash cancel, air dash (`tumbleL`): 3 dashes in 1 jump |
+| YS quarter | the same, then `a+attack:0.05` | air dash x3, dash shot, reload cancel, dash cancel twice (both stabs) |
+| BS (blink step) | `2:0.4;wait:0.2;jump+1:0.1;wait:0.2;w+dash:0.1;2:0.05;wait:0.3;attack:0.05;reload:0.1` | air dash, switch to the gun in the tumble, shot 0.3 s later (the draw delay), reload |
+| YS phantom | the yoyo, `wait:0.2;1:0.05` | air dash, `phantom` (the tumble's small capsule), dash shot, reload cancel |
+| Lunge, E-lunge | `C` (`--at 1391,1300,2 --yaw 0`), `D`; plain `wait:0.3;guard:0.05`; E-lunge `w:0.1;wait:0.05;w+guard:0.1` (also `w+dash:0.1;w+guard:0.1`; `d:0.1;wait:0.05;d+guard:0.1` and `wait:0.3;s+dash+guard:0.1` from `W`) | plain: starts and strikes at z = 13.00, idle at z = 7.89 (5.11 m of root motion after the hit); E-lunge: starts at z = 12.00, strikes at z = 6.93 (5.07 m slid in 0.35 s at 16 m/s), idle at z = 1.82 (10.2 m); out of a dash (14.3 m/s) 4.54 m to the strike; sideways 5.07 m (z 15.60 to 20.67, the body faces +/- 90 degrees off its slide), backwards 5.06 m (x 13.91 to 8.85; in the corridor a wall stops the sideways one after 0.68 m) |
+| E-lunge reach | `C`, `D`, `--bots 1 --bots-ahead 8.0 --skill 0`, `wait:0.5;w+dash+guard:0.1` | the lunge starts at z = 13.00 and slides to z = 7.93; the target is 2.96 m from there (`candidate Pyon: 2.96 m (reach 4.15)`): `extended lunge hits Pyon for 32` (launch) at 8.0 m from the start. The plain lunge at the same 8.0 m (`lungefar`): `reach 2.25`, strikes at the start, no hit; at 2.95 m (`lungenear`, an E-lunge's hit distance after the slide): `candidate Pyon: 2.97 m (reach 2.25)`, no hit. Reach 2.25 m plain, 9.2 m (5.07 slide + 4.15) extended: 4.1x |
+| Dagger machine | `D T`, `wait:0.3;` then six times `attack:0.05;wait:0.28` | stabs hit at 2.80, 3.12, 3.45 s, `dagger machine` on the second and third |
+| Dagger juggle | `D T`, `wait:0.3;guard:0.05;wait:0.3;w:0.1;attack:0.05;wait:0.3` | lunge hits (launch), stab hits the airborne target: `tech: juggle x2` |
+| Block recoil | `D`, `--bots 1 --bots-ahead 1.8 --skill 1`, `wait:0.3;attack:0.05;wait:0.5` | the bot guards: blocked, `recoils off the block` |
+| Block tap | the same with `pitch=-70` first | blocked, `block tap` (no recoil) |
 
 The dash itself (`.local/tech/out/dashshot_*.png`, `w+dash` down the corridor): the `tumbleF` pose, the speed streaks and the
 blue `dash_effect` lines on the body in the frames 0.1-0.15 s into it. Dust (the retail `ef_dust_1m`/`ef_dust_2m`, rings of
@@ -2113,7 +2162,7 @@ the executable is packed).
   built inside the search and the first searches took 0.1-22 s (worst per map, dev probe); now the
   worst whole search on any of the 29 maps is 4.1 ms.
 - **Behaviour** (inferred): target = nearest non-friendly actor (`game::friendly`: without `Team`,
-  bots only target the player and never hurt each other; with teams, the other team); route replanned
+  free for all, everyone is an enemy, bots included; with teams, the other team); route replanned
   every ~1 s, walking to the farthest of the next 4 nodes that is a straight walk; weapon by range
   every >= 1 s (blade < 3.5 m, else the gun with ammo whose best range (shotgun 5 .. rifle 16 m) is
   nearest); strafe/hold distance, hops and double-tap tumbles in fights; below 15 % + 30 % x skill HP
@@ -2165,8 +2214,10 @@ Verification (headless, `.local/shots/bots/`, all `gunz-play GAME MAP ... --time
   (`[2.9,0.1,5.3] -> [1.1,1.3,7.7]`). `foot_t4.5.png`: a bot jumping off the upper flight, `down_t4.png`,
   `down_t6.png`: bots running at the stair foot and shooting.
 - 6 bots, 100 s, player standing still: Citadel 4 player kills, Dungeon 2 (bots reached y=22 floors),
-  Castle 2; 0 `Bot -> Bot` damage lines in FFA on all four maps; TDM on Dungeon: bots on different
-  teams hurt each other.
+  Castle 2. FFA (deathmatch, gladiator, gunman, gun game, berserker) is everyone against everyone:
+  `gunz-play GAME Mansion --mode dm --bots 6 --skill 1 --time 40` logs 9 kills in 40 s, 8 of them
+  bot against bot (`ToxicAvenger killed Nightfall`, ...). Earlier builds made FFA bots allies of each
+  other (a deviation from the original's free for all, reported by the user).
 - Retreat: rifle-shot bot at hp 6 fled 8 -> 52 m to a far spawn and swapped to the rifle; weapon log
   `slot 0 -> 2 at 39.8 m`, `slot 2 -> 1 at 8.0 m`, `slot 1 -> 0 at 4.8 m`.
 - Grenades and butterfly (`gunz-play GAME Mansion --at -970,1310,593 --bots 8 --mode tdm --time 90`,

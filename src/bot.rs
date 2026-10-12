@@ -108,7 +108,7 @@ enum Need {
 /// The guides' techniques as bot moves: name, the lowest [`BotSkill`] that tries it, what it
 /// needs and its keys in the `gunz-play --script` form (`B`, `G`, `H`: the blade's, a gun's and a
 /// second gun's slot). The same scripts were checked headless with the player
-/// (docs/formats.md "K-style techniques"); the skills are *inferred* difficulty ranks.
+/// (docs/formats.md "K-style and D-style techniques"); the skills are *inferred* difficulty ranks.
 const MOVES: [(&str, f32, Need, &str); 15] = [
     (
         "butterfly",
@@ -199,6 +199,71 @@ const MOVES: [(&str, f32, Need, &str); 15] = [
         0.4,
         Need::Wall,
         "wait:0.15;w:0.4;w+jump:0.25;w:0.6;guard:0.4;wait:0.2",
+    ),
+];
+
+/// The D-style techniques of a bot that holds a dagger (same form as [`MOVES`]; the dagger has no
+/// guard, so its guard key is the lunge and the blade moves above stay with the sword).
+const DAGGER_MOVES: [(&str, f32, Need, &str); 10] = [
+    (
+        "dagger train",
+        0.2,
+        Need::Close,
+        "w+dash:0.08;w+attack:0.05;wait:0.15;w+dash:0.08;w+attack:0.05;wait:0.2",
+    ),
+    (
+        "dagger machine",
+        0.3,
+        Need::Close,
+        "attack:0.05;wait:0.28;attack:0.05;wait:0.28;attack:0.05;wait:0.28;attack:0.05;wait:0.2",
+    ),
+    (
+        "dagger hop",
+        0.3,
+        Need::Close,
+        "jump:0.05;w+dash:0.08;w+attack:0.05;wait:0.3",
+    ),
+    (
+        "float step",
+        0.4,
+        Need::Close,
+        "w+dash:0.1;w+attack:0.05;wait:0.1;jump:0.1;wait:0.3",
+    ),
+    (
+        "extended lunge",
+        0.4,
+        Need::Close,
+        "w+dash+guard:0.1;wait:0.5",
+    ),
+    (
+        "dagger flash",
+        0.5,
+        Need::Close,
+        "jump:0.05;w+dash:0.08;w+attack:0.05;wait:0.1;d+dash:0.1;d+attack:0.05;wait:0.3",
+    ),
+    (
+        "shimmer shot",
+        0.5,
+        Need::Gun,
+        "G:0.05;wait:0.3;attack:0.05;reload:0.1;B:0.05;dash:0.1;wait:0.3",
+    ),
+    (
+        "jump shot dash",
+        0.6,
+        Need::Gun,
+        "jump:0.05;G:0.05;wait:0.3;attack:0.05;reload:0.1;B:0.05;w+dash:0.12;wait:0.3",
+    ),
+    (
+        "yoyo step",
+        0.7,
+        Need::Gun,
+        "jump+G:0.1;wait:0.1;w+dash:0.1;attack:0.05;reload:0.1;B:0.05;wait:0.3",
+    ),
+    (
+        "yoyo half",
+        0.85,
+        Need::Gun,
+        "jump+G:0.1;wait:0.1;w+dash:0.1;attack:0.05;reload:0.1;B:0.05;d+dash:0.1;d+attack:0.05;a+dash:0.1;wait:0.3",
     ),
 ];
 
@@ -707,10 +772,7 @@ fn bot_ai(
     foes: Query<(Option<&Acting>, Has<Guarding>, Option<&Motor>)>,
     items: Query<(&WorldItem, &Transform)>,
     clouds: Query<(&Transform, &SmokeCloud)>,
-    actors: Query<
-        (Entity, &GlobalTransform, Option<&Team>, Has<Bot>),
-        (With<Vitals>, Without<Dead>),
-    >,
+    actors: Query<(Entity, &GlobalTransform, Option<&Team>), (With<Vitals>, Without<Dead>)>,
     mut bots: Query<
         (
             Entity,
@@ -767,10 +829,10 @@ fn bot_ai(
             ai.kick = None;
         }
         let eye = pos + Vec3::Y * EYE;
-        let mine = (team.copied(), true);
+        let mine = team.copied();
         let foe = actors
             .iter()
-            .filter(|(e, _, t, b)| *e != me && !friendly(mine, (t.copied(), *b)))
+            .filter(|(e, _, t)| *e != me && !friendly(mine, t.copied()))
             .map(|(e, g, ..)| (e, g.translation()))
             .min_by(|a, b| {
                 a.1.distance_squared(pos)
@@ -949,9 +1011,9 @@ fn bot_ai(
             let cover = seen.is_none();
             let grouped = actors
                 .iter()
-                .filter(|(e, g, tm, b)| {
+                .filter(|(e, g, tm)| {
                     *e != me
-                        && !friendly(mine, (tm.copied(), *b))
+                        && !friendly(mine, tm.copied())
                         && flat(g.translation() - t).length() < 0.8 * radius
                 })
                 .count()
@@ -1554,9 +1616,9 @@ fn bot_ai(
         let clear = melee
             || foe.is_none_or(|(_, t)| {
                 let aim = t + Vec3::Y * 1.1;
-                !actors.iter().any(|(e, g, tm, b)| {
+                !actors.iter().any(|(e, g, tm)| {
                     e != me
-                        && friendly(mine, (tm.copied(), b))
+                        && friendly(mine, tm.copied())
                         && !apart(team.copied(), tm.copied())
                         && seg_dist(eye, aim, g.translation() + Vec3::Y) < 0.7
                 })
@@ -1729,8 +1791,14 @@ fn bot_ai(
             && let Some(b) = blade
         {
             ai.move_cd = (1.5 + 3.0 * rnd(&mut ai.rng)) * (1.6 - skill);
+            let dagger = data
+                .items
+                .get(loadout.slots[b].item)
+                .and_then(|i| i.weapon.as_ref())
+                .is_some_and(|w| w.kind == WeaponKind::Dagger);
+            let table: &[_] = if dagger { &DAGGER_MOVES } else { &MOVES };
             let (what, min, need, keys) =
-                MOVES[(rnd(&mut ai.rng) * MOVES.len() as f32) as usize % MOVES.len()];
+                table[(rnd(&mut ai.rng) * table.len() as f32) as usize % table.len()];
             let guns: Vec<usize> = (0..loadout.slots.len()).filter(|&i| gun(i)).collect();
             let ahead = Quat::from_rotation_y(ai.yaw) * Vec3::NEG_Z;
             let floor = col
@@ -1824,7 +1892,7 @@ mod tests {
     /// A typo in a move would only show as a warning when a bot rolls it.
     #[test]
     fn moves_parse() {
-        for (what, _, _, keys) in MOVES {
+        for (what, _, _, keys) in MOVES.iter().chain(&DAGGER_MOVES) {
             let keys = keys.replace('B', "1").replace('G', "2").replace('H', "3");
             let s = Script::parse(&keys).unwrap_or_else(|e| panic!("{what}: {e}"));
             assert!(s.secs() > 0.3 && s.secs() < 3.0, "{what}: {} s", s.secs());

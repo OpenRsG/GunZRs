@@ -232,8 +232,8 @@ pub struct Bot;
 #[derive(Component)]
 pub struct Remote;
 
-/// Side in team deathmatch. Actors without a `Team` play free-for-all: bots only target the
-/// player and never hurt each other.
+/// Side in team deathmatch. Actors without a `Team` play free-for-all: everyone is everyone's
+/// enemy, bots included.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Team {
     Red,
@@ -249,13 +249,14 @@ pub fn apart(a: Option<Team>, b: Option<Team>) -> bool {
     matches!((a, b), (Some(Team::Duel(x)), Some(Team::Duel(y))) if x != y)
 }
 
-/// Whether two actors (each as its `Team` and whether it is a `Bot`) are allies: no damage
-/// between them (callers still let an actor hurt itself) and bots never target them.
-pub fn friendly(a: (Option<Team>, bool), b: (Option<Team>, bool)) -> bool {
-    match (a.0, b.0) {
-        (Some(Team::Duel(_)), Some(Team::Duel(_))) => apart(a.0, b.0),
+/// Whether two actors (each as its `Team`) are allies: no damage between them (callers still
+/// let an actor hurt itself) and bots never target them. Without a `Team` on both sides nobody
+/// is an ally (free for all).
+pub fn friendly(a: Option<Team>, b: Option<Team>) -> bool {
+    match (a, b) {
+        (Some(Team::Duel(_)), Some(Team::Duel(_))) => apart(a, b),
         (Some(x), Some(y)) => x == y,
-        _ => a.1 && b.1,
+        _ => false,
     }
 }
 

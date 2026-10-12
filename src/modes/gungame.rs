@@ -7,7 +7,7 @@ use super::kind_item;
 use crate::{
     actor::ActorData,
     combat::is_melee,
-    game::{Arsenal, Equip, Killed, Loadout, Player, Team},
+    game::{Arsenal, Equip, Killed, Loadout, Player},
     item::{Items, WeaponKind},
     session::{Clock, freeze},
 };
@@ -97,9 +97,7 @@ pub(super) fn gungame(
             .unwrap_or("?")
     };
     for e in &new {
-        // `Team::Duel(0)` for all: actors of one arena are enemies (`game::friendly`), so the
-        // bots fight each other too, not just the player.
-        commands.entity(e).insert((Step(0), Team::Duel(0)));
+        commands.entity(e).insert(Step(0));
         arm(&mut equip, ladder, e, 0);
     }
     for k in killed.read() {

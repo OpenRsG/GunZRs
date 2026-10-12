@@ -9,10 +9,11 @@ use crate::{
     actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, PlayerSetup},
     bot::BotAhead,
     col::MapCollision,
-    combat::{is_melee, rnd},
+    combat::{Fx, Lifetime, is_melee, rnd},
+    effect::FxAssets,
     game::{
-        Arsenal, Damage, Dead, Equip, Killed, Loadout, NewRound, PlaySound, Player, Protected,
-        Score, SpawnAt, Spectate, Team, Vip, Vitals,
+        Arsenal, Damage, Dead, Equip, Killed, Loadout, Mods, NewRound, PlaySound, Player,
+        Protected, Score, SpawnAt, Spectate, Team, Vip, Vitals,
     },
     item::{Items, SPY_BAG, SPY_ICE, SPY_MINE, SPY_STUN, WeaponKind},
     level::Level,
@@ -41,9 +42,7 @@ const OVER_SECS: f32 = 4.0;
 const FIGHT_SECS: f32 = 1.5;
 /// Training dummies and how far in front of the player they stand (metres).
 const DUMMY_AT: [f32; 4] = [4.0, 6.5, 9.0, 12.0];
-/// Berserker's health and armour (*inferred*: three times the normal pair).
-const BERSERKER_VITALS: (f32, f32) = (300.0, 150.0);
-/// What an actor spawns with (`actor.rs`); a tracker or a former berserker goes back to it.
+/// What an actor spawns with (`actor.rs`); a tracker goes back to it.
 const NORMAL_VITALS: (f32, f32) = (100.0, 50.0);
 /// Seconds the "spies located" banner stays up (*inferred*; Blitzkrieg's message `viewTime`).
 const NOTICE_SECS: f32 = 4.0;
@@ -1241,95 +1240,121 @@ fn duel_damage(
     }
 }
 
-/// Berserker: the one actor everybody else hunts. It is its own team (Red) and the rest are
-/// Blue, so nobody but the berserker can be hurt by it and the others never hurt each other.
+/// Berserker ("Deathmatch + Berserker", public mode description): a free-for-all in which the
+/// first actor to kill becomes the berserker: its blows deal [`BERSERKER_DAMAGE`] times as
+/// much, its armour and then its health drain (never below 1), a kill refills both, and
+/// whoever kills it becomes the berserker. Holds the aura effect riding on it.
 #[derive(Component)]
-pub struct Berserker;
+pub struct Berserker(Option<Entity>);
 
 const TAG: &str = " [BERSERKER]";
+/// The berserker's damage multiplier (observed in public mode descriptions: 150 %).
+const BERSERKER_DAMAGE: f32 = 1.5;
+/// Armour, then health, the berserker loses per second (*inferred*).
+const BERSERKER_DRAIN: f32 = 2.0;
 
-/// Crowns (`on`) or dethrones an actor: team, health and name tag.
+/// Crowns `e`: full health and armour, the damage bonus, the aura (returned) and the name tag.
 fn crown(
     commands: &mut Commands,
+    fx: &mut Fx,
+    assets: &mut FxAssets,
     vitals: &mut Query<&mut Vitals>,
     names: &mut Query<&mut Name>,
     e: Entity,
-    on: bool,
-) {
-    let (team, (hp, ap)) = if on {
-        (Team::Red, BERSERKER_VITALS)
-    } else {
-        (Team::Blue, NORMAL_VITALS)
-    };
-    commands.entity(e).insert(team);
-    if on {
-        commands.entity(e).insert(Berserker);
-    } else {
-        commands.entity(e).remove::<Berserker>();
+) -> Option<Entity> {
+    // a small blue flame (0.5 m): grown around the chest so the berserker glows (**inferred**)
+    let at = Transform::from_xyz(0.0, 1.0, 0.0).with_scale(Vec3::splat(2.0));
+    let aura = fx.spawn("ef_berserker", at, assets, commands);
+    if let Some(a) = aura {
+        commands.entity(a).remove::<Lifetime>();
+        commands.entity(e).add_child(a);
     }
+    let mods = Mods {
+        dealt: BERSERKER_DAMAGE,
+        ..default()
+    };
+    commands.entity(e).insert((Berserker(aura), mods));
     if let Ok(mut v) = vitals.get_mut(e) {
-        (v.max_hp, v.max_ap) = (hp, ap);
-        if on {
-            (v.hp, v.ap) = (hp, ap);
-        } else {
-            (v.hp, v.ap) = (v.hp.min(hp), v.ap.min(ap));
-        }
+        (v.hp, v.ap) = (v.max_hp, v.max_ap);
     }
     if let Ok(mut n) = names.get_mut(e) {
-        let base = n.as_str().trim_end_matches(TAG).to_owned();
-        *n = Name::new(if on { format!("{base}{TAG}") } else { base });
+        *n = Name::new(format!("{}{TAG}", n.as_str()));
     }
+    aura
 }
 
-/// Picks the first berserker (a bot, else the player) once two actors exist, and passes the
-/// crown to whoever kills the berserker.
+/// The name without the berserker tag.
+fn untagged(names: &Query<&mut Name>, e: Entity) -> String {
+    names
+        .get(e)
+        .map_or("?", |n| n.as_str().trim_end_matches(TAG))
+        .to_owned()
+}
+
+/// Crowns the first killer, drains the berserker, refills it on its kills and passes the crown
+/// to whoever kills it (a death by its own hand only ends the reign: the next kill crowns).
+#[allow(clippy::too_many_arguments)]
 fn berserker(
     mut commands: Commands,
+    time: Res<Time>,
     mut killed: MessageReader<Killed>,
-    fresh: Query<Entity, (With<Score>, Without<Team>)>,
-    all: Query<(Entity, Has<Player>), With<Score>>,
-    boss: Query<(), With<Berserker>>,
+    players: Query<(), With<Player>>,
+    boss: Query<(Entity, &Berserker)>,
     mut vitals: Query<&mut Vitals>,
     mut names: Query<&mut Name>,
     mut sound: MessageWriter<PlaySound>,
+    mut fx: ResMut<Fx>,
+    mut assets: FxAssets,
 ) {
-    for e in &fresh {
-        commands.entity(e).insert(Team::Blue);
-    }
-    if boss.is_empty() && all.iter().count() >= 2 {
-        let first = all
-            .iter()
-            .filter(|a| !a.1)
-            .map(|a| a.0)
-            .min()
-            .or_else(|| all.iter().map(|a| a.0).min());
-        if let Some(e) = first {
-            crown(&mut commands, &mut vitals, &mut names, e, true);
-            info!(
-                "berserker: {} starts as the berserker",
-                names
-                    .get(e)
-                    .map_or("?", |n| n.as_str().trim_end_matches(TAG))
-            );
-        }
-    }
+    let mut current = boss.single().ok().map(|(e, b)| (e, b.0));
     for k in killed.read() {
-        if k.killer != k.victim && boss.contains(k.victim) {
-            crown(&mut commands, &mut vitals, &mut names, k.victim, false);
-            crown(&mut commands, &mut vitals, &mut names, k.killer, true);
-            info!(
-                "berserker: {} killed the berserker and becomes it",
-                names
-                    .get(k.killer)
-                    .map_or("?", |n| n.as_str().trim_end_matches(TAG))
-            );
-            // "Berserk are down!" / "You got the berserker!" (narrator, **inferred** triggers)
-            let me = all.get(k.killer).is_ok_and(|a| a.1);
-            sound.write(PlaySound {
-                stem: if me { "nar29" } else { "nar28" }.into(),
-                at: Vec3::ZERO,
-            });
+        let rival = k.killer != k.victim;
+        match current {
+            Some((b, aura)) if b == k.victim => {
+                if let Some(a) = aura {
+                    commands.entity(a).try_despawn();
+                }
+                commands.entity(b).remove::<(Berserker, Mods)>();
+                let base = untagged(&names, b);
+                if let Ok(mut n) = names.get_mut(b) {
+                    *n = Name::new(base);
+                }
+                current = None;
+                if rival {
+                    // "Berserk are down!" / "You got the berserker!" (narrator, **inferred**)
+                    let me = players.contains(k.killer);
+                    sound.write(PlaySound {
+                        stem: if me { "nar29" } else { "nar28" }.into(),
+                        at: Vec3::ZERO,
+                    });
+                    info!(
+                        "berserker: {} killed the berserker and becomes it",
+                        untagged(&names, k.killer)
+                    );
+                }
+            }
+            Some((b, _)) if b == k.killer => {
+                if let Ok(mut v) = vitals.get_mut(b) {
+                    (v.hp, v.ap) = (v.max_hp, v.max_ap);
+                }
+                continue;
+            }
+            None if rival => info!("berserker: {} drew first blood", untagged(&names, k.killer)),
+            _ => continue,
         }
+        if rival && current.is_none() {
+            let (c, f, a) = (&mut commands, &mut *fx, &mut assets);
+            current = Some((k.killer, crown(c, f, a, &mut vitals, &mut names, k.killer)));
+        }
+    }
+    if let Some((b, _)) = current
+        && let Ok(mut v) = vitals.get_mut(b)
+    {
+        let mut loss = BERSERKER_DRAIN * time.delta_secs();
+        let from_ap = loss.min(v.ap);
+        v.ap -= from_ap;
+        loss -= from_ap;
+        v.hp = (v.hp - loss).max(v.hp.min(1.0));
     }
 }
 

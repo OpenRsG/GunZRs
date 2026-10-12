@@ -10,8 +10,8 @@ use crate::{
     combat::{EYE, Fx, Lifetime, SELF_BLAST, Vfx, shape},
     effect::FxAssets,
     game::{
-        Afflict, Blast, Bot, Damage, Dead, Fire, HitShape, Player, Protected, Push, Team, Vitals,
-        apart, friendly,
+        Afflict, Blast, Damage, Dead, Fire, HitShape, Player, Protected, Push, Team, Vitals, apart,
+        friendly,
     },
     gfx::Knob,
     item::WeaponKind,
@@ -436,7 +436,7 @@ pub(crate) fn fly(
     mut damage: MessageWriter<Damage>,
     mut vfx: MessageWriter<Vfx>,
     mut afflict: MessageWriter<Afflict>,
-    sides: Query<(Option<&Team>, Has<Bot>)>,
+    sides: Query<Option<&Team>>,
     (mut blast, mut booms, profile): (
         MessageWriter<Blast>,
         MessageWriter<Boom>,
@@ -459,8 +459,8 @@ pub(crate) fn fly(
                 let mut best = col.raycast(pos, d, len + 0.05).map(|h| h.distance);
                 for (a, g, hs) in &targets {
                     let other_arena = apart(
-                        sides.get(a).ok().and_then(|s| s.0.copied()),
-                        sides.get(p.owner).ok().and_then(|s| s.0.copied()),
+                        sides.get(a).ok().flatten().copied(),
+                        sides.get(p.owner).ok().flatten().copied(),
                     );
                     if other_arena || a == p.owner && p.wind > ROCKET_LIFE - 0.2 {
                         continue;
@@ -583,7 +583,7 @@ pub(crate) fn fly(
             WeaponKind::Stun => {
                 // Stuns whoever the grenade's thrower is not friendly with, within its radius
                 // and in the open (the retail tip 2206: "briefly stunned").
-                let mine = sides.get(p.owner).ok().map(|(t, b)| (t.copied(), b));
+                let mine = sides.get(p.owner).ok().map(|t| t.copied());
                 for (a, g, hs) in &targets {
                     let (c, _) = nearest(g, hs, at);
                     let v = c - at;
@@ -591,7 +591,7 @@ pub(crate) fn fly(
                     let ally = a == p.owner
                         || sides
                             .get(a)
-                            .is_ok_and(|(t, b)| mine.is_some_and(|m| friendly(m, (t.copied(), b))));
+                            .is_ok_and(|t| mine.is_some_and(|m| friendly(m, t.copied())));
                     if ally
                         || dist > radius
                         || col

@@ -26,9 +26,10 @@
 //! MODE is `dm` (deathmatch), `tdm` (team deathmatch), `gladiator` / `team-gladiator` (melee
 //! weapons only), `elimination` (team rounds, no respawn until the round ends), `assassinate`
 //! (rounds, one VIP per team), `duel` (one-on-one rounds, the winner stays, the rest queue and
-//! watch), `training` (no bots, dummy targets), `berserker` (everybody hunts one berserker; kill
-//! it to become it), `tournament` (knockout bracket of duels), `gunman` (a random melee weapon
-//! and gun every life) or `spy` (rounds: hidden spies with grenades against trackers). In the
+//! watch), `training` (no bots, dummy targets), `berserker` (deathmatch: the first killer turns
+//! berserker, 150 % damage and draining health; kill it to become it), `tournament` (knockout
+//! bracket of duels), `gunman` (a random melee weapon and gun every life) or `spy` (rounds:
+//! hidden spies with grenades against trackers). In the
 //! round modes the kill limit counts rounds won and the time limit is for the match (duel and
 //! tournament: for one round; spy: none, the round time is the map's).
 //! `gungame` is a free-for-all up a weapon ladder: every kill swaps the killer's weapon for the

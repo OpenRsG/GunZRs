@@ -3,7 +3,7 @@
 //! triggered here by proximity, then a blast like a frag grenade).
 
 use crate::{
-    game::{Afflict, Bot, Dead, NewRound, Player, Team, Vitals, friendly},
+    game::{Afflict, Dead, NewRound, Player, Team, Vitals, friendly},
     item::{SPY_MINE, WeaponKind},
     modes::{Located, Spy},
     phase::{MatchApp, MatchSystems},
@@ -90,11 +90,11 @@ struct AfflictTodo(Option<Vec<(f32, String)>>);
 #[derive(Resource, Default)]
 struct Seen(f32, HashMap<Entity, Vec3>);
 
-type Sides<'w, 's> = Query<'w, 's, (Option<&'static Team>, Has<Bot>)>;
+type Sides<'w, 's> = Query<'w, 's, Option<&'static Team>>;
 
 /// Whether an enemy of the mine's layer stands within [`MINE_TRIGGER`] of `at`.
 fn tripped(at: Vec3, owner: Entity, sides: &Sides, who: &[(Entity, Vec3)]) -> bool {
-    let mine = sides.get(owner).ok().map(|(t, b)| (t.copied(), b));
+    let mine = sides.get(owner).ok().map(|t| t.copied());
     who.iter().any(|&(e, p)| {
         let d = p - at;
         e != owner
@@ -102,7 +102,7 @@ fn tripped(at: Vec3, owner: Entity, sides: &Sides, who: &[(Entity, Vec3)]) -> bo
             && d.y.abs() < 1.5
             && !sides
                 .get(e)
-                .is_ok_and(|(t, b)| mine.is_some_and(|m| friendly(m, (t.copied(), b))))
+                .is_ok_and(|t| mine.is_some_and(|m| friendly(m, t.copied())))
     })
 }
 

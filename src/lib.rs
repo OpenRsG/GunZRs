@@ -31,6 +31,7 @@ pub mod music;
 pub mod nav;
 pub mod net;
 pub mod npc;
+pub mod output;
 pub mod perf;
 pub mod phase;
 pub mod pickup;

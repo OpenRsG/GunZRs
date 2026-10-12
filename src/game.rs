@@ -8,6 +8,8 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(target_os = "linux")]
+        app.add_plugins(crate::output::OutputPlugin);
         app.add_message::<Fire>()
             .add_message::<Damage>()
             .add_message::<Killed>()

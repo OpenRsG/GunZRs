@@ -9,6 +9,7 @@
 use crate::{
     game::{Damage, Dead, Motor, Player, Settings, Vitals},
     level::MapMaterial,
+    output::Outputs,
     phase::MatchApp,
     profile::Profile,
     ui::{
@@ -355,6 +356,8 @@ pub struct Graphics {
     /// Native build: frames per second to stay under, 0 = no limit.
     pub fps: u16,
     pub knobs: [f32; N],
+    /// Linux: the sound server sink to play on (`output.rs`), empty = the system default.
+    pub out: String,
 }
 
 impl Default for Graphics {
@@ -367,6 +370,7 @@ impl Default for Graphics {
             vsync: true,
             fps: 0,
             knobs: KNOBS.map(|k| k.5[0]),
+            out: String::new(),
         };
         g.preset(Preset::Enhanced);
         g
@@ -430,6 +434,7 @@ impl Graphics {
         for (k, v) in KNOBS.iter().zip(self.knobs) {
             t += &format!("gfx_{}={}\n", k.0, v);
         }
+        t += &format!("gfx_audio_out={}\n", self.out);
         t
     }
 
@@ -449,6 +454,7 @@ impl Graphics {
             "aa" => self.aa = find(&AAS, v).ok_or_else(bad)?,
             "aniso" => self.aniso = find(&ANISOS, v).ok_or_else(bad)?,
             "fps" => self.fps = find(&FPS, v).ok_or_else(bad)?,
+            "audio_out" => self.out = v.to_owned(),
             "vsync" => {
                 self.vsync = match v {
                     "0" => false,
@@ -985,6 +991,8 @@ enum Ctl {
     Aniso(u16),
     Fps(u16),
     Vsync(bool),
+    /// Steps the audio output by -1/+1 (`output.rs`).
+    Out(i8),
     Done,
 }
 
@@ -998,6 +1006,7 @@ struct Fill(Knob);
 enum Show {
     Knob(Knob),
     Preset,
+    Out,
 }
 
 #[derive(Component)]
@@ -1217,12 +1226,27 @@ fn effects(m: &mut ChildSpawnerCommands) {
         height: px(8),
         ..default()
     });
-    m.spawn(heading("World effects"));
-    slider(m, Knob::Explosions);
-    help(
-        m,
-        "Fireball, smoke plume, sparks, debris and scorch for rockets, grenades and mines. RETAIL draws only the game's own sprite.",
-    );
+    m.spawn(heading("Sound"));
+    // the sink choice works through a Linux sound server; elsewhere the system default plays
+    if cfg!(target_os = "linux") {
+        m.spawn(row()).with_children(|r| {
+            r.spawn(label("Output"));
+            r.spawn(button(30.0, 30.0, "<", 16.0, Ctl::Out(-1)));
+            r.spawn((
+                Node {
+                    flex_grow: 1.0,
+                    flex_basis: px(0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                children![(Show::Out, Text::new(""), body(14.0), TextColor(ACCENT))],
+            ));
+            r.spawn(button(30.0, 30.0, ">", 16.0, Ctl::Out(1)));
+        });
+    }
+    for k in [Knob::Music, Knob::Effects, Knob::Announcer] {
+        slider(m, k);
+    }
 }
 
 fn lighting(m: &mut ChildSpawnerCommands) {
@@ -1257,10 +1281,12 @@ fn lighting(m: &mut ChildSpawnerCommands) {
         height: px(8),
         ..default()
     });
-    m.spawn(heading("Sound"));
-    for k in [Knob::Music, Knob::Effects, Knob::Announcer] {
-        slider(m, k);
-    }
+    m.spawn(heading("World effects"));
+    slider(m, Knob::Explosions);
+    help(
+        m,
+        "Fireball, smoke plume, sparks, debris and scorch for rockets, grenades and mines. RETAIL draws only the game's own sprite.",
+    );
 }
 
 /// Closes the overlay on Esc (before the pause menu sees the key, which stays open).
@@ -1317,6 +1343,7 @@ fn overlay(
 fn clicks(
     q: Query<(&Interaction, &Ctl), Changed<Interaction>>,
     profile: Option<ResMut<Profile>>,
+    mut outputs: Option<ResMut<Outputs>>,
     mut commands: Commands,
 ) {
     let Some(mut profile) = profile else { return };
@@ -1333,6 +1360,13 @@ fn clicks(
             Ctl::Aniso(n) => g.aniso = n,
             Ctl::Fps(n) => g.fps = n,
             Ctl::Vsync(v) => g.vsync = v,
+            Ctl::Out(d) => {
+                if let Some(o) = outputs.as_deref_mut() {
+                    // re-listed on every click: a headset may have come or gone
+                    *o = Outputs::list();
+                    g.out = o.step(&g.out, d);
+                }
+            }
             Ctl::Done => commands.remove_resource::<Overlay>(),
         }
     }
@@ -1374,6 +1408,7 @@ fn drag(
 #[allow(clippy::type_complexity)]
 fn refresh(
     profile: Option<Res<Profile>>,
+    outputs: Option<Res<Outputs>>,
     mut shows: Query<(&Show, &mut Text)>,
     mut fills: Query<(&Fill, &mut Node)>,
     buttons: Query<(Entity, &Ctl, Has<Chosen>)>,
@@ -1387,6 +1422,9 @@ fn refresh(
     for (s, mut t) in &mut shows {
         let want = match *s {
             Show::Knob(k) => k.text(g.get(k)),
+            Show::Out => outputs
+                .as_deref()
+                .map_or_else(|| "System default".into(), |o| o.label(&g.out)),
             Show::Preset => match g.which() {
                 Some(Preset::Original) => "ORIGINAL: no tonemapping, no effects, no lighting, the game's own explosions, 4x MSAA; the image as the game always drew it.".into(),
                 Some(Preset::Enhanced) => "ENHANCED: HDR with tonemapping, bloom, sharpening, vignette, lit characters, dynamic lights, contact shadows, realistic explosions.".into(),

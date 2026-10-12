@@ -209,7 +209,13 @@ fn main() -> AppExit {
         },
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let vfs = gunz::mrs::Vfs::mount(&game).unwrap_or_else(|e| panic!("mount {game}: {e}"));
+    let vfs = match gunz::mrs::Vfs::mount(&game) {
+        Ok(vfs) => vfs,
+        Err(e) => {
+            eprintln!("{game}: {e} (not a GUNZ THE DUEL install? pass GAME_DIR or set GUNZ_GAME)");
+            return AppExit::from_code(1);
+        }
+    };
     // A MAP, a quest scenario or a LAN game to join starts a match at once (a quest with
     // `--menu-page` shows the menu); without one the main menu opens.
     let quest = config.mode == Mode::Quest

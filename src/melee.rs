@@ -382,7 +382,7 @@ fn drive(
             m.juggle = 0;
         }
         let item = load.slots.get(load.current).map_or(0, |s| s.item);
-        let weapon = data.items.get(item).and_then(|i| i.weapon.as_ref());
+        let weapon = data.items.weapon(item);
         if m.item != item {
             if m.item != 0 {
                 // K-style: switching away in the air cancels the slash (and its delay), drawing
@@ -648,7 +648,7 @@ fn drive(
                     None
                 }
             }
-            Phase::Hurt { stand } => (t >= m.secs).then(|| {
+            Phase::Hurt { stand } => (t >= m.secs).then_some({
                 if stand {
                     Next::Recover {
                         clip: "blast_stand",
@@ -951,7 +951,7 @@ fn resolve(
     }
     let now = time.elapsed_secs();
     for s in strikes.read() {
-        let Some(w) = data.items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
+        let Some(w) = data.items.weapon(s.item) else {
             continue;
         };
         let Ok((_, g, Some(intent), am, team, _, _, _, _, _, aname)) = actors.get(s.attacker)
@@ -1007,8 +1007,7 @@ fn resolve(
             let label = vname.map_or("?", |n| n.as_str());
             let vmotion = vload
                 .and_then(|l| l.slots.get(l.current))
-                .and_then(|s| data.items.get(s.item))
-                .and_then(|i| i.weapon.as_ref())
+                .and_then(|s| data.items.weapon(s.item))
                 .map_or(1, |w| w.kind.motion_type());
             // Quest monsters have no melee state: they take the damage and nothing else.
             let mut state = melee.get_mut(e).ok();

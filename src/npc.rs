@@ -1322,7 +1322,7 @@ fn usable(s: &Skill, dist: f32, aim: f32, sees: bool, hp_frac: f32) -> bool {
 
 /// A classic monster's melee blow: the weapon item's damage and swing at `MELEE_AT` of the clip.
 fn melee_action(d: &NpcDef, items: &Items, m: &ModelData) -> Arc<Action> {
-    let w = items.get(d.weapon).and_then(|i| i.weapon.as_ref());
+    let w = items.weapon(d.weapon);
     let secs = m.secs("melee_attack").unwrap_or(1.0);
     Arc::new(Action {
         name: "melee_attack".into(),
@@ -1658,8 +1658,7 @@ fn timeline(
     let Some(a) = &mut b.act else { return };
     a.t += cx.dt;
     let (action, t) = (a.action.clone(), a.t);
-    loop {
-        let Some(r) = b.act.as_mut() else { break };
+    while let Some(r) = b.act.as_mut() {
         let Some((at, ev)) = action.events.get(r.next) else {
             break;
         };
@@ -2245,14 +2244,13 @@ mod tests {
     /// falls inside that clip, and names a sound file (skipped without the variable).
     #[test]
     fn animation_event_sounds() {
-        let Ok(dir) = std::env::var("GUNZ_GAME") else {
+        let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let vfs = crate::mrs::Vfs::mount(dir).unwrap();
         let data = Data::load(&vfs).unwrap();
         let events = AnimEvents::load(&vfs).unwrap();
-        let xml = String::from_utf8(vfs.read("system/animationevent.xml").unwrap()).unwrap();
-        let xml = roxmltree::Document::parse(xml.trim_start_matches('\u{feff}')).unwrap();
+        let xml = vfs.read_text("system/animationevent.xml").unwrap();
+        let xml = crate::mrs::xml(&xml, "animationevent.xml").unwrap();
         let files: std::collections::HashSet<String> = vfs
             .paths()
             .filter_map(|p| p.strip_prefix("sound/")?.strip_suffix(".wav"))

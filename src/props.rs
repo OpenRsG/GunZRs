@@ -9,7 +9,7 @@ use crate::{
     elu::{self, Elu},
     level::Level,
     model::node_batches,
-    mrs::Vfs,
+    mrs::{Vfs, xml},
     view,
 };
 use bevy::{camera::visibility::NoFrustumCulling, prelude::*};
@@ -33,15 +33,14 @@ struct Wind {
 /// Cloth entries of `<map dir>/flag.xml` by lower-case `NAME` (the ELU file name without the map
 /// prefix). Entries without `DIRECTION`/`POWER`/`WINDTYPE` (test_a) carry no wind: not waved.
 fn read_flags(vfs: &Vfs, dir: &str) -> HashMap<String, Wind> {
-    let Ok(bytes) = vfs.read(&format!("{dir}flag.xml")) else {
+    let path = format!("{dir}flag.xml");
+    let Ok(text) = vfs.read_text(&path) else {
         return HashMap::new();
     };
-    let text = String::from_utf8_lossy(&bytes);
-    let parsed = roxmltree::Document::parse(&text);
-    let doc = match parsed {
+    let doc = match xml(&text, &path) {
         Ok(d) => d,
         Err(e) => {
-            warn!("{dir}flag.xml: {e}");
+            warn!("{e}");
             return HashMap::new();
         }
     };

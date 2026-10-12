@@ -42,8 +42,21 @@ fn unxor(buf: &mut [u8]) {
     }
 }
 
-fn invalid(msg: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg)
+/// An `InvalidData` error: the one way every parser reports malformed data.
+pub fn bad(msg: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
+}
+
+/// Parses XML `text`; errors name `what` (usually the file path).
+pub fn xml<'a>(text: &'a str, what: &str) -> io::Result<roxmltree::Document<'a>> {
+    roxmltree::Document::parse(text).map_err(|e| bad(format!("{what}: {e}")))
+}
+
+/// The retail install named by `GUNZ_GAME`, or `None` so the calling test skips itself.
+#[cfg(test)]
+pub fn retail() -> Option<Vfs> {
+    let game = std::env::var("GUNZ_GAME").ok()?;
+    Some(Vfs::mount(&game).unwrap())
 }
 
 #[derive(Debug, Clone)]
@@ -84,13 +97,13 @@ impl Archive {
             let (compressed, size) = (u32_at(18), u32_at(22));
             let (name_len, extra_len) = (u16_at(26) as usize, u16_at(28) as u64);
             if flags & 0x8 != 0 || !matches!(method, 0 | 8) {
-                return Err(invalid(format!(
+                return Err(bad(format!(
                     "{}: unsupported entry at {pos}: flags {flags:#x} method {method}",
                     path.display()
                 )));
             }
             if name_len > KEY.len() {
-                return Err(invalid(format!(
+                return Err(bad(format!(
                     "{}: name length {name_len} at {pos} exceeds known key",
                     path.display()
                 )));
@@ -101,13 +114,13 @@ impl Archive {
             let data = pos + 30 + name_len as u64 + extra_len;
             pos = data + compressed as u64;
             if pos > len {
-                return Err(invalid(format!(
+                return Err(bad(format!(
                     "{}: entry at {data} overruns file",
                     path.display()
                 )));
             }
             let name = String::from_utf8(name)
-                .map_err(|e| invalid(format!("{}: name at {data}: {e}", path.display())))?;
+                .map_err(|e| bad(format!("{}: name at {data}: {e}", path.display())))?;
             entries.push(Entry {
                 name,
                 method,
@@ -118,7 +131,7 @@ impl Archive {
             });
         }
         if entries.is_empty() {
-            return Err(invalid(format!("{}: no MRS entries", path.display())));
+            return Err(bad(format!("{}: no MRS entries", path.display())));
         }
         Ok(Self { path, entries })
     }
@@ -142,7 +155,7 @@ impl Archive {
         let mut crc = flate2::Crc::new();
         crc.update(&out);
         if out.len() != e.size as usize || crc.sum() != e.crc {
-            return Err(invalid(format!(
+            return Err(bad(format!(
                 "{}: {} failed size/CRC check",
                 self.path.display(),
                 e.name
@@ -255,19 +268,17 @@ impl Vfs {
     pub fn from_packs<'a>(packs: impl IntoIterator<Item = &'a [u8]>) -> io::Result<Self> {
         let mut files = HashMap::new();
         for p in packs {
-            let bad = || invalid("truncated pack".into());
-            let mut r = p
-                .strip_prefix(PACK)
-                .ok_or_else(|| invalid("not a pack".into()))?;
+            let truncated = || bad("truncated pack");
+            let mut r = p.strip_prefix(PACK).ok_or_else(|| bad("not a pack"))?;
             let mut take = |n: usize| -> io::Result<&[u8]> {
-                let (a, b) = r.split_at_checked(n).ok_or_else(bad)?;
+                let (a, b) = r.split_at_checked(n).ok_or_else(truncated)?;
                 r = b;
                 Ok(a)
             };
             let count = u32::from_le_bytes(take(4)?.try_into().unwrap());
             for _ in 0..count {
                 let n = u16::from_le_bytes(take(2)?.try_into().unwrap()) as usize;
-                let name = String::from_utf8(take(n)?.to_vec()).map_err(|_| bad())?;
+                let name = String::from_utf8(take(n)?.to_vec()).map_err(|_| truncated())?;
                 let len = u32::from_le_bytes(take(4)?.try_into().unwrap());
                 let file = match len {
                     NAME_ONLY => Packed::NameOnly,
@@ -285,6 +296,16 @@ impl Vfs {
             index: HashMap::new(),
             files: Arc::new(files),
         })
+    }
+
+    /// Reads a text file as strict UTF-8 without its BOM; errors name the path.
+    pub fn read_text(&self, path: &str) -> io::Result<String> {
+        let mut text =
+            String::from_utf8(self.read(path)?).map_err(|e| bad(format!("{path}: {e}")))?;
+        if text.starts_with('\u{feff}') {
+            text.drain(..'\u{feff}'.len_utf8());
+        }
+        Ok(text)
     }
 
     pub fn read(&self, path: &str) -> io::Result<Vec<u8>> {

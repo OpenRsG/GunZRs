@@ -945,7 +945,6 @@ fn drive(
         blur,
         kick: live.kick * k(Knob::SpeedFx),
         gray: live.gray,
-        ..default()
     };
     let active = want.grain > 0.0
         || want.contrast != 1.0

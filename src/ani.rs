@@ -2,7 +2,8 @@
 //! Values are returned as stored (left-handed, Z up, centimetres, D3D row-major matrices);
 //! rotation keys of every version are normalised to quaternions `[x, y, z, w]`.
 
-use std::io::{self, ErrorKind};
+use crate::mrs::bad;
+use std::io;
 
 const MAGIC: u32 = 0x0107_F060;
 /// Pre-`0x1001` files (21 in model/lo): no visibility track, axis-angle rotations.
@@ -63,10 +64,6 @@ pub struct Ani {
     pub max_frame: u32,
     pub kind: Kind,
     pub nodes: Vec<Node>,
-}
-
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
 }
 
 struct Reader<'a> {

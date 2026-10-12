@@ -6,11 +6,11 @@
 //! sweeps work against real surfaces with exact edge/vertex contacts.
 
 use crate::{
-    mrs::Vfs,
+    mrs::{Vfs, bad},
     view::{SCALE, to_bevy},
 };
 use bevy::prelude::*;
-use std::io::{self, ErrorKind};
+use std::io;
 
 const COL_ID: u32 = 0x5050_178f;
 const NONE: u32 = u32::MAX;
@@ -237,10 +237,6 @@ pub struct MapCollision {
     nodes: Vec<BvhNode>,
     /// Per triangle: the box a sphere sweep must meet to touch it ([`Tri::reach`]).
     reach: Vec<(Vec3, Vec3)>,
-}
-
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
 }
 
 /// BSP node in GunZ space (cm, Z up).
@@ -777,11 +773,10 @@ mod tests {
     #[test]
     #[ignore]
     fn open_floor_snag() {
-        use crate::{map, mrs::Vfs};
-        let Ok(game) = std::env::var("GUNZ_GAME") else {
+        use crate::map;
+        let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let vfs = Vfs::mount(&game).unwrap();
         let rs = map::find_rs(&vfs, "mansion").unwrap();
         let col = MapCollision::load(&vfs, &rs).unwrap();
         let c = Vec3::new(-31.9, 6.0, -30.0);

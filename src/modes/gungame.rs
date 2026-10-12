@@ -104,11 +104,7 @@ pub(super) fn gungame(
         if k.killer == k.victim || clock.over.is_some() {
             continue;
         }
-        let melee = data
-            .items
-            .get(k.item)
-            .and_then(|i| i.weapon.as_ref())
-            .is_some_and(|w| is_melee(w.kind));
+        let melee = data.items.weapon(k.item).is_some_and(|w| is_melee(w.kind));
         let (Ok(a), Ok(b)) = (steps.get(k.killer), steps.get(k.victim)) else {
             continue;
         };

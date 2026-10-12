@@ -46,7 +46,6 @@ const BLAST_PUSH: f32 = 9.0;
 const BLAST_LIFT: f32 = 8.0;
 /// Frag radius when the item has no `handweaponcolldist`.
 pub(crate) const FRAG_RADIUS: f32 = 4.0;
-/// Points of a medikit / repair kit come from `worlditem.xml` (`Weapon::kit_points`).
 
 /// A smoke grenade's cloud: a sphere around the entity's `Transform` that blocks line of sight
 /// (see [`smoke_blocks`]) until its `Lifetime` ends.
@@ -164,7 +163,7 @@ pub(crate) fn launch(
     time: Res<Time>,
 ) {
     for f in fires.read() {
-        let Some(w) = data.items.get(f.item).and_then(|i| i.weapon.as_ref()) else {
+        let Some(w) = data.items.weapon(f.item) else {
             continue;
         };
         let Ok((g, mut v, name)) = actors.get_mut(f.shooter) else {
@@ -446,7 +445,7 @@ pub(crate) fn fly(
     let dt = time.delta_secs().min(0.05);
     for (e, mut tf, mut p, mut vis) in &mut projectiles {
         let pos = tf.translation;
-        let Some(w) = data.items.get(p.item).and_then(|i| i.weapon.as_ref()) else {
+        let Some(w) = data.items.weapon(p.item) else {
             commands.entity(e).despawn();
             continue;
         };

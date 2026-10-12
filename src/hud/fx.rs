@@ -429,7 +429,7 @@ fn splat(
     mut blood: ResMut<Blood>,
 ) {
     let blood = &mut *blood;
-    let (next, mut seed) = (&mut blood.splat_next, &mut blood.splat_seed);
+    let (next, seed) = (&mut blood.splat_next, &mut blood.splat_seed);
     let dt = real.delta_secs();
     for (mut s, _, _, mut img, mut vis) in &mut pool {
         if s.age >= SPLAT_LIFE {
@@ -461,10 +461,10 @@ fn splat(
                 return;
             };
             let size =
-                ((SPLAT_MIN + w.hp * SPLAT_PER_HP) * (0.7 + 0.6 * rand(&mut seed))).min(SPLAT_MAX);
+                ((SPLAT_MIN + w.hp * SPLAT_PER_HP) * (0.7 + 0.6 * rand(seed))).min(SPLAT_MAX);
             // Along a random edge, up to a quarter of the screen in.
-            let (along, depth) = (rand(&mut seed), rand(&mut seed) * 0.25);
-            let (x, y) = match (rand(&mut seed) * 4.0) as u32 {
+            let (along, depth) = (rand(seed), rand(seed) * 0.25);
+            let (x, y) = match (rand(seed) * 4.0) as u32 {
                 0 => (along, depth),
                 1 => (along, 1.0 - depth),
                 2 => (depth, along),
@@ -479,7 +479,7 @@ fn splat(
             n.margin = UiRect::all(px(-size / 2.0));
             n.width = px(size);
             n.height = px(size);
-            t.rotation = Rot2::radians(rand(&mut seed) * std::f32::consts::TAU);
+            t.rotation = Rot2::radians(rand(seed) * std::f32::consts::TAU);
             img.color = Color::srgba(1.0, 1.0, 1.0, 0.0);
             *vis = Visibility::Inherited;
         }
@@ -767,7 +767,7 @@ fn lens(
     mut blood: ResMut<Blood>,
 ) {
     let blood = &mut *blood;
-    let (next, flash, mut seed) = (&mut blood.lens_next, &mut blood.flash, &mut blood.lens_seed);
+    let (next, flash, seed) = (&mut blood.lens_next, &mut blood.flash, &mut blood.lens_seed);
     let dt = real.delta_secs();
     let on = settings.screen_blood && settings.realistic_blood;
     if *seed == 0 {
@@ -816,8 +816,8 @@ fn lens(
         }
         *flash = (*flash + w.hp / 30.0).min(0.8);
         // The cluster lands near a random edge: where the blow came from is not known here.
-        let (along, depth) = (rand(&mut seed), rand(&mut seed) * 0.22);
-        let (cx, cy) = match (rand(&mut seed) * 4.0) as u32 {
+        let (along, depth) = (rand(seed), rand(seed) * 0.22);
+        let (cx, cy) = match (rand(seed) * 4.0) as u32 {
             0 => (along, depth),
             1 => (along, 1.0 - depth),
             2 => (depth, along),
@@ -832,29 +832,29 @@ fn lens(
             };
             let spatter = w.hp >= 8.0 && i < 1 + (w.hp / 30.0) as usize;
             let size = if spatter {
-                ((180.0 + w.hp * 4.0) * (0.7 + 0.6 * rand(&mut seed))).min(460.0)
+                ((180.0 + w.hp * 4.0) * (0.7 + 0.6 * rand(seed))).min(460.0)
             } else {
-                let r = rand(&mut seed);
+                let r = rand(seed);
                 22.0 + 70.0 * r * r * (0.5 + w.hp / 60.0).min(1.5)
             };
             let slides = !spatter && size > 30.0;
             let spread = if spatter { 0.2 } else { 0.1 };
             let at = Vec2::new(
-                (cx + (rand(&mut seed) - 0.5) * spread).clamp(0.02, 0.98),
-                (cy + (rand(&mut seed) - 0.5) * spread).clamp(0.02, 0.98),
+                (cx + (rand(seed) - 0.5) * spread).clamp(0.02, 0.98),
+                (cy + (rand(seed) - 0.5) * spread).clamp(0.02, 0.98),
             );
             *l = Lens {
                 age: 0.0,
-                life: if spatter { 4.0 } else { 6.0 } + 3.0 * rand(&mut seed),
+                life: if spatter { 4.0 } else { 6.0 } + 3.0 * rand(seed),
                 peak: if spatter { 0.8 } else { 0.95 },
                 size,
                 slide_at: if slides {
-                    0.5 + 2.0 * rand(&mut seed)
+                    0.5 + 2.0 * rand(seed)
                 } else {
                     f32::MAX
                 },
                 travel: 0.0,
-                to: ((30.0 + 110.0 * rand(&mut seed)) * size / 40.0).min(170.0),
+                to: ((30.0 + 110.0 * rand(seed)) * size / 40.0).min(170.0),
                 at,
             };
             n.left = percent(at.x * 100.0);
@@ -863,7 +863,7 @@ fn lens(
             n.width = px(size);
             n.height = px(size);
             t.rotation = if spatter {
-                Rot2::radians(rand(&mut seed) * std::f32::consts::TAU)
+                Rot2::radians(rand(seed) * std::f32::consts::TAU)
             } else {
                 Rot2::IDENTITY
             };
@@ -874,7 +874,7 @@ fn lens(
             } else {
                 &art.drops
             };
-            img.image = set[(rand(&mut seed) * set.len() as f32) as usize % set.len()].clone();
+            img.image = set[(rand(seed) * set.len() as f32) as usize % set.len()].clone();
             img.color = lens_tint(0.0, 0.0);
             *vis = Visibility::Inherited;
             for &k in kids {

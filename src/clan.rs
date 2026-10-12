@@ -9,7 +9,7 @@ use crate::{
     game::{Player, Reward, Team},
     level::Level,
     menu::{Mode, Page, State},
-    mrs::Vfs,
+    mrs::{Vfs, bad, xml},
     phase::{MatchStart, MatchSystems, MenuSystems},
     profile::{MatchGain, Profile},
     session::{Clock, Rules},
@@ -89,11 +89,10 @@ pub struct Entry {
 /// The `VISIBLE` emblems and backgrounds of `claniconinfo.xml` (the file lists 100 + 20, 52 + 9 of
 /// them visible), or their strings missing: `names` maps `CLAN_ICON_*` / `CLAN_BG_*` to text.
 pub fn parse_icons(
-    xml: &str,
+    xml_text: &str,
     names: &HashMap<String, String>,
-) -> Result<(Vec<Entry>, Vec<Entry>), String> {
-    let doc = roxmltree::Document::parse(xml.trim_start_matches('\u{feff}'))
-        .map_err(|e| format!("claniconinfo.xml: {e}"))?;
+) -> io::Result<(Vec<Entry>, Vec<Entry>)> {
+    let doc = xml(xml_text, "claniconinfo.xml")?;
     let (mut emblems, mut backs) = (Vec::new(), Vec::new());
     for n in doc
         .root_element()
@@ -105,7 +104,7 @@ pub fn parse_icons(
                 .find(|c| c.has_tag_name(tag))
                 .and_then(|c| c.text())
                 .map(str::trim)
-                .ok_or_else(|| format!("claniconinfo.xml: <{tag}> missing"))
+                .ok_or_else(|| bad(format!("claniconinfo.xml: <{tag}> missing")))
         };
         if get("VISIBLE")? != "TRUE" {
             continue;
@@ -113,14 +112,14 @@ pub fn parse_icons(
         let emblem = get("EMBLEM")? == "TRUE";
         let want = if emblem { ICON_SOURCE } else { BACK_SOURCE };
         if !get("SOURCE")?.eq_ignore_ascii_case(want) {
-            return Err(format!(
+            return Err(bad(format!(
                 "claniconinfo.xml: unexpected SOURCE {}",
                 get("SOURCE")?
-            ));
+            )));
         }
         let num = |s: &str| {
             s.parse()
-                .map_err(|_| format!("claniconinfo.xml: bad number {s:?}"))
+                .map_err(|_| bad(format!("claniconinfo.xml: bad number {s:?}")))
         };
         let key = get("NAME")?.trim_start_matches("STR:");
         let entry = Entry {
@@ -128,7 +127,7 @@ pub fn parse_icons(
             cell: num(get("OFFSET")?)?,
             name: names
                 .get(key)
-                .ok_or_else(|| format!("strings.xml: {key} missing"))?
+                .ok_or_else(|| bad(format!("strings.xml: {key} missing")))?
                 .clone(),
         };
         (if emblem { &mut emblems } else { &mut backs }).push(entry);
@@ -157,18 +156,10 @@ pub struct ClanArt {
     pub rivals: Vec<Rival>,
 }
 
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg.into())
-}
-
 impl ClanArt {
     pub fn load(vfs: &Vfs, images: &mut Assets<Image>) -> io::Result<Self> {
-        let text = |path: &str| {
-            String::from_utf8(vfs.read(path)?).map_err(|e| bad(format!("{path}: {e}")))
-        };
-        let strings = text("system/strings.xml")?;
-        let strings = roxmltree::Document::parse(strings.trim_start_matches('\u{feff}'))
-            .map_err(|e| bad(format!("strings.xml: {e}")))?;
+        let strings = vfs.read_text("system/strings.xml")?;
+        let strings = xml(&strings, "system/strings.xml")?;
         let names: HashMap<String, String> = strings
             .descendants()
             .filter(|n| n.has_tag_name("STR"))
@@ -176,7 +167,7 @@ impl ClanArt {
             .filter(|(k, _)| k.starts_with("CLAN_ICON_") || k.starts_with("CLAN_BG_"))
             .collect();
         let (emblems, backgrounds) =
-            parse_icons(&text("system/claniconinfo.xml")?, &names).map_err(bad)?;
+            parse_icons(&vfs.read_text("system/claniconinfo.xml")?, &names)?;
         let mut atlas = |file: &str| {
             let path = format!("interface/loadable/{file}");
             decode(&vfs.read(&path)?, "png", true, ImageSampler::linear())

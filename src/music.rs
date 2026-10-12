@@ -293,7 +293,7 @@ fn level_new(
     mut sounds: Query<(&mut PlaybackSettings, Has<Narration>), Without<Voice>>,
 ) {
     if let Ok((mut s, n)) = sounds.get_mut(add.entity) {
-        s.volume = s.volume * effect_level(profile.as_deref(), n);
+        s.volume *= effect_level(profile.as_deref(), n);
     }
 }
 
@@ -372,10 +372,9 @@ mod tests {
     /// track must decode completely through bevy's decoder (skipped without the variable).
     #[test]
     fn every_bgm_decodes() {
-        let Ok(dir) = std::env::var("GUNZ_GAME") else {
+        let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let vfs = Vfs::mount(dir).unwrap();
         let tracks = bgm(&vfs);
         assert!(!tracks.is_empty());
         for (stem, path) in tracks {

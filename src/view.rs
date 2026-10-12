@@ -174,9 +174,9 @@ fn take_shot(
     let pending = shot.capture == Shot::PENDING;
     if shot.frame <= shot.capture
         && if pending {
-            span > 0 && shot.frame % 3 == 0
+            span > 0 && shot.frame.is_multiple_of(3)
         } else {
-            lead <= span && lead % 3 == 0
+            lead <= span && lead.is_multiple_of(3)
         }
     {
         let path = shot.path.replace('%', &format!("{:05}", shot.frame));

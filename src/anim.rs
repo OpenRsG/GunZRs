@@ -5,7 +5,7 @@
 //! (positions `(x, y, -z)`, matrices `S M^T S`), in centimetres. Scaling to metres is the
 //! model root's job (`view::SCALE`), so animated local translations stay in centimetres.
 
-use crate::mrs::Vfs;
+use crate::mrs::{Vfs, bad, xml};
 use crate::{
     ani::{Ani, FPS, Key, Kind, Node, TICKS_PER_FRAME, VertexTrack},
     elu::{Elu, Node as EluNode},
@@ -122,13 +122,11 @@ pub struct AnimEvents(HashMap<(u32, String), Vec<AnimEvent>>);
 
 impl AnimEvents {
     pub fn load(vfs: &Vfs) -> io::Result<Self> {
-        let bytes = vfs.read("system/animationevent.xml")?;
-        let text = String::from_utf8(bytes).map_err(bad)?;
-        Self::parse(text.trim_start_matches('\u{feff}'))
+        Self::parse(&vfs.read_text("system/animationevent.xml")?)
     }
 
     pub fn parse(text: &str) -> io::Result<Self> {
-        let doc = roxmltree::Document::parse(text).map_err(bad)?;
+        let doc = xml(text, "system/animationevent.xml")?;
         let mut events: HashMap<(u32, String), Vec<AnimEvent>> = HashMap::new();
         for npc in doc.descendants().filter(|n| n.has_tag_name("NPC")) {
             let id = npc.attribute("id").and_then(|v| v.parse().ok());
@@ -166,10 +164,6 @@ impl AnimEvents {
             .get(&(npc, clip.to_owned()))
             .map_or(&[], Vec::as_slice)
     }
-}
-
-fn bad(e: impl ToString) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
 
 /// An upper-body clip played over the main one.
@@ -798,7 +792,7 @@ mod tests {
     use super::*;
     use crate::ani::Kind;
     use bevy::{asset::AssetPlugin, time::TimeUpdateStrategy};
-    use std::f32::consts::FRAC_PI_2;
+    use std::f32::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
     use std::time::Duration;
 
     fn key<T>(frame: u32, value: T) -> Key<T> {
@@ -828,7 +822,7 @@ mod tests {
         })
     }
 
-    const TURN: [f32; 4] = [0.0, 0.0, 0.707_106_8, 0.707_106_8]; // 90 degrees about z
+    const TURN: [f32; 4] = [0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]; // 90 degrees about z
     const NONE: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
     fn angle(app: &App, e: Entity) -> f32 {

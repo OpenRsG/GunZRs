@@ -3,6 +3,8 @@ name = "gunz"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "Clean-room Rust port of GunZ: The Duel that plays the Steam game's own files"
+repository = "https://github.com/OpenRsG/GunZRs"
 publish = false
 default-run = "gunz"
 
@@ -33,3 +35,26 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Release downloads (`.github/workflows/release.yml`): thin LTO, no symbols.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+strip = true
+
+# `cargo deb --profile dist` (Ubuntu/Debian package): `start.sh` becomes the `gunzrs` command.
+[package.metadata.deb]
+name = "gunzrs"
+maintainer = "OpenRsG <339018222+OpenRsG@users.noreply.github.com>"
+section = "games"
+# Vulkan and xkbcommon are loaded at run time, so `$auto` cannot see them.
+depends = "$auto, libvulkan1, libxkbcommon0"
+extended-description = "Needs your own copy of GunZ: The Duel from Steam; the game files are read from its install."
+assets = [
+    ["target/release/gunz-play", "usr/bin/", "755"],
+    ["target/release/gunz", "usr/bin/", "755"],
+    ["start.sh", "usr/bin/gunzrs", "755"],
+    ["packaging/gunzrs.desktop", "usr/share/applications/", "644"],
+    ["README.md", "usr/share/doc/gunzrs/", "644"],
+    ["assets/fonts/OFL-*.txt", "usr/share/doc/gunzrs/", "644"],
+]

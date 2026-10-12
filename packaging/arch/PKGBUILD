@@ -1,0 +1,39 @@
+# Builds GunZRs from the latest commit: `makepkg -si` in this folder.
+# The game files come from your own Steam install of GunZ: The Duel.
+pkgname=gunzrs-git
+pkgver=r0
+pkgrel=1
+pkgdesc="Clean-room Rust port of GunZ: The Duel that plays the Steam game's own files"
+arch=(x86_64)
+url=https://github.com/OpenRsG/GunZRs
+license=(Apache-2.0)
+depends=(alsa-lib systemd-libs libxkbcommon vulkan-icd-loader)
+makedepends=(git cargo)
+provides=(gunzrs)
+conflicts=(gunzrs)
+options=(!lto !debug)
+source=("GunZRs::git+$url.git")
+sha256sums=(SKIP)
+
+pkgver() {
+    cd GunZRs
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+    cd GunZRs
+    cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+    cd GunZRs
+    cargo build --frozen --profile dist --bin gunz-play --bin gunz
+}
+
+package() {
+    cd GunZRs
+    install -Dm755 target/dist/gunz-play target/dist/gunz -t "$pkgdir/usr/bin"
+    install -Dm755 start.sh "$pkgdir/usr/bin/gunzrs"
+    install -Dm644 packaging/gunzrs.desktop -t "$pkgdir/usr/share/applications"
+    install -Dm644 README.md assets/fonts/OFL-*.txt -t "$pkgdir/usr/share/doc/gunzrs"
+}

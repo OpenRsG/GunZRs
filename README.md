@@ -8,8 +8,8 @@
 the original maps, characters, weapons, monsters and sounds straight from your Steam install, with
 the butterflies, wall cancels and yoyo steps that made the game.
 
-[![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)](https://www.rust-lang.org)
-[![Bevy](https://img.shields.io/badge/Bevy-0.19-232326)](https://bevyengine.org)
+[![Release](https://img.shields.io/github/v/release/OpenRsG/GunZRs)](https://github.com/OpenRsG/GunZRs/releases)
+[![CI](https://github.com/OpenRsG/GunZRs/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenRsG/GunZRs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Get the game on Steam](https://img.shields.io/badge/Steam-GunZ%3A%20The%20Duel-1b2838?logo=steam)](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
 
@@ -20,8 +20,9 @@ the butterflies, wall cancels and yoyo steps that made the game.
 ## Highlights
 
 - **The real moves.** Butterfly up to the quadruple BF, slash shot, half step, forbidden step, wall
-  cancel, flash climb, dagger flash, yoyo steps, E-lunge: all 38 techniques of the community K-style
-  and D-style guides, each one played headless and checked in the log. Bots use them too, more
+  cancel, flash climb, dagger flash, yoyo steps, E-lunge: 38 techniques from the community K-style
+  and D-style guides, each one played headless and checked in the log (the handful that are left
+  out are listed [under the techniques](#k-style-and-d-style-techniques)). Bots use them too, more
   often the better they are.
 - **18 game modes.** The 15 retail modes with the original rules (deathmatch is everyone against
   everyone, the berserker is whoever kills first) plus Infected, Gun Game and Dynamic Duels.
@@ -31,8 +32,8 @@ the butterflies, wall cancels and yoyo steps that made the game.
   grenades, retreats, guarding and techniques scaled by skill.
 - **Original look, or better.** The ORIGINAL preset draws the image exactly as the game did; ENHANCED
   and ULTRA add HDR, bloom, lit characters, full explosions and simulated blood.
-- **Plays where you are.** Linux (Windows and macOS builds in CI), a WebGPU browser build with touch
-  controls, and LAN multiplayer.
+- **Plays where you are.** Linux and Windows downloads, a WebGPU browser build with touch controls,
+  and LAN multiplayer.
 
 | | | |
 |:-:|:-:|:-:|
@@ -46,38 +47,62 @@ copy of the game; the port only reads its `.mrs` archives and never runs `Gunz.e
 
 ## Quick start
 
-1. Install [GunZ: The Duel on Steam](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
-   (or paste `steam://install/3139440` into your browser to open the Steam client).
-2. Install [Rust](https://rustup.rs). On Linux, Bevy also needs the ALSA and udev development
-   packages (`libasound2-dev libudev-dev` on Debian/Ubuntu, `alsa-lib-devel systemd-devel` on Fedora).
-3. Build and play. `gunz-play` finds the game through Steam's library folders on its own; pass
-   the install folder first if it lives somewhere unusual:
+Install [GunZ: The Duel on Steam](https://store.steampowered.com/app/3139440/GunZ_The_Duel/) first
+(or paste `steam://install/3139440` into your browser). GunZRs finds it through Steam's library
+folders, Flatpak Steam included; `GUNZ_GAME=/path/to/GUNZ THE DUEL` points it anywhere else.
+
+```sh
+# Arch: build and install the package (the gunzrs command and a menu entry)
+git clone https://github.com/OpenRsG/GunZRs && cd GunZRs/packaging/arch && makepkg -si
+
+# Ubuntu / Debian (22.04 or newer): download gunzrs_<version>_amd64.deb from the latest release, then
+sudo apt install ./gunzrs_*_amd64.deb
+
+# Any x86_64 Linux: the latest release into ~/.local, no root
+curl -fsSL https://raw.githubusercontent.com/OpenRsG/GunZRs/main/install.sh | sh
+```
+
+Then run `gunzrs` (or GunZRs from the application menu). On Windows, unzip
+`gunzrs-<version>-windows-x86_64.zip` from the [latest release](https://github.com/OpenRsG/GunZRs/releases/latest)
+and double-click `start.bat`.
+
+You should see the main menu with a picture on every map tile. The retail data has no map pictures,
+so the first start renders them from your install (under a minute, 960x540 PNGs in `previews/`
+beside your profile file); after that the game opens at once. The menu, the loading screen and the
+match share one window: START, MAIN MENU and PLAY AGAIN never reopen it.
+
+<details>
+<summary>Build from source</summary>
+
+Install [Rust](https://rustup.rs) and the system libraries:
+
+```sh
+sudo pacman -S --needed base-devel alsa-lib systemd-libs                    # Arch
+sudo apt install build-essential pkg-config libasound2-dev libudev-dev \
+    libwayland-dev libxkbcommon-dev libx11-dev                               # Ubuntu / Debian
+```
+
+On Windows, rustup and the Visual Studio C++ build tools are enough. Then:
 
 ```sh
 git clone https://github.com/OpenRsG/GunZRs && cd GunZRs
-cargo run --release --bin gunz-play                       # main menu, game found via Steam
-cargo run --release --bin gunz-play -- "/path/to/GUNZ THE DUEL"
-./start.sh                                               # same, also tries the Flatpak install (GUNZ_GAME=DIR overrides)
+./start.sh                                     # builds, renders the map pictures once, opens the menu
+cargo run --release --bin gunz-play -- "/path/to/GUNZ THE DUEL" Mansion --bots 3   # straight into a match
 ```
 
-The menu, the loading screen (map name, step and a bar) and the match share one window and one
-process: START, MAIN MENU and PLAY AGAIN never close and reopen it.
+Releases come from `.github/workflows/release.yml` when a `v*` tag is pushed: a portable Linux
+tarball (built on Ubuntu 22.04, so glibc 2.35 or newer), the `.deb` and the Windows zip.
 
-The map tiles, the MATCH banner and the loading screen show a picture of each map. The retail
-data has none, so they are rendered from your own install once (under a minute, 960x540 PNGs in
-`previews/` beside your profile file, never committed): `./start.sh` does it when pictures are
-missing, or run `cargo run --release --bin gunz -- --previews` and then start the game. Without a
-picture (and in the browser build) a hatch stands in.
+</details>
 
-| Steam install | `GAME` folder |
+| Steam install | Game folder |
 |---|---|
 | Linux (native) | `~/.steam/steam/steamapps/common/GUNZ THE DUEL` |
 | Linux (Flatpak) | `~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/GUNZ THE DUEL` |
 | Windows | `C:\Program Files (x86)\Steam\steamapps\common\GUNZ THE DUEL` |
 
-Other library folder? In Steam, right-click the game, then Manage, Browse local files.
-The port is developed and tested on Linux. A cross-check of the Windows target compiles, and CI
-builds Linux, Windows and macOS, but nobody has played it on Windows or macOS yet.
+The port is developed and played on Linux. CI builds and tests Linux, Windows and macOS, but nobody
+has played it on Windows or macOS yet.
 
 ## Controls
 
@@ -258,7 +283,7 @@ data does not hold follow public descriptions of the original and are marked **i
 | Online multiplayer | LAN only (see above), our own protocol; the round, quest and Blitzkrieg modes are not played over the LAN yet, and nothing talks to the retail servers |
 | Online clans | Clan chat, invitations, the war lobby and matchmaking need a server; rival clans are generated bots that never play each other |
 | Blitzkrieg extras | Nine classes are playable (three of them have no class book, so whether retail offered them is unknown); neither the data nor public sources give class art or loadouts, so the cards show weapon icons and the class guns are the port's guesses; the data has no medal shop stock or prices (its messages suggest the server sends them), so medals are stored and shown but cannot be spent |
-| Quest extras | The challenge quest's gacha reward item (3000xxx) is not in the item data, so it cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon's skeletons follow the data's id scheme and a public wiki, but its XP, bounty and drops are not in the data |
+| Quest extras | The challenge quest's gacha reward items (ids from 3000000) are not in the item data, so they cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon's skeletons follow the data's id scheme and a public wiki, but its XP, bounty and drops are not in the data |
 | Music choice | Neither the data nor public sources say which track belongs to which map; the port picks one of the nine in-game tracks per map (fixed, by name) |
 | Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
 | Exact feel | Movement constants come from replays of older clients, so parity with the Steam client is unproven; the dash speed, the cancel windows and the wall-climb height are estimates (listed as **inferred** in `docs/formats.md`) |
@@ -344,6 +369,12 @@ GunZ's `.mrs` archives are ZIP files with XOR-scrambled headers; maps, models an
 are the original binary formats. `Gunz.exe` is Themida-packed, so every format here was recovered
 from the data files themselves. The notes are in [`docs/formats.md`](docs/formats.md), and
 `CREDITS.md` lists outside sources.
+
+## License
+
+The code is [Apache-2.0](LICENSE). The bundled fonts (`assets/fonts`) are under the SIL Open Font
+License, their texts beside them. GunZ: The Duel and its files belong to their owners and are not
+part of this repository.
 
 ## Reverse-engineering framework
 

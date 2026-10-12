@@ -1,16 +1,12 @@
 //! Items (`system/zitem.xml`, names from `system/strings.xml`) and weapon models
 //! (`model/weapon.xml`). Layouts: `docs/formats.md`.
 
-use crate::mrs::Vfs;
+use crate::mrs::{Vfs, bad, xml};
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{self, ErrorKind},
+    io,
     str::FromStr,
 };
-
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
-}
 
 /// The `weapon` attribute of zitem.xml; decides animation set (`motion_type`) and hand dummies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,8 +203,8 @@ impl Items {
     pub fn load(vfs: &Vfs) -> io::Result<Self> {
         let strings = read_strings(vfs)?;
         let models = read_models(vfs)?;
-        let text = xml_text(vfs, "system/zitem.xml")?;
-        let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("zitem.xml: {e}")))?;
+        let text = vfs.read_text("system/zitem.xml")?;
+        let doc = xml(&text, "system/zitem.xml")?;
         let mut items = BTreeMap::new();
         for n in doc
             .root_element()
@@ -246,6 +242,11 @@ impl Items {
         self.items.get(&id)
     }
 
+    /// The weapon stats of item `id`, if it is a weapon.
+    pub fn weapon(&self, id: u32) -> Option<&Weapon> {
+        self.get(id)?.weapon.as_ref()
+    }
+
     /// First item (lowest id) whose name equals `name`, ignoring ASCII case.
     pub fn find(&self, name: &str) -> Option<&Item> {
         self.items.values().find(|i| {
@@ -275,16 +276,10 @@ impl Items {
     }
 }
 
-fn xml_text(vfs: &Vfs, path: &str) -> io::Result<String> {
-    let bytes = vfs.read(path)?;
-    let text = String::from_utf8(bytes).map_err(|e| bad(format!("{path}: {e}")))?;
-    Ok(text.trim_start_matches('\u{feff}').to_owned())
-}
-
 /// `worlditem.xml` `<WORLDITEM name><AMOUNT>`: points per name (lowercased).
 fn read_kits(vfs: &Vfs) -> io::Result<HashMap<String, u32>> {
-    let text = xml_text(vfs, "system/worlditem.xml")?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("worlditem.xml: {e}")))?;
+    let text = vfs.read_text("system/worlditem.xml")?;
+    let doc = xml(&text, "system/worlditem.xml")?;
     let mut out = HashMap::new();
     for n in doc.descendants().filter(|n| n.has_tag_name("WORLDITEM")) {
         let amount = n
@@ -300,8 +295,8 @@ fn read_kits(vfs: &Vfs) -> io::Result<HashMap<String, u32>> {
 }
 
 fn read_strings(vfs: &Vfs) -> io::Result<HashMap<String, String>> {
-    let text = xml_text(vfs, "system/strings.xml")?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("strings.xml: {e}")))?;
+    let text = vfs.read_text("system/strings.xml")?;
+    let doc = xml(&text, "system/strings.xml")?;
     Ok(doc
         .root_element()
         .children()
@@ -311,8 +306,8 @@ fn read_strings(vfs: &Vfs) -> io::Result<HashMap<String, String>> {
 }
 
 fn read_models(vfs: &Vfs) -> io::Result<HashMap<String, WeaponModel>> {
-    let text = xml_text(vfs, "model/weapon.xml")?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("weapon.xml: {e}")))?;
+    let text = vfs.read_text("model/weapon.xml")?;
+    let doc = xml(&text, "model/weapon.xml")?;
     let mut out: HashMap<String, WeaponModel> = HashMap::new();
     for n in doc
         .root_element()

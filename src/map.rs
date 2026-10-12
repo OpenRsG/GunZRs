@@ -1,8 +1,8 @@
 //! RealSpace2 maps (`.RS` v7 + `.RS.xml` + `.RS.lm` v3). Layouts: `docs/formats.md`.
 //! Coordinates are returned as stored: left-handed, Z up, centimetre-ish units.
 
-use crate::mrs::Vfs;
-use std::io::{self, ErrorKind};
+use crate::mrs::{Vfs, bad, xml};
+use std::io;
 
 const RS_ID: u32 = 0x1234_5678;
 const RS_VERSION: u32 = 7;
@@ -57,10 +57,6 @@ pub struct Map {
     pub dummies: Vec<Dummy>,
     /// `OBJECTLIST/OBJECT/@name`: `.elu` props (VFS names relative to `dir`, case as written).
     pub objects: Vec<String>,
-}
-
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
 }
 
 /// Bounds-checked little-endian reader.
@@ -195,8 +191,8 @@ pub fn load(vfs: &Vfs, rs_path: &str) -> io::Result<Map> {
     } else {
         Vec::new()
     };
-    let xml = vfs.read(&format!("{rs_path}.xml"))?;
-    let (mut materials, dummies, objects) = read_xml(&String::from_utf8_lossy(&xml), &names)?;
+    let text = vfs.read_text(&format!("{rs_path}.xml"))?;
+    let (mut materials, dummies, objects) = read_xml(&text, &names)?;
     materials.push(Material::default());
     Ok(Map {
         rs: rs_path.to_owned(),
@@ -321,7 +317,7 @@ fn floats<const N: usize>(text: Option<&str>) -> Option<[f32; N]> {
 type MapXml = (Vec<Material>, Vec<Dummy>, Vec<String>);
 
 fn read_xml(text: &str, names: &[String]) -> io::Result<MapXml> {
-    let doc = roxmltree::Document::parse(text).map_err(|e| bad(format!("map xml: {e}")))?;
+    let doc = xml(text, "map xml")?;
     fn child<'a, 'i>(n: roxmltree::Node<'a, 'i>, tag: &str) -> Option<roxmltree::Node<'a, 'i>> {
         n.children().find(|c| c.has_tag_name(tag))
     }

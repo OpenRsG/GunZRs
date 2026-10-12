@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GunZRs
+GenericName=GunZ: The Duel
+Comment=Clean-room Rust port of GunZ: The Duel (plays the Steam game's files)
+Exec=gunzrs
+Icon=applications-games
+Terminal=false
+Categories=Game;ActionGame;

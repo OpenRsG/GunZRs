@@ -7,7 +7,7 @@ use crate::{
     hud::try_image,
     item::{Item, Items},
     menu::{Page, State, Toast},
-    mrs::Vfs,
+    mrs::{Vfs, bad, xml},
     phase::MenuSystems,
     profile::{self, Profile, SLOTS},
     quest::QItems,
@@ -126,15 +126,6 @@ pub struct ShopData {
     icons: HashMap<u32, (String, Rect)>,
 }
 
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg.into())
-}
-
-fn xml(vfs: &Vfs, path: &str) -> io::Result<String> {
-    let text = String::from_utf8(vfs.read(path)?).map_err(|e| bad(format!("{path}: {e}")))?;
-    Ok(text.trim_start_matches('\u{feff}').to_owned())
-}
-
 fn stats(i: &Item, hp: u32, ap: u32) -> Vec<(String, String)> {
     let mut s = Vec::new();
     if let Some(w) = &i.weapon {
@@ -163,8 +154,8 @@ fn stats(i: &Item, hp: u32, ap: u32) -> Vec<(String, String)> {
 impl ShopData {
     pub fn load(vfs: &Vfs, items: &Items) -> io::Result<Self> {
         // zitem.xml: sell price and armour bonuses (the rest comes from `Items`).
-        let text = xml(vfs, "system/zitem.xml")?;
-        let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("zitem.xml: {e}")))?;
+        let text = vfs.read_text("system/zitem.xml")?;
+        let doc = xml(&text, "system/zitem.xml")?;
         let mut raw: HashMap<u32, [u32; 3]> = HashMap::new();
         for n in doc
             .root_element()
@@ -177,8 +168,8 @@ impl ShopData {
             }
         }
         // gshop.xml: permanent (EXPIRATION_DATE 0) bounty (SELL_GROUP 1) offers that are visible.
-        let text = xml(vfs, "system/gshop.xml")?;
-        let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("gshop.xml: {e}")))?;
+        let text = vfs.read_text("system/gshop.xml")?;
+        let doc = xml(&text, "system/gshop.xml")?;
         let mut price: HashMap<u32, u32> = HashMap::new();
         for n in doc
             .root_element()
@@ -227,8 +218,9 @@ impl ShopData {
             );
         }
         // quest items are inventory entries too (kind "quest"; `level` is the level a page needs)
-        let strings = xml(vfs, "system/strings.xml")?;
-        let quest = QItems::parse(&xml(vfs, "system/zquestitem.xml")?, &strings).map_err(bad)?;
+        let strings = vfs.read_text("system/strings.xml")?;
+        let quest =
+            QItems::parse(&vfs.read_text("system/zquestitem.xml")?, &strings).map_err(bad)?;
         for i in quest.0.values() {
             let entry = Entry {
                 id: i.id,
@@ -267,8 +259,8 @@ fn read_icons(
     vfs: &Vfs,
     entries: &BTreeMap<u32, Entry>,
 ) -> io::Result<HashMap<u32, (String, Rect)>> {
-    let text = xml(vfs, "interface/default/itemicon.xml")?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("itemicon.xml: {e}")))?;
+    let text = vfs.read_text("interface/default/itemicon.xml")?;
+    let doc = xml(&text, "interface/default/itemicon.xml")?;
     let mut icons = HashMap::new();
     for n in doc
         .root_element()
@@ -587,7 +579,7 @@ fn commas(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -817,7 +809,9 @@ pub(crate) fn fill(p: &mut ChildSpawnerCommands, page: Page) {
                             },
                             hatch(Color::srgba(1.0, 1.0, 1.0, 0.012)),
                         ))
-                        .with_children(|w| drop(w.spawn(pic(Pic::Row(page, r), 46.0))));
+                        .with_children(|w| {
+                            w.spawn(pic(Pic::Row(page, r), 46.0));
+                        });
                         c.spawn(Node {
                             flex_direction: FlexDirection::Column,
                             flex_grow: 1.0,

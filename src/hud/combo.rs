@@ -286,11 +286,7 @@ fn track(
             }
             combo.die();
         } else if players.contains(k.killer) {
-            let melee = data
-                .items
-                .get(k.item)
-                .and_then(|i| i.weapon.as_ref())
-                .is_some_and(|w| is_melee(w.kind));
+            let melee = data.items.weapon(k.item).is_some_and(|w| is_melee(w.kind));
             let (points, banner) = combo.kill(now, k.head, melee);
             info!(
                 "t={now:.2} combo: kill +{points} chain={} spree={} score={}",

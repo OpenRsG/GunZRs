@@ -1,6 +1,6 @@
-//! Finds the retail install without a GAME_DIR argument: Steam's `libraryfolders.vdf` lists the
-//! libraries, `appmanifest_3139440.acf` names the install directory (*observed*: the local Flatpak
-//! Steam has that manifest with `installdir` `GUNZ THE DUEL`).
+//! Finds the retail install without a GAME_DIR argument: `GUNZ_GAME=DIR` if set, else Steam's
+//! `libraryfolders.vdf` lists the libraries and `appmanifest_3139440.acf` names the install
+//! directory (*observed*: the local Flatpak Steam has that manifest with `installdir` `GUNZ THE DUEL`).
 
 use std::path::{Path, PathBuf};
 
@@ -37,8 +37,12 @@ fn values<'a>(text: &'a str, key: &'a str) -> impl Iterator<Item = String> + 'a 
     })
 }
 
-/// The GunZ install directory in the first Steam library that has the app manifest.
+/// `GUNZ_GAME`, else the GunZ install directory in the first Steam library that has the app
+/// manifest.
 pub fn find_game() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("GUNZ_GAME") {
+        return Some(dir.into());
+    }
     for root in steam_roots() {
         let steamapps = root.join("steamapps");
         let mut libraries = vec![root.clone()];

@@ -164,7 +164,9 @@ fn black(png: &std::path::Path) -> bool {
     };
     let px = data.len() / 4;
     let dark = data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[..3].iter().all(|&c| c < 8))
         .count();
     px == 0 || dark * 20 > px * 19

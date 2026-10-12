@@ -140,8 +140,9 @@ pub struct Challenge {
     pub sectors: Vec<(String, u32, u32, Vec<Spawn>)>,
 }
 
+/// The quest module reports errors as `String`s.
 fn doc(text: &str) -> Result<roxmltree::Document<'_>, String> {
-    roxmltree::Document::parse(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())
+    crate::mrs::xml(text, "quest data").map_err(|e| e.to_string())
 }
 
 fn num(n: roxmltree::Node, attr: &str) -> u32 {
@@ -488,11 +489,7 @@ pub struct Admit {
 
 impl Catalog {
     pub fn load(vfs: &crate::mrs::Vfs) -> Result<Self, String> {
-        let read = |p: &str| {
-            vfs.read(p)
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .map_err(|e| format!("{p}: {e}"))
-        };
+        let read = |p: &str| vfs.read_text(p).map_err(|e| format!("{p}: {e}"));
         let mut c = Self::parse(
             &read("system/questmap.xml")?,
             &read("system/survivalmap.xml")?,
@@ -805,13 +802,12 @@ impl Catalog {
                 });
             sectors.push(Stage {
                 map: m.sectors[at].title.to_ascii_lowercase(),
-                link: Some(
+                link: (i + 1 < SURVIVAL_SECTORS).then(|| {
                     m.sectors[at]
                         .links
                         .first()
-                        .map_or(String::new(), |l| l.name.clone()),
-                )
-                .filter(|_| i + 1 < SURVIVAL_SECTORS),
+                        .map_or(String::new(), |l| l.name.clone())
+                }),
                 xp: def.xp / SURVIVAL_SHARE,
                 bp: def.bp / SURVIVAL_SHARE,
                 groups: self.groups(&sets, ql, None, &mut rng),
@@ -1098,11 +1094,7 @@ impl Quest {
         bots: usize,
         seed: u32,
     ) -> Result<Self, String> {
-        let read = |p: &str| {
-            vfs.read(p)
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .map_err(|e| format!("{p}: {e}"))
-        };
+        let read = |p: &str| vfs.read_text(p).map_err(|e| format!("{p}: {e}"));
         if plan.dice > 0 {
             println!(
                 "quest: dice roll {} of {DICE_SIDES}: {} over {} sectors",
@@ -1475,7 +1467,7 @@ fn drive(
         Phase::Open => {
             let left = OPEN_SECS - quest.t;
             quest.banner = format!("SECTOR CLEARED\nPORTAL CLOSES IN {:.0}S", left.max(0.0));
-            let at = portal.single().ok().and_then(|_| p);
+            let at = portal.single().ok().and(p);
             let through = at.is_some_and(|(tf, _)| {
                 level_portal(&level, quest.stage().link.as_deref()).is_some_and(|c| {
                     (tf.translation - c).xz().length() < PORTAL_R

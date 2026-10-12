@@ -57,7 +57,9 @@ impl Duels {
         let n = players.len() / 2;
         Self {
             arenas: players
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|p| Arena {
                     fighters: [p[0], p[1]],
                     stage: Stage::Wait(START_SECS),

@@ -15,7 +15,7 @@ use crate::{
     },
     item::{SPY_ICE, WeaponKind},
     level::Level,
-    mrs::Vfs,
+    mrs::{Vfs, xml},
     phase::{MatchStart, MatchSystems},
     projectile, spy, view,
 };
@@ -389,13 +389,10 @@ fn init_fx(
             .unwrap_or_else(|| panic!("{name}: undecodable"));
         images.add(image)
     };
-    let zeffect = String::from_utf8(
-        vfs.read("system/zeffect.xml")
-            .unwrap_or_else(|e| panic!("{e}")),
-    )
-    .expect("zeffect.xml is not UTF-8");
-    let zeffect = roxmltree::Document::parse(zeffect.trim_start_matches('\u{feff}'))
-        .unwrap_or_else(|e| panic!("zeffect.xml: {e}"));
+    let zeffect = vfs
+        .read_text("system/zeffect.xml")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let zeffect = xml(&zeffect, "system/zeffect.xml").unwrap_or_else(|e| panic!("{e}"));
     let knockback = zeffect
         .descendants()
         .filter(|n| n.has_tag_name("EFFECT"))
@@ -812,7 +809,7 @@ fn resolve_fire(
         *seed = 0x2545_F491;
     }
     for f in fires.read() {
-        let Some(w) = data.items.get(f.item).and_then(|i| i.weapon.as_ref()) else {
+        let Some(w) = data.items.weapon(f.item) else {
             continue;
         };
         let dir = f.dir.normalize_or_zero();
@@ -1005,12 +1002,9 @@ fn apply_damage(
         if v.hp <= 0.0 || protected.contains(d.target) {
             continue;
         }
-        let pierce = d.pierce.unwrap_or_else(|| {
-            data.items
-                .get(d.item)
-                .and_then(|i| i.weapon.as_ref())
-                .map_or(0.5, |w| piercing(w.kind))
-        });
+        let pierce = d
+            .pierce
+            .unwrap_or_else(|| data.items.weapon(d.item).map_or(0.5, |w| piercing(w.kind)));
         let (ap, hp) = (v.ap, v.hp);
         absorb(&mut v, amount, pierce);
         wounded.write(Wounded {
@@ -1043,11 +1037,7 @@ fn apply_damage(
         {
             s.kills += 1;
         }
-        let head = data
-            .items
-            .get(d.item)
-            .and_then(|i| i.weapon.as_ref())
-            .is_some_and(|w| is_gun(w.kind))
+        let head = data.items.weapon(d.item).is_some_and(|w| is_gun(w.kind))
             && bodies
                 .get(d.target)
                 .is_ok_and(|(g, hs)| hs.is_none() && d.point.y - g.translation().y >= HEAD_FROM);

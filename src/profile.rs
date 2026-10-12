@@ -15,7 +15,7 @@ use crate::{
     gfx::Graphics,
     level::Level,
     menu::Mode,
-    mrs::Vfs,
+    mrs::{Vfs, bad, xml},
     phase::{MatchStart, MatchSystems},
     session::{Clock, Rules, StartVitals},
     shop::ShopData,
@@ -465,11 +465,8 @@ pub struct Ranks(pub Vec<String>);
 
 impl Ranks {
     pub fn load(vfs: &Vfs) -> io::Result<Self> {
-        let bytes = vfs.read("system/grank.xml")?;
-        let bad = |e: String| io::Error::new(io::ErrorKind::InvalidData, format!("grank.xml: {e}"));
-        let text = String::from_utf8(bytes).map_err(|e| bad(e.to_string()))?;
-        let doc = roxmltree::Document::parse(text.trim_start_matches('\u{feff}'))
-            .map_err(|e| bad(e.to_string()))?;
+        let text = vfs.read_text("system/grank.xml")?;
+        let doc = xml(&text, "system/grank.xml")?;
         let mut ranks: Vec<(u32, String)> = Vec::new();
         for n in doc
             .root_element()
@@ -478,7 +475,7 @@ impl Ranks {
         {
             let id = n.attribute("ID").and_then(|v| v.parse().ok());
             let (Some(id), Some(code)) = (id, n.attribute("ADR_NAME")) else {
-                return Err(bad("RANK without ID/ADR_NAME".into()));
+                return Err(bad("grank.xml: RANK without ID/ADR_NAME"));
             };
             ranks.push((id, code.to_owned()));
         }

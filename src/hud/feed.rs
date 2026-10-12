@@ -207,11 +207,7 @@ fn add(
         let suicide = k.killer == k.victim;
         let you = players.contains(k.killer) && !suicide;
         let died = players.contains(k.victim);
-        let kind = data
-            .items
-            .get(k.item)
-            .and_then(|i| i.weapon.as_ref())
-            .map(|w| w.kind);
+        let kind = data.items.weapon(k.item).map(|w| w.kind);
         if you {
             confirm.start = now;
             confirm_name.0 = names

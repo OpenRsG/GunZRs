@@ -3,7 +3,8 @@
 //! Coordinates are returned as stored: left-handed, Y up, centimetres; every matrix is
 //! D3D row-vector style (`p' = p * M`, translation in the last row), row-major `[f32; 16]`.
 
-use std::io::{self, ErrorKind};
+use crate::mrs::bad;
+use std::io;
 
 const MAGIC: u32 = 0x0107_F060;
 
@@ -93,10 +94,6 @@ impl Elu {
             .iter()
             .position(|m| m.id == id && m.sub == want)
     }
-}
-
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
 }
 
 /// Bounds-checked little-endian reader.

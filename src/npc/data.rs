@@ -4,28 +4,9 @@
 //! what each attribute is believed to mean: `docs/formats.md` "Quest monsters".
 //! Lengths stay in the files' own units (cm, ms) here; `npc.rs` converts.
 
-use crate::mrs::Vfs;
-use roxmltree::{Document, Node};
-use std::{
-    collections::HashMap,
-    io::{self, ErrorKind},
-    sync::Arc,
-};
-
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
-}
-
-fn text(vfs: &Vfs, path: &str) -> io::Result<String> {
-    let bytes = vfs.read(path)?;
-    Ok(String::from_utf8_lossy(&bytes)
-        .trim_start_matches('\u{feff}')
-        .to_string())
-}
-
-fn doc<'a>(text: &'a str, what: &str) -> io::Result<Document<'a>> {
-    Document::parse(text).map_err(|e| bad(format!("{what}: {e}")))
-}
+use crate::mrs::{self, Vfs, bad};
+use roxmltree::Node;
+use std::{collections::HashMap, io, sync::Arc};
 
 /// Numeric attribute, 0 when absent (the files omit what does not apply).
 fn num(n: Node, a: &str) -> f32 {
@@ -103,7 +84,7 @@ pub struct NpcDef {
 }
 
 pub fn parse_npcs(xml: &str) -> io::Result<(AiValue, Vec<NpcDef>)> {
-    let d = doc(xml, "npc.xml")?;
+    let d = mrs::xml(xml, "npc.xml")?;
     let mut ai = AiValue::default();
     let mut npcs = Vec::new();
     for n in d.root_element().children().filter(|n| n.is_element()) {
@@ -211,7 +192,7 @@ pub struct ActorDef {
 }
 
 pub fn parse_actors(xml: &str) -> io::Result<Vec<ActorDef>> {
-    let d = doc(xml, "npc2.xml")?;
+    let d = mrs::xml(xml, "npc2.xml")?;
     d.descendants()
         .filter(|n| n.has_tag_name("ACTOR"))
         .map(|n| {
@@ -294,7 +275,7 @@ pub struct Skill {
 }
 
 pub fn parse_skills(xml: &str) -> io::Result<HashMap<u32, Skill>> {
-    let d = doc(xml, "zskill.xml")?;
+    let d = mrs::xml(xml, "zskill.xml")?;
     let mut out = HashMap::new();
     for n in d.descendants().filter(|n| n.has_tag_name("SKILL")) {
         let id = num(n, "id") as u32;
@@ -440,7 +421,7 @@ fn pierce(n: Node) -> Option<f32> {
 }
 
 pub fn parse_actions(xml: &str) -> io::Result<HashMap<String, Arc<Action>>> {
-    let d = doc(xml, "zactoraction.xml")?;
+    let d = mrs::xml(xml, "zactoraction.xml")?;
     let mut out = HashMap::new();
     for a in d.descendants().filter(|n| n.has_tag_name("ACTION")) {
         let name = string(a, "name");
@@ -688,7 +669,7 @@ fn parse_funcs(list: &str) -> io::Result<Vec<Func>> {
 }
 
 pub fn parse_fsms(xml: &str) -> io::Result<HashMap<String, Arc<Fsm>>> {
-    let d = doc(xml, "aifsm.xml")?;
+    let d = mrs::xml(xml, "aifsm.xml")?;
     let mut out = HashMap::new();
     for f in d.descendants().filter(|n| n.has_tag_name("FSM")) {
         let name = string(f, "name");
@@ -760,7 +741,7 @@ pub struct ModelDef {
 
 /// `(name, xml path)` of every `AddXml` of a `model/npc*.xml` registry.
 pub fn parse_registry(xml: &str) -> io::Result<Vec<(String, String)>> {
-    let d = doc(xml, "model/npc.xml")?;
+    let d = mrs::xml(xml, "model/npc.xml")?;
     Ok(d.descendants()
         .filter(|n| n.has_tag_name("AddXml"))
         .filter_map(|n| {
@@ -775,7 +756,7 @@ pub fn parse_registry(xml: &str) -> io::Result<Vec<(String, String)>> {
 /// Parses one model XML. Clips whose file is missing are left out (`goblinG` names one that the
 /// retail data does not contain); `exists` says whether a VFS path exists.
 pub fn parse_model(xml: &str, path: &str, exists: impl Fn(&str) -> bool) -> io::Result<ModelDef> {
-    let d = doc(xml, path)?;
+    let d = mrs::xml(xml, path)?;
     let dir = path
         .rsplit_once('/')
         .map_or(String::new(), |(d, _)| format!("{d}/"));
@@ -844,13 +825,13 @@ const ENGLISH_NAMES: &[(&str, &str)] = &[
 
 impl Data {
     pub fn load(vfs: &Vfs) -> io::Result<Self> {
-        let (ai, npcs) = parse_npcs(&text(vfs, "system/npc.xml")?)?;
+        let (ai, npcs) = parse_npcs(&vfs.read_text("system/npc.xml")?)?;
         let mut models = HashMap::new();
         for reg in ["model/npc.xml", "model/npc2.xml"] {
-            models.extend(parse_registry(&text(vfs, reg)?)?);
+            models.extend(parse_registry(&vfs.read_text(reg)?)?);
         }
-        let strings = text(vfs, "system/strings.xml")?;
-        let mut strings: HashMap<String, String> = doc(&strings, "strings.xml")?
+        let strings = vfs.read_text("system/strings.xml")?;
+        let mut strings: HashMap<String, String> = mrs::xml(&strings, "strings.xml")?
             .descendants()
             .filter(|n| n.has_tag_name("STR"))
             .filter_map(|n| Some((n.attribute("id")?.to_owned(), n.text()?.to_owned())))
@@ -864,13 +845,13 @@ impl Data {
         Ok(Self {
             ai,
             npcs: npcs.into_iter().map(|n| (n.id, n)).collect(),
-            actors: parse_actors(&text(vfs, "system/npc2.xml")?)?
+            actors: parse_actors(&vfs.read_text("system/npc2.xml")?)?
                 .into_iter()
                 .map(|a| (a.name.clone(), a))
                 .collect(),
-            skills: parse_skills(&text(vfs, "system/zskill.xml")?)?,
-            actions: parse_actions(&text(vfs, "system/zactoraction.xml")?)?,
-            fsms: parse_fsms(&text(vfs, "system/aifsm.xml")?)?,
+            skills: parse_skills(&vfs.read_text("system/zskill.xml")?)?,
+            actions: parse_actions(&vfs.read_text("system/zactoraction.xml")?)?,
+            fsms: parse_fsms(&vfs.read_text("system/aifsm.xml")?)?,
             models,
             strings,
         })
@@ -882,7 +863,7 @@ impl Data {
             .models
             .get(name)
             .ok_or_else(|| bad(format!("model {name:?} not in model/npc.xml or npc2.xml")))?;
-        parse_model(&text(vfs, path)?, path, |p| vfs.exists(p))
+        parse_model(&vfs.read_text(path)?, path, |p| vfs.exists(p))
     }
 }
 

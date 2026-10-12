@@ -18,7 +18,7 @@ use crate::{
     map::Map,
     menu::Mode,
     modes::{Phase, Round},
-    mrs::Vfs,
+    mrs::{Vfs, xml},
     phase::{MatchApp, MatchSystems},
     pickup::{Picked, SOUND as PICKUP_SOUND},
     profile::Profile,
@@ -345,8 +345,10 @@ fn ambients(vfs: &Vfs, dir: &str) -> Vec<Ambient> {
     else {
         return Vec::new();
     };
-    let text = String::from_utf8_lossy(&vfs.read(path).unwrap_or_default()).into_owned();
-    let Ok(doc) = roxmltree::Document::parse(text.trim_start_matches('\u{feff}')) else {
+    let Ok(text) = vfs.read_text(path) else {
+        return Vec::new();
+    };
+    let Ok(doc) = xml(&text, path) else {
         return Vec::new();
     };
     let child = |n: roxmltree::Node, tag: &str| {
@@ -501,11 +503,10 @@ fn load(
         index.insert("swing".to_owned(), p);
     }
     let reach = vfs
-        .read("sound/effect/effect.xml")
+        .read_text("sound/effect/effect.xml")
         .ok()
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
         .and_then(|t| {
-            let doc = roxmltree::Document::parse(t.trim_start_matches('\u{feff}')).ok()?;
+            let doc = xml(&t, "sound/effect/effect.xml").ok()?;
             Some(
                 doc.descendants()
                     .filter(|n| n.has_tag_name("EFFECT"))
@@ -816,11 +817,7 @@ fn combat_sounds(
             continue;
         }
         seen.push(d.target);
-        let kind = data
-            .items
-            .get(d.item)
-            .and_then(|i| i.weapon.as_ref())
-            .map(|w| w.kind);
+        let kind = data.items.weapon(d.item).map(|w| w.kind);
         sfx.play(
             match kind {
                 Some(WeaponKind::SpyCase) => "rubber_damage",
@@ -865,8 +862,7 @@ fn combat_sounds(
         if i.blade {
             let rubber = data
                 .items
-                .get(i.item)
-                .and_then(|i| i.weapon.as_ref())
+                .weapon(i.item)
                 .is_some_and(|w| w.kind == WeaponKind::SpyCase);
             let stem = if rubber {
                 "rubber_concrete"
@@ -904,7 +900,7 @@ fn actor_sounds(
             .get(e)
             .map_or(Vec3::ZERO, |t| t.translation() + Vec3::Y)
     };
-    let weapon = |id| data.items.get(id).and_then(|i| i.weapon.as_ref());
+    let weapon = |id| data.items.weapon(id);
     for c in cues.read() {
         let local = players.contains(c.actor);
         let woman = actors.get(c.actor).is_ok_and(|a| a.woman);

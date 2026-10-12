@@ -801,10 +801,7 @@ fn blow_clip(clip: &str) -> bool {
 
 /// Whether zitem `id` is a melee weapon (`false` for anything else, e.g. an explosion's item).
 fn melee_item(items: &Items, id: u32) -> bool {
-    items
-        .get(id)
-        .and_then(|i| i.weapon.as_ref())
-        .is_some_and(|w| is_melee(w.kind))
+    items.weapon(id).is_some_and(|w| is_melee(w.kind))
 }
 
 fn item_name(items: &Items, id: u32) -> &str {
@@ -813,8 +810,7 @@ fn item_name(items: &Items, id: u32) -> &str {
 
 fn gear(items: &Items, id: u32) -> Gear {
     let w = items
-        .get(id)
-        .and_then(|i| i.weapon.as_ref())
+        .weapon(id)
         .unwrap_or_else(|| panic!("item {id} is not a weapon"));
     Gear {
         melee: is_melee(w.kind),
@@ -1924,14 +1920,14 @@ fn drive(
         // Double-tap a direction, or press Dash: tumble that way.
         let pressed = [walk.y > 0.5, walk.y < -0.5, walk.x < -0.5, walk.x > 0.5];
         let mut want = None;
-        for d in 0..4 {
-            if pressed[d] && !a.held[d] {
+        for (d, &down) in pressed.iter().enumerate() {
+            if down && !a.held[d] {
                 if now - a.taps[d] < DOUBLE_TAP {
                     want = Some(d);
                 }
                 a.taps[d] = now;
             }
-            a.held[d] = pressed[d];
+            a.held[d] = down;
         }
         if intent.dash && !a.tech.prev_dash {
             want = Some(dash_dir(walk));

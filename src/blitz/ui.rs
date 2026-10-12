@@ -301,12 +301,12 @@ pub(super) fn select_ui(
     }
     let (chosen, left) = (sel.sel, sel.left);
     for (e, card, interaction, has_chosen) in &cards {
-        if *interaction == Interaction::Pressed {
-            if let Some(s) = &mut blitz.select {
-                s.sel = card.0;
-                s.done = true;
-                sound.write(UiSound(cue::CONFIRM));
-            }
+        if *interaction == Interaction::Pressed
+            && let Some(s) = &mut blitz.select
+        {
+            s.sel = card.0;
+            s.done = true;
+            sound.write(UiSound(cue::CONFIRM));
         }
         let want = card.0 == chosen;
         if want != has_chosen {

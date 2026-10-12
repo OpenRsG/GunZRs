@@ -381,7 +381,7 @@ impl BotAi {
             tumble_t: 3.0,
             tap: None,
             switch_t: 0.0,
-            side: if i % 2 == 0 { 1.0 } else { -1.0 },
+            side: if i.is_multiple_of(2) { 1.0 } else { -1.0 },
             path: Vec::new(),
             next: 0,
             path_t: 0.0,
@@ -591,7 +591,7 @@ fn gun_range(k: WeaponKind) -> Option<f32> {
 fn pick_weapon(items: &Items, load: &Loadout, dist: f32) -> usize {
     let mut best = (load.current, f32::MAX);
     for (i, s) in load.slots.iter().enumerate() {
-        let Some(w) = items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
+        let Some(w) = items.weapon(s.item) else {
             continue;
         };
         let score = if is_melee(w.kind) {
@@ -644,8 +644,7 @@ fn is_smoke(load: &Loadout, data: &ActorData, i: usize) -> bool {
         s.magazine > 0
             && data
                 .items
-                .get(s.item)
-                .and_then(|it| it.weapon.as_ref())
+                .weapon(s.item)
                 .is_some_and(|w| w.kind == WeaponKind::Smoke)
     })
 }
@@ -739,8 +738,7 @@ fn wanted_item(
         s.reserve == 0
             && data
                 .items
-                .get(s.item)
-                .and_then(|i| i.weapon.as_ref())
+                .weapon(s.item)
                 .is_some_and(|w| gun_range(w.kind).is_some())
     });
     let flat = |p: Vec3| Vec2::new(p.x - pos.x, p.z - pos.z).length();
@@ -806,12 +804,10 @@ fn bot_ai(
         if dead {
             (intent.attack, intent.jump, intent.reload, intent.walk) =
                 (false, false, false, Vec2::ZERO);
-            (
-                ai.path.clear(),
-                ai.tap = None,
-                ai.goal = None,
-                ai.search = None,
-            );
+            ai.path.clear();
+            ai.tap = None;
+            ai.goal = None;
+            ai.search = None;
             ai.kick = None;
             continue;
         }
@@ -852,8 +848,7 @@ fn bot_ai(
             s.magazine + s.reserve > 0
                 && data
                     .items
-                    .get(s.item)
-                    .and_then(|i| i.weapon.as_ref())
+                    .weapon(s.item)
                     .is_some_and(|w| w.kind == WeaponKind::Mine)
         });
         ai.lay = ai.lay.map(|t| t + dt);
@@ -878,12 +873,10 @@ fn bot_ai(
         // A wall kick needs a blade in hand (its run speed is the one the nav search used).
         ai.kick_hold -= dt;
         ai.no_kick -= dt;
-        let blade = loadout.slots.iter().position(|s| {
-            data.items
-                .get(s.item)
-                .and_then(|i| i.weapon.as_ref())
-                .is_some_and(|w| is_melee(w.kind))
-        });
+        let blade = loadout
+            .slots
+            .iter()
+            .position(|s| data.items.weapon(s.item).is_some_and(|w| is_melee(w.kind)));
         ai.switch_t -= dt;
         let want = match mine_slot.filter(|_| ai.lay.is_some()) {
             Some(slot) => slot,
@@ -904,8 +897,7 @@ fn bot_ai(
         let weapon = loadout
             .slots
             .get(loadout.current)
-            .and_then(|s| data.items.get(s.item))
-            .and_then(|i| i.weapon.as_ref());
+            .and_then(|s| data.items.weapon(s.item));
         let (melee, reach, pref) = match weapon {
             Some(w) if is_melee(w.kind) => {
                 let r = w.range.unwrap_or(150) as f32 * 0.01;
@@ -1481,7 +1473,7 @@ fn bot_ai(
                 ai.climb = Some((t + dt, n));
                 ai.yaw = yaw_of(-n);
                 walk = Vec2::Y;
-                hop = !motor.grounded || t < 0.1 || (t * 10.0) as u32 % 2 == 0;
+                hop = !motor.grounded || t < 0.1 || ((t * 10.0) as u32).is_multiple_of(2);
                 (guard, hang, ai.tap) = (false, !motor.grounded, None);
             }
         } else if melee
@@ -1680,8 +1672,7 @@ fn bot_ai(
                 s.magazine > 0
                     && data
                         .items
-                        .get(s.item)
-                        .and_then(|i| i.weapon.as_ref())
+                        .weapon(s.item)
                         .is_some_and(|w| !is_melee(w.kind) && gun_range(w.kind).is_some())
             })
         };
@@ -1756,7 +1747,7 @@ fn bot_ai(
             } else {
                 ai.switch_t = ai.switch_t.max(1.0);
                 // click pulses: a click per shot, whenever the gun is ready again
-                let pulse = (c.t * 12.0) as u32 % 2 == 0;
+                let pulse = ((c.t * 12.0) as u32).is_multiple_of(2);
                 let switch_at = match c.kind {
                     Trick::SlashShot => 0.0,
                     Trick::ReloadShot => 0.25,
@@ -1793,8 +1784,7 @@ fn bot_ai(
             ai.move_cd = (1.5 + 3.0 * rnd(&mut ai.rng)) * (1.6 - skill);
             let dagger = data
                 .items
-                .get(loadout.slots[b].item)
-                .and_then(|i| i.weapon.as_ref())
+                .weapon(loadout.slots[b].item)
                 .is_some_and(|w| w.kind == WeaponKind::Dagger);
             let table: &[_] = if dagger { &DAGGER_MOVES } else { &MOVES };
             let (what, min, need, keys) =

@@ -242,19 +242,17 @@ fn track(
     }
     hurt.0.retain(|h| h.0 > 0.0);
     for d in damage.read() {
-        if players.contains(d.target) {
-            if d.attacker != d.target {
-                let from = transforms
-                    .get(d.attacker)
-                    .map_or(d.point - d.dir * 3.0, |t| t.translation());
-                if let Some(h) = hurt.0.iter_mut().find(|h| h.1 == d.attacker) {
-                    (h.0, h.2) = (HURT_LIFE, from);
-                } else {
-                    if hurt.0.len() >= HURT_SLOTS {
-                        hurt.0.remove(0);
-                    }
-                    hurt.0.push((HURT_LIFE, d.attacker, from));
+        if players.contains(d.target) && d.attacker != d.target {
+            let from = transforms
+                .get(d.attacker)
+                .map_or(d.point - d.dir * 3.0, |t| t.translation());
+            if let Some(h) = hurt.0.iter_mut().find(|h| h.1 == d.attacker) {
+                (h.0, h.2) = (HURT_LIFE, from);
+            } else {
+                if hurt.0.len() >= HURT_SLOTS {
+                    hurt.0.remove(0);
                 }
+                hurt.0.push((HURT_LIFE, d.attacker, from));
             }
         }
     }

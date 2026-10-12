@@ -657,12 +657,13 @@ pub(crate) fn splat_image(seed: u32, forward: bool) -> Image {
     let dots: Vec<(Vec2, f32)> = spikes
         .iter()
         .filter_map(|&(d, _, len)| {
-            (r() < 0.7).then(|| {
-                (
-                    d * (core + len + 0.05 + 0.2 * r()).min(0.95),
-                    0.012 + 0.03 * r(),
-                )
-            })
+            if r() >= 0.7 {
+                return None;
+            }
+            Some((
+                d * (core + len + 0.05 + 0.2 * r()).min(0.95),
+                0.012 + 0.03 * r(),
+            ))
         })
         .collect();
     paint(128, 128, |u, v| {

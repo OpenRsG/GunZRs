@@ -69,12 +69,10 @@ fn infect(
     full: bool,
     why: &str,
 ) {
-    let melee = load.slots.iter().find(|s| {
-        data.items
-            .get(s.item)
-            .and_then(|i| i.weapon.as_ref())
-            .is_some_and(|w| is_melee(w.kind))
-    });
+    let melee = load
+        .slots
+        .iter()
+        .find(|s| data.items.weapon(s.item).is_some_and(|w| is_melee(w.kind)));
     if let Some(m) = melee {
         equip.write(Equip {
             actor: e,

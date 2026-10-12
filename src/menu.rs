@@ -1217,7 +1217,6 @@ fn build(
             TextLayout {
                 justify: Justify::Center,
                 linebreak: LineBreak::NoWrap,
-                ..default()
             },
             Node {
                 width: px(w),
@@ -1600,7 +1599,7 @@ fn preview(
     let katana = [profile.equipped[0], DEFAULT_LOADOUT[0]]
         .into_iter()
         .find(|&id| {
-            let w = cat.items.get(id).and_then(|i| i.weapon.as_ref());
+            let w = cat.items.weapon(id);
             w.is_some_and(|w| matches!(w.kind, WeaponKind::Katana))
         })
         .unwrap_or(DEFAULT_LOADOUT[0]);

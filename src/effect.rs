@@ -7,7 +7,7 @@ use crate::{
     combat::Vfx,
     elu::Elu,
     model::{self, Model, Textures},
-    mrs::Vfs,
+    mrs::{Vfs, bad, xml},
     phase::{MatchApp, MatchSystems},
     view::{self, SCALE},
 };
@@ -174,11 +174,8 @@ pub struct EffectDef {
 /// Reads `sfx/effect_list.xml`. Names are not unique (`ef_sworddam_ice` appears twice);
 /// use [`find`] for first-match lookup.
 pub fn load_list(vfs: &Vfs) -> std::io::Result<Vec<EffectDef>> {
-    let bad = |m: String| std::io::Error::new(std::io::ErrorKind::InvalidData, m);
-    let text = String::from_utf8(vfs.read("sfx/effect_list.xml")?)
-        .map_err(|e| bad(format!("effect_list.xml: {e}")))?;
-    let doc =
-        roxmltree::Document::parse(&text).map_err(|e| bad(format!("effect_list.xml: {e}")))?;
+    let text = vfs.read_text("sfx/effect_list.xml")?;
+    let doc = xml(&text, "sfx/effect_list.xml")?;
     let path = |f: &str| {
         let p = format!("sfx/{}", crate::mrs::normalize(f));
         vfs.exists(&p)
@@ -361,10 +358,12 @@ impl<'a> Loader<'a> {
                 }
                 let handle = textures.standard(&mut fx.images, &mut fx.materials, dir, &m);
                 // Textures with an alpha channel (`.tga`) blend unless alpha-tested.
-                if !m.additive && m.alpha_ref == 0 && !m.alpha_texture.is_empty() {
-                    if let Some(mut std) = fx.materials.get_mut(&handle) {
-                        std.alpha_mode = AlphaMode::Blend;
-                    }
+                if !m.additive
+                    && m.alpha_ref == 0
+                    && !m.alpha_texture.is_empty()
+                    && let Some(mut std) = fx.materials.get_mut(&handle)
+                {
+                    std.alpha_mode = AlphaMode::Blend;
                 }
                 if let Some(anim) = TexAnim::parse(&m.texture) {
                     let frames = view::texture_path(vfs, by_name, dir, &m.texture)

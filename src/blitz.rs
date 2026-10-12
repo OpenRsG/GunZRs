@@ -610,10 +610,9 @@ fn setup(
 ) {
     let xml = level
         .vfs
-        .read("system/blitzkrieg.xml")
+        .read_text("system/blitzkrieg.xml")
         .unwrap_or_else(|e| panic!("system/blitzkrieg.xml: {e}"));
-    let cfg = parse(String::from_utf8_lossy(&xml).trim_start_matches('\u{feff}'))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let cfg = parse(&xml).unwrap_or_else(|e| panic!("{e}"));
     let dummies = &level.map.dummies;
     let floor = |d: &crate::map::Dummy| {
         let p = Vec3::from(to_bevy(d.pos)) * SCALE;
@@ -1114,8 +1113,7 @@ fn buffs(
         let w = load
             .slots
             .get(load.current)
-            .and_then(|s| data.items.get(s.item))
-            .and_then(|i| i.weapon.as_ref());
+            .and_then(|s| data.items.weapon(s.item));
         let melee = w.is_some_and(|w| is_melee(w.kind));
         let shotgun = w.is_some_and(|w| w.kind == WeaponKind::Shotgun);
         let extra = cfg.enhance_dps
@@ -1194,7 +1192,7 @@ fn restock(cfg: &Cfg, data: &ActorData, h: &Honor, load: &mut Loadout) {
     let k = 1.0 + sum(&cfg.up.magazine, h.level[4]) + cfg.class_val(h.class, "addMagazineRatio");
     let mags = cfg.class_val(h.class, "addShotgunMagazine");
     for s in &mut load.slots {
-        let Some(w) = data.items.get(s.item).and_then(|i| i.weapon.as_ref()) else {
+        let Some(w) = data.items.weapon(s.item) else {
             continue;
         };
         let base = w
@@ -1242,8 +1240,7 @@ fn refill(data: &ActorData, load: &mut Loadout, ratio: f32, bonus: f32, mags: f3
     for s in &mut load.slots {
         if let Some((cap, w)) = data
             .items
-            .get(s.item)
-            .and_then(|i| i.weapon.as_ref())
+            .weapon(s.item)
             .and_then(|w| Some((w.max_bullet?, w)))
         {
             let extra = if w.kind == WeaponKind::Shotgun {
@@ -1329,8 +1326,8 @@ fn reinforce(
         }
     }
     let b = &mut *blitz;
-    for i in 0..2 {
-        b.seen[i] = b.seen[i].max(count[i]);
+    for (seen, &n) in b.seen.iter_mut().zip(&count) {
+        *seen = (*seen).max(n);
     }
     let mine = player.single().ok().copied();
     for t in [Team::Red, Team::Blue] {
@@ -1823,8 +1820,7 @@ fn helps(
     let melee = load
         .slots
         .get(load.current)
-        .and_then(|s| data.items.get(s.item))
-        .and_then(|i| i.weapon.as_ref())
+        .and_then(|s| data.items.weapon(s.item))
         .is_some_and(|w| is_melee(w.kind));
     let upgraded = h.level.iter().any(|l| *l > 0);
     let help = [

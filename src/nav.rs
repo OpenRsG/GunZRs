@@ -1511,10 +1511,9 @@ mod tests {
     #[test]
     #[ignore]
     fn routing_pairs() {
-        let Ok(game) = std::env::var("GUNZ_GAME") else {
+        let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let vfs = Vfs::mount(&game).unwrap();
         let first = map::find_rs(&vfs, "mansion").unwrap();
         let mut level = Level {
             map: map::load(&vfs, &first).unwrap(),
@@ -1599,10 +1598,9 @@ mod tests {
     #[test]
     #[ignore]
     fn kick_links() {
-        let Ok(game) = std::env::var("GUNZ_GAME") else {
+        let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let vfs = Vfs::mount(&game).unwrap();
         let rs = map::find_rs(&vfs, "mansion").unwrap();
         let col = MapCollision::load(&vfs, &rs).unwrap();
         let map = map::load(&vfs, &rs).unwrap();
@@ -1732,10 +1730,9 @@ mod tests {
     /// `GUNZ_GAME=<dir> cargo test --release nav_file_mansion -- --nocapture`.
     #[test]
     fn nav_file_mansion() {
-        let Ok(game) = std::env::var("GUNZ_GAME") else {
+        let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let vfs = Vfs::mount(&game).unwrap();
         let rs = map::find_rs(&vfs, "mansion").unwrap();
         let col = MapCollision::load(&vfs, &rs).unwrap();
         let map = map::load(&vfs, &rs).unwrap();

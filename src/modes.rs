@@ -18,7 +18,7 @@ use crate::{
     item::{Items, SPY_BAG, SPY_ICE, SPY_MINE, SPY_STUN, WeaponKind},
     level::Level,
     menu::Mode,
-    mrs::Vfs,
+    mrs::{Vfs, xml},
     phase::{MatchApp, MatchPostStart, MatchStart, MatchSystems},
     session::{Clock, HOLD, ROUND_SECS, Rules},
     ui::{self, ACCENT, DANGER, DIM, INK, PLATE},
@@ -1394,12 +1394,7 @@ fn gunman(
     if seed.0 == 0 {
         seed.0 = 0x9e37_79b9;
     }
-    let blade = |id: u32| {
-        data.items
-            .get(id)
-            .and_then(|i| i.weapon.as_ref())
-            .is_some_and(|w| is_melee(w.kind))
-    };
+    let blade = |id: u32| data.items.weapon(id).is_some_and(|w| is_melee(w.kind));
     let (blades, guns): (Vec<u32>, Vec<u32>) = arsenal.0.iter().copied().partition(|&i| blade(i));
     if blades.is_empty() || guns.is_empty() {
         return;
@@ -1502,8 +1497,8 @@ fn attr<T: std::str::FromStr>(n: roxmltree::Node, name: &str) -> Result<T, Strin
 }
 
 /// `system/spymode.xml`.
-fn parse_spy(xml: &str) -> Result<SpyCfg, String> {
-    let doc = roxmltree::Document::parse(xml).map_err(|e| e.to_string())?;
+fn parse_spy(text: &str) -> Result<SpyCfg, String> {
+    let doc = xml(text, "system/spymode.xml").map_err(|e| e.to_string())?;
     let node = |tag: &str| {
         doc.descendants()
             .find(|n| n.has_tag_name(tag))
@@ -1563,12 +1558,11 @@ fn spy_map(vfs: &Vfs, dir: &str) -> Option<SpyMap> {
         .rsplit('/')
         .next()?
         .to_ascii_lowercase();
-    let read = |p: &str| -> Option<String> {
-        let text = String::from_utf8(vfs.read(p).ok()?).ok()?;
-        Some(text.trim_start_matches('\u{feff}').to_owned())
-    };
-    let (maps, list) = (read("system/map.xml")?, read("system/spymaplist.xml")?);
-    let maps = roxmltree::Document::parse(&maps).ok()?;
+    let (maps, list) = (
+        vfs.read_text("system/map.xml").ok()?,
+        vfs.read_text("system/spymaplist.xml").ok()?,
+    );
+    let maps = xml(&maps, "system/map.xml").ok()?;
     let id = maps
         .descendants()
         .find(|n| {
@@ -1578,7 +1572,7 @@ fn spy_map(vfs: &Vfs, dir: &str) -> Option<SpyMap> {
         })?
         .attribute("id")?
         .to_owned();
-    let list = roxmltree::Document::parse(&list).ok()?;
+    let list = xml(&list, "system/spymaplist.xml").ok()?;
     let row = list
         .descendants()
         .find(|n| n.has_tag_name("SPY_MAP") && n.attribute("id") == Some(id.as_str()))?;
@@ -1593,13 +1587,11 @@ fn spy_map(vfs: &Vfs, dir: &str) -> Option<SpyMap> {
 /// Loads `spymode.xml` and sets the round time from the map's `limitTime` (unless the round
 /// time was changed from its default).
 fn spy_setup(mut commands: Commands, mut rules: ResMut<Rules>, level: Res<Level>) {
-    let xml = level
+    let text = level
         .vfs
-        .read("system/spymode.xml")
+        .read_text("system/spymode.xml")
         .unwrap_or_else(|e| panic!("system/spymode.xml: {e}"));
-    let xml = String::from_utf8(xml).unwrap_or_else(|e| panic!("system/spymode.xml: {e}"));
-    let mut cfg = parse_spy(xml.trim_start_matches('\u{feff}'))
-        .unwrap_or_else(|e| panic!("system/spymode.xml: {e}"));
+    let mut cfg = parse_spy(&text).unwrap_or_else(|e| panic!("system/spymode.xml: {e}"));
     let map = spy_map(&level.vfs, &level.map.dir);
     match map {
         Some(m) if rules.round_secs == ROUND_SECS => rules.round_secs = m.limit,

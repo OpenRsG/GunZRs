@@ -5,14 +5,10 @@ use crate::{
     elu,
     item::Items,
     model::{self, Model, Textures},
-    mrs::Vfs,
+    mrs::{Vfs, bad, xml},
 };
 use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, prelude::*};
-use std::{
-    fmt,
-    io::{self, ErrorKind},
-    str::FromStr,
-};
+use std::{fmt, io, str::FromStr};
 
 /// `AddAnimation` entry. `file` is a VFS path next to the character XML.
 #[derive(Clone, Debug)]
@@ -40,14 +36,10 @@ pub struct Character {
     pub animations: Vec<Animation>,
 }
 
-fn bad(msg: impl Into<String>) -> io::Error {
-    io::Error::new(ErrorKind::InvalidData, msg.into())
-}
-
 /// `(name, xml path)` of every `AddXml` in `model/character.xml`.
 pub fn registry(vfs: &Vfs) -> io::Result<Vec<(String, String)>> {
-    let text = read_text(vfs, "model/character.xml")?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("character.xml: {e}")))?;
+    let text = vfs.read_text("model/character.xml")?;
+    let doc = xml(&text, "model/character.xml")?;
     Ok(doc
         .descendants()
         .filter(|n| n.has_tag_name("AddXml"))
@@ -60,30 +52,23 @@ pub fn registry(vfs: &Vfs) -> io::Result<Vec<(String, String)>> {
         .collect())
 }
 
-fn read_text(vfs: &Vfs, path: &str) -> io::Result<String> {
-    let bytes = vfs.read(path)?;
-    Ok(String::from_utf8_lossy(&bytes)
-        .trim_start_matches('\u{feff}')
-        .to_string())
-}
-
 /// Loads a character XML by registry name (`heroman1`, `herowoman1`).
 pub fn load(vfs: &Vfs, name: &str) -> io::Result<Character> {
-    let xml = registry(vfs)?
+    let path = registry(vfs)?
         .into_iter()
         .find(|(n, _)| n == name)
         .ok_or_else(|| bad(format!("character {name:?} not in model/character.xml")))?
         .1;
-    let xml = crate::mrs::normalize(&xml);
-    let dir = xml
+    let path = crate::mrs::normalize(&path);
+    let dir = path
         .rsplit_once('/')
         .map_or(String::new(), |(d, _)| format!("{d}/"));
-    let text = read_text(vfs, &xml)?;
-    let doc = roxmltree::Document::parse(&text).map_err(|e| bad(format!("{xml}: {e}")))?;
+    let text = vfs.read_text(&path)?;
+    let doc = xml(&text, &path)?;
     let attr = |n: roxmltree::Node, a: &str| {
         n.attribute(a)
             .map(str::to_string)
-            .ok_or_else(|| bad(format!("{xml}: <{}> without {a}", n.tag_name().name())))
+            .ok_or_else(|| bad(format!("{path}: <{}> without {a}", n.tag_name().name())))
     };
     let (mut base, mut parts, mut animations) = (None, Vec::new(), Vec::new());
     for n in doc.root_element().children().filter(|n| n.is_element()) {
@@ -104,7 +89,7 @@ pub fn load(vfs: &Vfs, name: &str) -> io::Result<Character> {
                 sound: n.attribute("sound").unwrap_or_default().to_string(),
                 motion_type: attr(n, "motion_type")?
                     .parse()
-                    .map_err(|_| bad(format!("{xml}: bad motion_type")))?,
+                    .map_err(|_| bad(format!("{path}: bad motion_type")))?,
                 loop_type: attr(n, "motion_loop_type")?,
                 gm: n.attribute("gm") == Some("1"),
             }),
@@ -117,13 +102,13 @@ pub fn load(vfs: &Vfs, name: &str) -> io::Result<Character> {
         .chain(animations.iter().map(|a| &a.file))
     {
         if !vfs.exists(p) {
-            return Err(bad(format!("{xml}: {p} not in archives")));
+            return Err(bad(format!("{path}: {p} not in archives")));
         }
     }
     Ok(Character {
         name: name.to_string(),
         dir,
-        base: base.ok_or_else(|| bad(format!("{xml}: no AddBaseModel")))?,
+        base: base.ok_or_else(|| bad(format!("{path}: no AddBaseModel")))?,
         parts,
         animations,
     })

@@ -165,7 +165,6 @@ fn line() -> (TextLayout, Node) {
         TextLayout {
             justify: Justify::Left,
             linebreak: LineBreak::NoWrap,
-            ..default()
         },
         Node {
             min_width: px(0),

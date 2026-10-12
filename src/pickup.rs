@@ -13,6 +13,7 @@ use crate::{
     elu::{self, Elu},
     game::{Loadout, Vitals},
     level::Level,
+    mrs::xml,
     phase::{MatchPostStart, MatchSystems},
     session::Rules,
     view::{SCALE, to_bevy},
@@ -167,10 +168,8 @@ fn spawn_items(
 }
 
 fn read_defs(level: &Level) -> std::io::Result<(HashMap<String, Def>, Models)> {
-    let bad = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
-    let text = String::from_utf8_lossy(&level.vfs.read("system/worlditem.xml")?).into_owned();
-    let doc = roxmltree::Document::parse(text.trim_start_matches('\u{feff}'))
-        .map_err(|e| bad(e.to_string()))?;
+    let text = level.vfs.read_text("system/worlditem.xml")?;
+    let doc = xml(&text, "system/worlditem.xml")?;
     fn field<'a>(n: roxmltree::Node<'a, '_>, tag: &str) -> Option<&'a str> {
         n.children()
             .find(|c| c.has_tag_name(tag))
@@ -231,12 +230,7 @@ fn read_defs(level: &Level) -> std::io::Result<(HashMap<String, Def>, Models)> {
 
 /// Rounds of room left in `slot`'s reserve: the cap is `maxbullet - magazine` as in `actor::gear`.
 fn room(slot: &crate::game::Slot, data: &ActorData) -> u32 {
-    let Some(w) = data
-        .items
-        .get(slot.item)
-        .and_then(|i| i.weapon.as_ref())
-        .filter(|w| w.magazine > 0)
-    else {
+    let Some(w) = data.items.weapon(slot.item).filter(|w| w.magazine > 0) else {
         return 0;
     };
     let cap = w.max_bullet.unwrap_or(w.magazine * 4);
@@ -280,11 +274,7 @@ fn collect(
                 ItemKind::Ap => v.ap = (v.ap + a as f32).min(v.max_ap),
                 ItemKind::Bullet => {
                     for s in &mut load.slots {
-                        let mag = data
-                            .items
-                            .get(s.item)
-                            .and_then(|i| i.weapon.as_ref())
-                            .map_or(0, |w| w.magazine);
+                        let mag = data.items.weapon(s.item).map_or(0, |w| w.magazine);
                         s.reserve += (a * mag).min(room(s, &data));
                     }
                 }

@@ -11,8 +11,8 @@ use crate::{
     col::MapCollision,
     combat::{is_melee, rnd},
     game::{
-        Arsenal, Damage, Dead, Equip, Killed, Loadout, NewRound, Player, Protected, Score, SpawnAt,
-        Spectate, Team, Vip, Vitals,
+        Arsenal, Damage, Dead, Equip, Killed, Loadout, NewRound, PlaySound, Player, Protected,
+        Score, SpawnAt, Spectate, Team, Vip, Vitals,
     },
     item::{Items, SPY_BAG, SPY_ICE, SPY_MINE, SPY_STUN, WeaponKind},
     level::Level,
@@ -196,6 +196,11 @@ pub struct Round {
 }
 
 impl Round {
+    /// The round-win screen's headline (`ROUND WON`, `ROUND LOST`, `ROUND DRAWN`, `RED TEAM WINS`).
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
     /// The two duellists of the current (or next) duel.
     pub fn duelists(&self) -> Option<(Entity, Entity)> {
         Some((*self.queue.front()?, *self.queue.get(1)?))
@@ -1286,6 +1291,7 @@ fn berserker(
     boss: Query<(), With<Berserker>>,
     mut vitals: Query<&mut Vitals>,
     mut names: Query<&mut Name>,
+    mut sound: MessageWriter<PlaySound>,
 ) {
     for e in &fresh {
         commands.entity(e).insert(Team::Blue);
@@ -1317,6 +1323,12 @@ fn berserker(
                     .get(k.killer)
                     .map_or("?", |n| n.as_str().trim_end_matches(TAG))
             );
+            // "Berserk are down!" / "You got the berserker!" (narrator, **inferred** triggers)
+            let me = all.get(k.killer).is_ok_and(|a| a.1);
+            sound.write(PlaySound {
+                stem: if me { "nar29" } else { "nar28" }.into(),
+                at: Vec3::ZERO,
+            });
         }
     }
 }

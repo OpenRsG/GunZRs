@@ -20,7 +20,7 @@ use crate::{
     profile::{Profile, Ranks, progress},
     shop::{self, ShopData},
     slashfx::{self, Slash},
-    ui::{ACCENT, Chosen, DIM, INK, body, button, digits, hover, panel, section},
+    ui::{ACCENT, Chosen, DIM, INK, UiSound, body, button, cue, digits, hover, panel, section},
     view::{self, Shot},
 };
 use bevy::{
@@ -1324,6 +1324,7 @@ fn act(
     mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
     mut toasts: MessageWriter<Toast>,
+    mut sound: MessageWriter<UiSound>,
     time: Res<Time<Real>>,
     mut esc_at: Local<Option<f32>>,
 ) {
@@ -1334,6 +1335,7 @@ fn act(
         } else {
             *esc_at = Some(now);
             toasts.write(Toast("Press Esc again to quit".into()));
+            sound.write(UiSound(cue::POP));
         }
     }
     let mut todo: Vec<Act> = clicks
@@ -1408,6 +1410,7 @@ fn act(
                 (profile.woman, profile.look) = (state.cfg.woman, state.cfg.look);
                 profile.save();
                 toasts.write(Toast("SAVED · MATCHES USE THIS CHARACTER".into()));
+                sound.write(UiSound(cue::POP));
             }
             Act::Focus(f) => {
                 orbit.focus = f;
@@ -1832,20 +1835,23 @@ pub fn fit(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiSca
     set_scale(&mut scale, (w / 1920.0).min(h / 1080.0));
 }
 
-/// The match HUD: laid out at 1280 x 720 and only ever shrunk, anchored to the screen edges, so
-/// it may overflow the height a little (it shrinks 20% less than its width asks on a wide, short
-/// phone screen). While paused or over, the pause and end screens and the settings overlays are
-/// menus: [`fit`]'s scale.
+/// The match HUD: laid out at 1280 x 720, shrunk on small windows (20% less than the width asks
+/// on a wide, short phone screen), grown with the window once it passes 1920 x 1080 (4K: x2), and
+/// times the `HUD size` setting; anchored to the screen edges. While paused or over, the pause and
+/// end screens and the settings overlays are menus: [`fit`]'s scale.
 pub fn fit_hud(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut scale: ResMut<UiScale>,
     frozen: Option<Res<crate::game::Frozen>>,
+    profile: Option<Res<Profile>>,
 ) {
     let (w, h) = window_size(&windows);
+    let big = (w / 1920.0).min(h / 1080.0);
     let s = if frozen.is_some() {
-        (w / 1920.0).min(h / 1080.0)
+        big
     } else {
-        (w / 1280.0).min(h / 720.0 * 1.25).min(1.0)
+        let small = (w / 1280.0).min(h / 720.0 * 1.25).min(1.0);
+        small.max(big) * crate::light::knob(&profile, crate::gfx::Knob::HudScale)
     };
     set_scale(&mut scale, s);
 }

@@ -566,6 +566,7 @@ fn spawn_loading(
     shot: Option<Res<Shot>>,
     launch: Res<Launch>,
     profile: Res<Profile>,
+    mut sound: MessageWriter<ui::UiSound>,
 ) {
     commands.insert_resource(ClearColor(BACKDROP));
     let camera = view::spawn_camera(
@@ -578,6 +579,7 @@ fn spawn_loading(
     .id();
     let art = map_art(&profile, &launch.config).map(|i| images.add(i));
     loading_screen(&mut commands, camera, &launch.config, true, art);
+    sound.write(ui::UiSound(ui::cue::ENTER));
 }
 
 /// The picture of the map the loading screen is for ([`Profile::preview`]); a quest or a LAN

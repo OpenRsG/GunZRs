@@ -891,6 +891,7 @@ fn resolve_fire(
                         point: h.point,
                         normal: h.normal,
                         blade: false,
+                        item: f.item,
                     });
                 }
                 (None, None) => {}

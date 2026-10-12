@@ -32,7 +32,7 @@ const FILL: Color = Color::srgb(0.957, 0.961, 0.969);
 /// Bar sizes (px), the slack the skew and glow need around them, and `tan(24°)` of the skew.
 const HP: Vec2 = Vec2::new(280.0, 16.0);
 const AP: Vec2 = Vec2::new(281.0, 8.0);
-const HP_PAD: Vec2 = Vec2::new(4.0, 0.0);
+const HP_PAD: Vec2 = Vec2::new(8.0, 4.0);
 const AP_PAD: Vec2 = Vec2::new(8.0, 6.0);
 const TAN: f32 = 0.445;
 /// Image texels per px.
@@ -82,7 +82,21 @@ struct Shown {
 
 type Rgba = [f32; 4];
 const CLEAR: Rgba = [1.0, 1.0, 1.0, 0.0];
-const TRACK: Rgba = [1.0, 1.0, 1.0, 0.035];
+/// The empty part of a bar: a dark plate, so the white fill reads over bright scenes.
+const TRACK: Rgba = [0.02, 0.022, 0.028, 0.62];
+/// The dark margin of [`MARGIN_W`] px around a bar.
+const MARGIN: Rgba = [0.02, 0.022, 0.028, 0.5];
+const MARGIN_W: f32 = 3.0;
+
+/// The plate around a `size` bar at its own pixel (`x`, `y`): TRACK inside, MARGIN outside.
+fn plate(x: f32, y: f32, size: Vec2) -> Rgba {
+    let d = (-x).max(x - size.x).max(-y).max(y - size.y);
+    match d {
+        d if d <= 0.0 => TRACK,
+        d if d < MARGIN_W => MARGIN,
+        _ => CLEAR,
+    }
+}
 const GAP: Rgba = [0.04, 0.043, 0.05, 0.7];
 const ORANGE: Rgba = [1.0, 0.416, 0.122, 1.0];
 const BLUE_RGB: [f32; 3] = [0.561, 0.753, 1.0];
@@ -112,11 +126,11 @@ fn skewed(size: Vec2, pad: Vec2, f: impl Fn(f32, f32) -> Rgba) -> Image {
 fn hp_image(fill: f32, trail: f32, low: bool) -> Image {
     let col = if low { CRITICAL } else { FILL }.to_srgba().to_f32_array();
     let cell = HP.x / 10.0;
-    skewed(HP, HP_PAD, |x, _| {
-        if !(0.0..HP.x).contains(&x) {
-            return CLEAR;
+    skewed(HP, HP_PAD, |x, y| {
+        let mut c = plate(x, y, HP);
+        if c != TRACK {
+            return c;
         }
-        let mut c = TRACK;
         if x < trail * HP.x {
             c = over(c, ORANGE);
         }
@@ -141,7 +155,10 @@ fn ap_image(frac: f32) -> Image {
         let inside = (0.0..AP.y).contains(&y);
         let mut c = match seg {
             Some((i, at)) if i < 5 && at < sw && inside => TRACK,
-            _ => CLEAR,
+            _ => match plate(x, y, AP) {
+                TRACK => MARGIN,
+                m => m,
+            },
         };
         for (i, f) in fills.iter().enumerate().filter(|(_, f)| **f > 0.0) {
             let x0 = i as f32 * pitch;
@@ -520,11 +537,12 @@ mod tests {
     #[test]
     fn hp_bar_fills_left_to_right() {
         let img = hp_image(0.5, 0.5, false);
-        let y = HP.y / 2.0;
+        let y = HP_PAD.y + HP.y / 2.0;
         // the skew is zero at mid-height: image x = pad + bar x
         assert_eq!(alpha_at(&img, HP_PAD.x + 20.0, y), 255);
+        // the empty part is the dark plate: translucent, not clear
         let track = alpha_at(&img, HP_PAD.x + 0.75 * HP.x, y);
-        assert!(track > 0 && track < 60, "{track}");
+        assert!((100..255).contains(&track), "{track}");
         assert_eq!(alpha_at(&img, 0.0, y), 0);
     }
 }

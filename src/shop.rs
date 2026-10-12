@@ -13,8 +13,8 @@ use crate::{
     quest::QItems,
     ui::{
         ACCENT, BACKDROP, Chosen, Cut, DANGER, DIM, EDGE, GOLD, INK, MUTE, OK, ON_ACCENT, OnFill,
-        RAISED, Segs, TEXT, body, caption, digits, display, flat_cut, hatch, mono, panel, section,
-        segs, shape, strong, tracking,
+        RAISED, Segs, TEXT, UiSound, body, caption, cue, digits, display, flat_cut, hatch, mono,
+        panel, section, segs, shape, strong, tracking,
     },
     view::decode,
 };
@@ -1098,6 +1098,7 @@ fn act(
     mut ss: ResMut<ShopState>,
     mut profile: ResMut<Profile>,
     mut toasts: MessageWriter<Toast>,
+    mut sound: MessageWriter<UiSound>,
 ) {
     let woman = state.cfg.woman;
     for (i, a) in &clicks {
@@ -1128,10 +1129,12 @@ fn act(
                 let id = selected(&ss, Page::Inventory, &data, &profile, woman);
                 let Some(id) = id else {
                     toast("SELECT AN ITEM".into());
+                    sound.write(UiSound(cue::ERROR));
                     continue;
                 };
                 if slot == QUEST_SLOT {
                     toast("QUEST ITEMS ARE SACRIFICED IN THE MATCH MENU".into());
+                    sound.write(UiSound(cue::ERROR));
                     continue;
                 }
                 // a second press on an equipped item empties an emptyable slot
@@ -1140,7 +1143,13 @@ fn act(
                 } else {
                     data.entries.get(&id)
                 };
-                toast(match (profile.equip(slot, target, woman), target) {
+                let done = profile.equip(slot, target, woman);
+                sound.write(UiSound(match (&done, target) {
+                    (Err(_), _) => cue::ERROR,
+                    (_, Some(_)) => cue::EQUIP,
+                    _ => cue::UNEQUIP,
+                }));
+                toast(match (done, target) {
                     (Ok(()), Some(e)) => format!("EQUIPPED · {}", e.name.to_uppercase()),
                     (Ok(()), None) => format!("UNEQUIPPED · {}", slot_name(slot).to_uppercase()),
                     (Err(m), _) => m.to_uppercase(),
@@ -1151,9 +1160,16 @@ fn act(
                     .and_then(|id| data.entries.get(&id))
                 else {
                     toast("SELECT AN ITEM".into());
+                    sound.write(UiSound(cue::ERROR));
                     continue;
                 };
-                toast(match (a, profile_op(&mut profile, a, e)) {
+                let done = profile_op(&mut profile, a, e);
+                sound.write(UiSound(match (a, &done) {
+                    (_, Err(_)) => cue::ERROR,
+                    (ShopAct::Buy, _) => cue::BUY,
+                    _ => cue::SELL,
+                }));
+                toast(match (a, done) {
                     (ShopAct::Buy, Ok(())) => format!("PURCHASED · {}", e.name.to_uppercase()),
                     (_, Ok(())) => {
                         println!(

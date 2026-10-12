@@ -10,11 +10,11 @@ use crate::{
     modes::{Berserker, ModesPlugin, Phase, Round},
     net::Lan,
     phase::{Leave, MatchApp, MatchSystems},
-    profile::{OPTS, Profile, opt_mut},
+    profile::{MatchGain, OPTS, Profile, opt_mut},
     ui::{
-        ACCENT, Chosen, Cut, DANGER, INK, OnFill, RAISED, SCRIM, TEXT, button, compact, display,
-        flat_cut, hazard, hover, metal_primary, panel, primary, section, shadow, shape, strong,
-        tracking,
+        ACCENT, Chosen, Cut, DANGER, INK, OnFill, RAISED, SCRIM, TEXT, UiSound, button, compact,
+        cue, display, flat_cut, hazard, hover, metal_primary, panel, primary, section, shadow,
+        shape, strong, tracking,
     },
     view::Shot,
 };
@@ -112,7 +112,9 @@ impl Plugin for SessionPlugin {
                 Update,
                 (
                     start_vitals.run_if(resource_exists::<StartVitals>),
-                    (teams, clock, pause_key, panels, buttons, cursor)
+                    (
+                        teams, clock, pause_key, panels, end_sounds, countdown, buttons, cursor,
+                    )
                         .chain()
                         .run_if(resource_exists::<Rules>),
                     hover,
@@ -402,6 +404,7 @@ fn panels(
     pause: Query<Entity, With<PauseUi>>,
     end: Query<Entity, With<EndUi>>,
     opts: Query<(Entity, &Act, Has<Chosen>)>,
+    mut sound: MessageWriter<UiSound>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
@@ -412,8 +415,14 @@ fn panels(
         && controls.is_none()
         && graphics.is_none();
     match (want_pause, pause.single()) {
-        (false, Ok(e)) => commands.entity(e).despawn(),
-        (true, Err(_)) => spawn_pause(&mut commands, camera, &settings),
+        (false, Ok(e)) => {
+            commands.entity(e).despawn();
+            sound.write(UiSound(cue::CLOSE));
+        }
+        (true, Err(_)) => {
+            spawn_pause(&mut commands, camera, &settings);
+            sound.write(UiSound(cue::OPEN));
+        }
         _ => {}
     }
     match (&clock.over, end.single()) {
@@ -433,6 +442,46 @@ fn panels(
             }
         }
     }
+}
+
+/// Plays the result of a finished match once its screen is up (a frame after `finish` paid the
+/// bonus, so the level is final): the result mark, the XP bar, a level gained.
+fn end_sounds(
+    new: Query<(), Added<EndUi>>,
+    clock: Res<Clock>,
+    gain: Option<Res<MatchGain>>,
+    profile: Option<Res<Profile>>,
+    mut sound: MessageWriter<UiSound>,
+) {
+    if new.is_empty() {
+        return;
+    }
+    sound.write(UiSound(match clock.over.as_deref() {
+        Some("VICTORY") => cue::WIN,
+        Some("DEFEAT") => cue::LOSE,
+        _ => cue::DRAW,
+    }));
+    let Some(gain) = gain else { return };
+    if gain.xp > 0 {
+        sound.write(UiSound(cue::BAR));
+    }
+    if profile.is_some_and(|p| p.level() > gain.from_level) {
+        sound.write(UiSound(cue::LEVEL_UP));
+    }
+}
+
+/// The round countdown begins with the `Ready` phase of each round (round modes only).
+fn countdown(
+    rules: Res<Rules>,
+    round: Res<Round>,
+    mut last: Local<Option<(Phase, u32)>>,
+    mut sound: MessageWriter<UiSound>,
+) {
+    let now = (round.phase, round.n);
+    if rules.mode.rounds() && now.0 == Phase::Ready && *last != Some(now) {
+        sound.write(UiSound(cue::COUNTDOWN));
+    }
+    *last = Some(now);
 }
 
 fn root(camera: Entity) -> impl Bundle {

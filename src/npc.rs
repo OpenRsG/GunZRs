@@ -149,6 +149,8 @@ impl ModelData {
 struct Roster {
     data: Data,
     events: AnimEvents,
+    /// Monster id -> the id its `animationevent.xml` sounds are listed under.
+    event_ids: HashMap<u32, u32>,
     models: HashMap<String, Arc<ModelData>>,
     /// Missile / grenade body and its material per `resisttype` (0 none, 1 fire, 2 ice,
     /// 3 lightning, 4 poison; 5 bullet).
@@ -188,13 +190,35 @@ fn init(
         glow(0.4, 1.0, 0.3),
         glow(1.0, 0.85, 0.5),
     ];
+    let event_ids = event_ids(&data, &events);
     commands.insert_resource(Roster {
         data,
         events,
+        event_ids,
         models: HashMap::new(),
         orb: meshes.add(Sphere::new(0.12)),
         orb_material,
     });
+}
+
+/// `animationevent.xml` lists 36 of the 76 monsters. The others (the quest variants 14x-17x,
+/// 20xx) have the mesh and the name string of a listed one and only differ in health, so they
+/// use its events (**inferred**; listed monsters of one mesh agree wherever a name key is shared).
+fn event_ids(data: &Data, events: &AnimEvents) -> HashMap<u32, u32> {
+    let has = |c: &&u32| !events.get(**c, "die").is_empty();
+    data.npcs
+        .iter()
+        .filter_map(|(id, d)| {
+            let kin = data
+                .npcs
+                .iter()
+                .filter(|(_, k)| (&k.mesh, &k.name_key) == (&d.mesh, &d.name_key))
+                .map(|(k, _)| k)
+                .filter(has);
+            let own = [id].into_iter().find(has);
+            Some((*id, *own.or_else(|| kin.min())?))
+        })
+        .collect()
 }
 
 /// Reads a model's ELU and every clip once.
@@ -247,6 +271,8 @@ struct Spec {
     boss: bool,
     drop: String,
     die_sound: String,
+    /// Sound of a hit on a knockback-proof actor (empty: none of its own).
+    hit_sound: String,
     team: Team,
     /// `npc2.xml` `type` (empty for the classic monsters).
     type_name: String,
@@ -289,6 +315,7 @@ fn resolve(data: &Data, req: &SpawnNpc) -> Option<Spec> {
                 req.drop.clone()
             },
             die_sound: String::new(),
+            hit_sound: String::new(),
             team: req.team.unwrap_or(Team::Blue),
             type_name: String::new(),
             kind: Kind::Classic(d.clone()),
@@ -312,6 +339,12 @@ fn resolve(data: &Data, req: &SpawnNpc) -> Option<Spec> {
         boss: req.boss || a.boss,
         drop: req.drop.clone(),
         die_sound: a.sound_die.clone(),
+        // The data says a `neverblasted` actor without `neverblasted.sound` rings like metal.
+        hit_sound: match (a.never_blasted, a.sound_hit.as_str()) {
+            (false, _) => String::new(),
+            (true, "") => "fx_bullethit_mt_met".into(),
+            (true, s) => s.replace('\\', "/"),
+        },
         team: req.team.unwrap_or(if a.name.ends_with("_red") {
             Team::Red
         } else {
@@ -368,6 +401,8 @@ struct Brain {
     playing: String,
     clip_t: f32,
     clip_ev: Vec<(f32, String)>,
+    /// Length of a looping clip (events repeat each cycle), 0 for a one-shot.
+    clip_len: f32,
     clip_next: usize,
     clock: f32,
     state: usize,
@@ -492,7 +527,9 @@ struct Summon {
 struct Summoned(Entity);
 
 fn play(out: &mut Out, stem: &str, at: Vec3) {
-    if !stem.is_empty() {
+    // `hitsound` (the `sound` of 220 RANGESHOTs) is no file: the shots' own sounds are the
+    // `SOUND` events beside them, and a bullet's hit already sounds like any other.
+    if !stem.is_empty() && stem != "hitsound" {
         let stem = stem.replace('\\', "/");
         // `lab_chaser_summon` (chaser_summon, chaser_summon2) has no wav in the data: the lab
         // bots' only other summon cue stands in. **Inferred** (`lab_tower_summon`, same dust puff).
@@ -562,8 +599,9 @@ impl Brain {
         self.part_at[i].unwrap_or(feet + Vec3::Y * self.spec.height * 0.6)
     }
 
-    /// Plays clip `name` (when it exists and is not already playing, or `force`).
-    fn play(&mut self, anim: &mut Animator, name: &str, blend: f32, force: bool) -> bool {
+    /// Plays clip `name` (when it exists and is not already playing, or `force`) and arms its
+    /// `animationevent.xml` sounds (classic monsters only; `Roster::event_ids`).
+    fn play(&mut self, anim: &mut Animator, cx: &Cx, name: &str, blend: f32, force: bool) -> bool {
         let Some(c) = self.model.clips.get(name) else {
             return false;
         };
@@ -572,22 +610,16 @@ impl Brain {
             self.playing = name.to_string();
             self.clip_t = 0.0;
             self.clip_next = 0;
+            self.clip_len = if c.looping.wraps() { c.secs } else { 0.0 };
             self.clip_ev.clear();
+            if let Kind::Classic(d) = &self.spec.kind {
+                let id = cx.roster.event_ids.get(&d.id).unwrap_or(&d.id);
+                for e in cx.roster.events.get(*id, name) {
+                    self.clip_ev.push((e.secs, e.sound.clone()));
+                }
+            }
         }
         true
-    }
-
-    /// The `animationevent.xml` sounds of `clip` (classic monsters only: keyed by NPC id).
-    fn clip_sounds(&mut self, cx: &Cx, clip: &str) {
-        if let Kind::Classic(d) = &self.spec.kind {
-            self.clip_ev = cx
-                .roster
-                .events
-                .get(d.id, clip)
-                .iter()
-                .map(|e| (e.secs, e.sound.clone()))
-                .collect();
-        }
     }
 
     /// Starts `action`: its clip, its timeline.
@@ -602,9 +634,7 @@ impl Brain {
                     let looping = c.looping.wraps() && matches!(self.spec.kind, Kind::Actor { .. });
                     (c.secs.max(last + 0.05), looping)
                 });
-        if self.play(anim, &action.animation, 0.1, true) {
-            self.clip_sounds(cx, &action.animation);
-        }
+        self.play(anim, cx, &action.animation, 0.1, true);
         self.act = Some(Running {
             action,
             t: 0.0,
@@ -853,6 +883,7 @@ fn spawn(
             playing: "idle".into(),
             clip_t: 0.0,
             clip_ev: Vec::new(),
+            clip_len: 0.0,
             clip_next: 0,
             clock: rnd(&mut seed) * TICK,
             state: entry,
@@ -948,10 +979,21 @@ fn intake(
     mods: Query<&Mods>,
     humans: Query<(), Or<(With<Player>, With<Bot>)>>,
     pushes: Query<(Entity, &Push), With<Npc>>,
+    mut sound: MessageWriter<PlaySound>,
     mut commands: Commands,
 ) {
+    let mut hit = Vec::new();
     for d in dmg.read() {
         if let Ok(mut b) = npcs.get_mut(d.target) {
+            // Knockback-proof actors (barricades, radars, treasures, blitz classes) answer a hit
+            // with their own sound, one per target and frame.
+            if !b.spec.hit_sound.is_empty() && !hit.contains(&d.target) {
+                hit.push(d.target);
+                sound.write(PlaySound {
+                    stem: b.spec.hit_sound.clone(),
+                    at: d.point,
+                });
+            }
             // A building's wear shows what it takes after its resistances.
             let k = mods
                 .get(d.target)
@@ -1030,9 +1072,21 @@ fn run(
         b.clock += dt;
         b.path_t -= dt;
         b.clip_t += dt;
+        // Looping clips repeat their events (the run cycle's footsteps) once per cycle.
+        if b.clip_next >= b.clip_ev.len() && b.clip_len > 0.0 && b.clip_t >= b.clip_len {
+            b.clip_t -= b.clip_len;
+            b.clip_next = 0;
+        }
         while let Some((t, s)) = b.clip_ev.get(b.clip_next)
             && *t <= b.clip_t
         {
+            debug!(
+                "t={:.2} npc: {} {} frame {:.1} sound {s}",
+                cx.now,
+                b.spec.name,
+                b.playing,
+                t * FPS
+            );
             play(&mut out, s, pos + Vec3::Y);
             b.clip_next += 1;
         }
@@ -1061,7 +1115,7 @@ fn run(
         // The clip when no action plays: `run` while it moves, else `idle`.
         if alive && b.act.is_none() {
             let clip = if b.speed > 0.3 { "run" } else { "idle" };
-            b.play(&mut anim, clip, 0.15, false);
+            b.play(&mut anim, &cx, clip, 0.15, false);
         }
     }
     npcs_heal(&mut npcs, &heals);
@@ -1091,8 +1145,7 @@ fn begin_death(b: &mut Brain, anim: &mut Animator, cx: &Cx, out: &mut Out, pos: 
     } else {
         "die"
     };
-    b.play(anim, clip, 0.05, true);
-    b.clip_sounds(cx, clip);
+    b.play(anim, cx, clip, 0.05, true);
     if matches!(b.spec.kind, Kind::Actor { .. }) {
         play(out, &b.spec.die_sound, pos + Vec3::Y);
     }
@@ -1336,6 +1389,9 @@ fn skill_events(s: &Skill) -> Vec<(f32, Ev)> {
                 scale: 1.0,
             },
         ));
+    }
+    if !s.sound_effect.is_empty() {
+        ev.push((t0, Ev::Sound(s.sound_effect.clone())));
     }
     if s.missile {
         ev.push((
@@ -2188,6 +2244,61 @@ fn fly(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `GUNZ_GAME=<install dir> cargo test --release animation_event_sounds -- --nocapture`:
+    /// every `animationevent.xml` event belongs to an NPC of npc.xml and a clip of its model,
+    /// falls inside that clip, and names a sound file (skipped without the variable).
+    #[test]
+    fn animation_event_sounds() {
+        let Ok(dir) = std::env::var("GUNZ_GAME") else {
+            return;
+        };
+        let vfs = crate::mrs::Vfs::mount(dir).unwrap();
+        let data = Data::load(&vfs).unwrap();
+        let events = AnimEvents::load(&vfs).unwrap();
+        let xml = String::from_utf8(vfs.read("system/animationevent.xml").unwrap()).unwrap();
+        let xml = roxmltree::Document::parse(xml.trim_start_matches('\u{feff}')).unwrap();
+        let files: std::collections::HashSet<String> = vfs
+            .paths()
+            .filter_map(|p| p.strip_prefix("sound/")?.strip_suffix(".wav"))
+            .filter_map(|p| Some(p.rsplit('/').next()?.to_ascii_lowercase()))
+            .collect();
+        let (mut total, mut resolved, mut late) = (0, 0, 0);
+        let mut models = HashMap::new();
+        for npc in xml.descendants().filter(|n| n.has_tag_name("NPC")) {
+            let id: u32 = npc.attribute("id").unwrap().parse().unwrap();
+            let def = data.npcs.get(&id).unwrap_or_else(|| panic!("npc {id}"));
+            let model = models.entry(def.mesh.clone()).or_insert_with(|| {
+                load_model(&vfs, &data.model(&vfs, &def.mesh).unwrap()).unwrap()
+            });
+            for clip in npc.children().filter(|n| n.has_tag_name("Animation")) {
+                let name = clip.attribute("name").unwrap();
+                let secs = model.secs(name);
+                for e in events.get(id, name) {
+                    total += 1;
+                    let stem = e.sound.rsplit('/').next().unwrap().to_ascii_lowercase();
+                    resolved += files.contains(&stem) as u32;
+                    let Some(secs) = secs else {
+                        println!("npc {id} {}: no clip {name}", def.mesh);
+                        continue;
+                    };
+                    if e.secs > secs {
+                        late += 1;
+                        println!(
+                            "npc {id} {name}: {} at {:.2} s of {secs:.2}",
+                            e.sound, e.secs
+                        );
+                    }
+                }
+            }
+        }
+        println!("{total} events, {resolved} sound files found, {late} past their clip");
+        assert_eq!(total, 233);
+        assert_eq!(resolved, total);
+        assert_eq!(late, 0);
+        // Every monster of npc.xml (76) finds a listed one with its mesh and name.
+        assert_eq!(event_ids(&data, &events).len(), data.npcs.len());
+    }
 
     #[test]
     fn skill_events_follow_effect_start_and_repeats() {

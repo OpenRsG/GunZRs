@@ -3,6 +3,7 @@
 //! screen builds from (buttons, panels, section headings, segment bars, key caps). UI colours and
 //! fonts come from here, nowhere else. Rules: `DESIGN.md`.
 
+use crate::{mrs::Vfs, phase::Mount, view::Shot};
 use bevy::{
     asset::{RenderAssetUsages, embedded_asset, uuid::Uuid, uuid_handle},
     prelude::*,
@@ -12,7 +13,7 @@ use bevy::{
     text::{FontFeatureTag, LetterSpacing},
     ui::VisualBox,
 };
-use std::marker::PhantomData;
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 /// Primary text: warm off-white.
 pub const INK: Color = Color::srgb(0.914, 0.906, 0.886);
@@ -124,7 +125,120 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "metal.wgsl");
         // `hover` runs in each screen's own chain, after the systems that pick `Chosen`
         app.add_plugins(UiMaterialPlugin::<MetalMaterial>::default())
-            .add_systems(Update, (paint_segs, metal_make, metal_look).chain());
+            .add_message::<UiSound>()
+            .add_systems(Update, (paint_segs, metal_make, metal_look).chain())
+            .add_systems(Update, sounds);
+    }
+}
+
+/// Interface sounds: stems of `sound/effect/` that `effect.xml` lists as 2D (`type="1"`/`"3"`),
+/// which cue is which is **inferred** from the names and lengths (`docs/formats.md`, "Interface
+/// sounds"). Other modules send a [`UiSound`] with one of these; buttons need nothing, [`sounds`]
+/// plays the hover and click of every [`Interaction`] change.
+pub mod cue {
+    /// Every button, in every screen: hover, click.
+    pub const OVER: &str = "mouse_over";
+    pub const CLICK: &str = "mouse_click";
+    /// Refused action, unaffordable item, nothing selected.
+    pub const ERROR: &str = "if_error";
+    pub const POP: &str = "pop_up";
+    /// A window opens / closes (the pause menu).
+    pub const OPEN: &str = "mail";
+    pub const CLOSE: &str = "mail_close";
+    pub const EQUIP: &str = "item";
+    pub const UNEQUIP: &str = "item_off";
+    pub const BUY: &str = "item_buy";
+    pub const SELL: &str = "trash";
+    /// START: the loading screen opens.
+    pub const ENTER: &str = "match_enter";
+    /// A round's countdown begins.
+    pub const COUNTDOWN: &str = "match_countdown";
+    pub const WIN: &str = "result_mark_win";
+    pub const LOSE: &str = "result_mark_lose";
+    pub const DRAW: &str = "result_mark_draw";
+    /// A level gained in the match (end screen).
+    pub const LEVEL_UP: &str = "tier_up";
+    /// Blitzkrieg: class chosen, honor reward.
+    pub const CONFIRM: &str = "match_accept";
+    pub const REWARD: &str = "if_score_get";
+    /// The XP bar of the end screen fills.
+    pub const BAR: &str = "result_bar";
+
+    pub const ALL: [&str; 19] = [
+        OVER, CLICK, ERROR, POP, OPEN, CLOSE, EQUIP, UNEQUIP, BUY, SELL, ENTER, COUNTDOWN, WIN,
+        LOSE, DRAW, LEVEL_UP, CONFIRM, REWARD, BAR,
+    ];
+}
+
+/// Play interface sound `.0` (one of [`cue`]) in 2D.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct UiSound(pub &'static str);
+
+/// The sound of a button's [`Interaction`] change, if any: hover on entering (not when a held
+/// press falls back to hover), click on pressing.
+fn feel(was: Interaction, now: Interaction) -> Option<&'static str> {
+    match (was, now) {
+        (Interaction::None, Interaction::Hovered) => Some(cue::OVER),
+        (_, Interaction::Pressed) if was != Interaction::Pressed => Some(cue::CLICK),
+        _ => None,
+    }
+}
+
+/// Reads, decodes and logs every [`cue::ALL`] stem; a missing or undecodable one is skipped.
+fn load_cues(
+    vfs: &Vfs,
+    assets: &mut Assets<AudioSource>,
+) -> HashMap<&'static str, Handle<AudioSource>> {
+    let mut out = HashMap::new();
+    for stem in cue::ALL {
+        let path = format!("sound/effect/{stem}.wav");
+        let Ok(bytes) = vfs.read(&path) else {
+            warn!("ui sound: {path} is not in the archives");
+            continue;
+        };
+        let bytes: Arc<[u8]> = bytes.into();
+        let Some((ch, hz, secs)) = crate::music::decode(&bytes, None) else {
+            warn!("ui sound: {stem} does not decode");
+            continue;
+        };
+        info!(
+            "ui sound: {stem}: {} kB, {ch} ch, {hz} Hz, {secs:.2} s, decodes",
+            bytes.len() / 1000
+        );
+        out.insert(stem, assets.add(AudioSource { bytes }));
+    }
+    out
+}
+
+/// Plays [`UiSound`]s and the hover/click of every button, in every screen. `--shot` runs (no
+/// audio device) log what would play instead.
+#[allow(clippy::too_many_arguments)]
+fn sounds(
+    mount: Option<Res<Mount>>,
+    shot: Option<Res<Shot>>,
+    changed: Query<(Entity, &Interaction), Changed<Interaction>>,
+    mut asked: MessageReader<UiSound>,
+    mut was: Local<HashMap<Entity, Interaction>>,
+    mut cues: Local<Option<HashMap<&'static str, Handle<AudioSource>>>>,
+    mut assets: ResMut<Assets<AudioSource>>,
+    mut commands: Commands,
+) {
+    let Some(mount) = mount else { return };
+    let cues = cues.get_or_insert_with(|| load_cues(&mount.0, &mut assets));
+    let mut play: Vec<&'static str> = changed
+        .iter()
+        .filter_map(|(e, now)| feel(was.insert(e, *now).unwrap_or_default(), *now))
+        .collect();
+    if was.len() > 4096 {
+        was.clear();
+    }
+    play.extend(asked.read().map(|m| m.0));
+    play.dedup();
+    for stem in play {
+        info!("ui sound: play {stem}");
+        if let (Some(h), None) = (cues.get(stem), &shot) {
+            commands.spawn((AudioPlayer::new(h.clone()), PlaybackSettings::DESPAWN));
+        }
     }
 }
 
@@ -197,6 +311,10 @@ pub enum Cut {
 /// The cut sizes that have a mask.
 pub const CUT_SIZES: [u8; 9] = [4, 6, 8, 10, 12, 14, 16, 18, 20];
 
+/// Mask texels per logical px: the cut edges stay sharp up to this UI scale (a 4K window scales
+/// the menus about 2x; a 1-texel-per-px mask was magnified into a soft, stepped edge).
+const MASK_RES: usize = 4;
+
 impl Cut {
     fn size(self) -> u8 {
         let (Cut::Notch(s) | Cut::Chamfer(s) | Cut::Slant(s)) = self;
@@ -224,13 +342,13 @@ impl Cut {
         Handle::Uuid(Uuid::from_u128(id), PhantomData)
     }
 
-    /// The mask: white, alpha = coverage (4 x 4 samples a texel). Corners are `c` texels, which
-    /// the slicer draws `c` logical px.
+    /// The mask: white, alpha = coverage (4 x 4 samples a texel). Corners are `c` x
+    /// [`MASK_RES`] texels, which the slicer draws `c` logical px.
     fn mask(self) -> Image {
-        let c = self.size() as usize;
+        let c = self.size() as usize * MASK_RES;
         let (w, h) = match self {
-            Cut::Slant(_) => (2 * c + 2, c),
-            _ => (2 * c + 2, 2 * c + 2),
+            Cut::Slant(_) => (2 * c + 2 * MASK_RES, c),
+            _ => (2 * c + 2 * MASK_RES, 2 * c + 2 * MASK_RES),
         };
         let (wf, hf, cf) = (w as f32, h as f32, c as f32);
         let inside = |x: f32, y: f32| match self {
@@ -257,7 +375,7 @@ impl Cut {
     }
 
     fn slicer(self) -> TextureSlicer {
-        let c = self.size() as f32;
+        let c = (self.size() as usize * MASK_RES) as f32;
         let border = match self {
             Cut::Slant(_) => BorderRect {
                 min_inset: Vec2::new(c, 0.0),
@@ -269,7 +387,7 @@ impl Cut {
             border,
             center_scale_mode: SliceScaleMode::Stretch,
             sides_scale_mode: SliceScaleMode::Stretch,
-            max_corner_scale: 1.0,
+            max_corner_scale: 1.0 / MASK_RES as f32,
         }
     }
 }
@@ -744,6 +862,32 @@ pub fn paint_segs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buttons_hover_and_click() {
+        use Interaction::{Hovered, None, Pressed};
+        assert_eq!(feel(None, Hovered), Some(cue::OVER));
+        assert_eq!(feel(Hovered, Pressed), Some(cue::CLICK));
+        assert_eq!(feel(None, Pressed), Some(cue::CLICK));
+        // a release falls back to hover without a second hover sound
+        assert_eq!(feel(Pressed, Hovered), std::option::Option::None);
+        assert_eq!(feel(Hovered, None), std::option::Option::None);
+    }
+
+    /// Every interface stem is in the extract (when there is one) and decodes.
+    #[test]
+    fn interface_stems_decode() {
+        let dir = std::path::Path::new(".local/extract/sound/effect");
+        if !dir.exists() {
+            return;
+        }
+        for stem in cue::ALL {
+            let bytes: Arc<[u8]> = std::fs::read(dir.join(format!("{stem}.wav")))
+                .unwrap_or_else(|e| panic!("{stem}: {e}"))
+                .into();
+            assert!(crate::music::decode(&bytes, None).is_some(), "{stem}");
+        }
+    }
 
     fn alpha(img: &Image, x: usize, y: usize) -> u8 {
         let w = img.width() as usize;

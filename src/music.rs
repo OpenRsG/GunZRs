@@ -137,7 +137,7 @@ fn pick<'a>(pool: &'a [String], map: &str) -> Option<&'a str> {
 
 /// Channels, sample rate and seconds decoded from the first `limit` samples (all when `None`);
 /// `None` if bevy's decoder refuses the bytes (it panics, so the call is caught).
-fn decode(bytes: &Arc<[u8]>, limit: Option<usize>) -> Option<(u16, u32, f32)> {
+pub(crate) fn decode(bytes: &Arc<[u8]>, limit: Option<usize>) -> Option<(u16, u32, f32)> {
     let src = AudioSource {
         bytes: bytes.clone(),
     };

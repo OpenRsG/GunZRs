@@ -551,7 +551,10 @@ pub(crate) fn fly(
         // chosen so the fireball spans about the blast radius (*inferred*).
         let (effect, sound, scale) = match p.kind {
             WeaponKind::Rocket => ("rocket_effect", "fx_explosion01", 1.0),
-            WeaponKind::Frag | WeaponKind::Mine => ("ef_exgrenade", "we_grenade_explosion", 16.0),
+            WeaponKind::Frag => ("ef_exgrenade", "we_grenade_explosion", 16.0),
+            // `we_trap_*`: the trap is the land mine (**inferred** from the name; the only
+            // retail user of `we_trap_explosion` is a quest robot's smash)
+            WeaponKind::Mine => ("ef_exgrenade", "we_trap_explosion", 16.0),
             WeaponKind::Flashbang | WeaponKind::Stun => {
                 ("ef_gre_ex", "we_flashbang_explosion", 4.0)
             }

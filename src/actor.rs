@@ -125,6 +125,8 @@ const RS_WINDOW: f32 = 0.5;
 const TECH_SHOT: f32 = 1.5;
 /// A shot from another gun within this many seconds of the last one is a swapshot.
 const SWAP_WINDOW: f32 = 0.6;
+/// Seconds of continuous fall after which the actor screams (**inferred**).
+const SCREAM_AFTER: f32 = 1.2;
 /// Emotes: clip name (**observed**, `man01.xml`/`woman01.xml`: every motion type has `bow wave
 /// cry laugh dance`; `taunt` is its own action) and its [`Action`] (rebindable). Looping clips
 /// play one cycle.
@@ -2132,6 +2134,10 @@ fn drive(
                 cancel_from: TAUNT_CANCEL,
             };
             a.restart = true;
+            sound.write(ActorSound {
+                actor: e,
+                cue: Cue::Emote(clip),
+            });
         }
 
         // Reload.
@@ -2368,6 +2374,10 @@ fn drive(
                 });
                 // dust ring of a hard landing (a plain jump lands at `JUMP` m/s: none)
                 if impact > 11.0 {
+                    sound.write(ActorSound {
+                        actor: e,
+                        cue: Cue::HardLand,
+                    });
                     vfx.write(Vfx::Elu {
                         name: if impact > 20.0 {
                             "ef_dust_2m"
@@ -2385,7 +2395,15 @@ fn drive(
                 (false, false, false, 0.0);
         } else {
             a.air += dt;
-            a.tech.fall = if a.vel.y < 0.0 { a.tech.fall + dt } else { 0.0 };
+            let fall = if a.vel.y < 0.0 { a.tech.fall + dt } else { 0.0 };
+            // once per fall (**inferred** point: 1.2 s of falling, about 15 m)
+            if a.tech.fall < SCREAM_AFTER && fall >= SCREAM_AFTER && alive {
+                sound.write(ActorSound {
+                    actor: e,
+                    cue: Cue::FallScream,
+                });
+            }
+            a.tech.fall = fall;
         }
         a.grounded = mv.grounded;
 

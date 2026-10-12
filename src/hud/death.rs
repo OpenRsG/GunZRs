@@ -40,8 +40,13 @@ const CHIP: Color = Color::srgb(0.043, 0.047, 0.055);
 /// the mock's render of a lit scene.
 const VEIL: f32 = 0.87;
 /// Band top and height, stripe height (px on the 1080 canvas); respawn block top.
-const BAND: (f32, f32, f32) = (380.0, 240.0, 4.0);
-const COUNTDOWN_TOP: f32 = 660.0;
+const BAND: (f32, f32, f32) = (0.0, 240.0, 4.0);
+/// The band hangs from this share of the screen height (210 px on the 1080 canvas).
+const BAND_TOP: f32 = 19.5;
+/// Respawn block top, from the band's top.
+const COUNTDOWN_TOP: f32 = 280.0;
+/// Share of the width each end of the band fades over: short, so it spans the screen.
+const FADE: f32 = 8.0;
 /// Seconds the veil fades in, the band opens and ELIMINATED slams in.
 const VEIL_IN: f32 = 0.3;
 const BAND_IN: f32 = 0.25;
@@ -97,7 +102,9 @@ fn stripes() -> Image {
     paint(STRIPE_W, BAND.2 as u32, |u, v| {
         let (x, y) = (u * STRIPE_W as f32 - 0.5, v * BAND.2 - 0.5);
         let d = ((x + y) * std::f32::consts::FRAC_1_SQRT_2).rem_euclid(28.0);
-        let fade = (u / 0.25).min((1.0 - u) / 0.25).min(1.0);
+        let fade = (u / (FADE / 100.0))
+            .min((1.0 - u) / (FADE / 100.0))
+            .min(1.0);
         let c = RED.to_srgba();
         [c.red, c.green, c.blue, lit(d) * fade]
     })
@@ -164,141 +171,148 @@ fn spawn(
             at[VEILED] = r
                 .spawn((strip(0.0, percent(100)), BackgroundColor(Color::NONE)))
                 .id();
-            at[BANDED] = r
-                .spawn((
-                    strip(BAND.0, px(BAND.1)),
-                    UiTransform::from_scale(Vec2::new(1.0, 0.0)),
-                    BackgroundGradient::from(LinearGradient::to_right(vec![
-                        ColorStop::new(clear(0.0), percent(0)),
-                        ColorStop::new(clear(0.88), percent(25)),
-                        ColorStop::new(clear(0.88), percent(75)),
-                        ColorStop::new(clear(0.0), percent(100)),
-                    ])),
-                ))
-                .id();
-            for top in [BAND.0, BAND.0 + BAND.1 - BAND.2] {
-                r.spawn((strip(top, px(BAND.2)), ImageNode::new(stripes.clone())));
-            }
-            r.spawn(column(BAND.0 + 20.0, 12.0)).with_children(|c| {
-                at[TITLE] = c
+            // everything below hangs from the band's top, a share of the screen height
+            r.spawn(Node {
+                top: percent(BAND_TOP),
+                ..strip(0.0, px(0))
+            })
+            .with_children(|r| {
+                at[BANDED] = r
                     .spawn((
-                        txt("ELIMINATED", ui::display(110.0), RED),
-                        ui::tracking(0.06, 110.0),
-                        LineHeight::RelativeToFont(0.85),
-                        UiTransform::default(),
+                        strip(BAND.0, px(BAND.1)),
+                        UiTransform::from_scale(Vec2::new(1.0, 0.0)),
+                        BackgroundGradient::from(LinearGradient::to_right(vec![
+                            ColorStop::new(clear(0.0), percent(0)),
+                            ColorStop::new(clear(0.88), percent(FADE)),
+                            ColorStop::new(clear(0.88), percent(100.0 - FADE)),
+                            ColorStop::new(clear(0.0), percent(100)),
+                        ])),
                     ))
                     .id();
-                at[BY] = c
-                    .spawn(Node {
-                        align_items: AlignItems::Center,
-                        column_gap: px(14),
-                        ..default()
-                    })
-                    .with_children(|b| {
-                        b.spawn((txt("BY", ui::strong(13.0), DIM), ui::tracking(0.3, 13.0)));
-                        at[NAME] = b
-                            .spawn((
-                                txt("", ui::display(34.0), INK),
-                                ui::tracking(0.06, 34.0),
-                                LineHeight::RelativeToFont(1.0),
-                            ))
-                            .id();
-                        at[CHIP_BOX] = b
-                            .spawn((
-                                Node {
-                                    padding: UiRect::axes(px(8), px(3)),
-                                    ..default()
-                                },
-                                ui::shape(Cut::Slant(4), INK),
-                            ))
-                            .with_children(|w| {
-                                at[WEAPON] = w
-                                    .spawn((
-                                        txt("", ui::mono(10.0), CHIP),
-                                        ui::tracking(0.08, 10.0),
-                                    ))
-                                    .id();
-                            })
-                            .id();
-                    })
-                    .id();
-                let stat = Node {
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    row_gap: px(2),
-                    ..default()
-                };
-                at[STATS] = c
-                    .spawn(Node {
-                        column_gap: px(40),
-                        margin: UiRect::top(px(6)),
-                        ..default()
-                    })
-                    .with_children(|s| {
-                        at[TAKEN] = s
-                            .spawn(stat.clone())
-                            .with_children(|c| {
-                                c.spawn(caption("DAMAGE TAKEN", 9.0));
-                                (at[TAKEN_HP], at[TAKEN_AP]) = pair(c);
-                            })
-                            .id();
-                        at[LEFT] = s
-                            .spawn(stat.clone())
-                            .with_children(|c| {
-                                at[LEFT_CAP] = c.spawn(caption("", 9.0)).id();
-                                (at[LEFT_HP], at[LEFT_AP]) = pair(c);
-                            })
-                            .id();
-                        at[HITS] = s
-                            .spawn(stat)
-                            .with_children(|c| {
-                                c.spawn(caption("HITS", 9.0));
-                                at[HITS_N] = c.spawn(txt("", ui::digits(16.0), INK)).id();
-                            })
-                            .id();
-                    })
-                    .id();
-            });
-            r.spawn(column(COUNTDOWN_TOP, 8.0)).with_children(|c| {
-                c.spawn(Node {
-                    align_items: AlignItems::Baseline,
-                    column_gap: px(10),
-                    ..default()
-                })
-                .with_children(|row| {
-                    at[LABEL] = row
-                        .spawn((txt("", ui::strong(11.0), INK), ui::tracking(0.3, 11.0)))
-                        .id();
-                    at[COUNTER] = row
+                for top in [BAND.0, BAND.0 + BAND.1 - BAND.2] {
+                    r.spawn((strip(top, px(BAND.2)), ImageNode::new(stripes.clone())));
+                }
+                r.spawn(column(BAND.0 + 20.0, 12.0)).with_children(|c| {
+                    at[TITLE] = c
                         .spawn((
-                            txt("", ui::display(30.0), COUNT),
-                            LineHeight::RelativeToFont(0.8),
+                            txt("ELIMINATED", ui::display(110.0), RED),
+                            ui::tracking(0.06, 110.0),
+                            LineHeight::RelativeToFont(0.85),
+                            UiTransform::default(),
                         ))
                         .id();
-                });
-                at[TRACK] = c
-                    .spawn((
-                        Node {
-                            width: px(300),
-                            height: px(3),
+                    at[BY] = c
+                        .spawn(Node {
+                            align_items: AlignItems::Center,
+                            column_gap: px(14),
                             ..default()
-                        },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.03)),
-                    ))
-                    .with_children(|t| {
-                        at[FILL] = t
+                        })
+                        .with_children(|b| {
+                            b.spawn((txt("BY", ui::strong(13.0), DIM), ui::tracking(0.3, 13.0)));
+                            at[NAME] = b
+                                .spawn((
+                                    txt("", ui::display(34.0), INK),
+                                    ui::tracking(0.06, 34.0),
+                                    LineHeight::RelativeToFont(1.0),
+                                ))
+                                .id();
+                            at[CHIP_BOX] = b
+                                .spawn((
+                                    Node {
+                                        padding: UiRect::axes(px(8), px(3)),
+                                        ..default()
+                                    },
+                                    ui::shape(Cut::Slant(4), INK),
+                                ))
+                                .with_children(|w| {
+                                    at[WEAPON] = w
+                                        .spawn((
+                                            txt("", ui::mono(10.0), CHIP),
+                                            ui::tracking(0.08, 10.0),
+                                        ))
+                                        .id();
+                                })
+                                .id();
+                        })
+                        .id();
+                    let stat = Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: px(2),
+                        ..default()
+                    };
+                    at[STATS] = c
+                        .spawn(Node {
+                            column_gap: px(40),
+                            margin: UiRect::top(px(6)),
+                            ..default()
+                        })
+                        .with_children(|s| {
+                            at[TAKEN] = s
+                                .spawn(stat.clone())
+                                .with_children(|c| {
+                                    c.spawn(caption("DAMAGE TAKEN", 9.0));
+                                    (at[TAKEN_HP], at[TAKEN_AP]) = pair(c);
+                                })
+                                .id();
+                            at[LEFT] = s
+                                .spawn(stat.clone())
+                                .with_children(|c| {
+                                    at[LEFT_CAP] = c.spawn(caption("", 9.0)).id();
+                                    (at[LEFT_HP], at[LEFT_AP]) = pair(c);
+                                })
+                                .id();
+                            at[HITS] = s
+                                .spawn(stat)
+                                .with_children(|c| {
+                                    c.spawn(caption("HITS", 9.0));
+                                    at[HITS_N] = c.spawn(txt("", ui::digits(16.0), INK)).id();
+                                })
+                                .id();
+                        })
+                        .id();
+                });
+                r.spawn(column(COUNTDOWN_TOP, 8.0)).with_children(|c| {
+                    c.spawn(Node {
+                        align_items: AlignItems::Baseline,
+                        column_gap: px(10),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        at[LABEL] = row
+                            .spawn((txt("", ui::strong(11.0), INK), ui::tracking(0.3, 11.0)))
+                            .id();
+                        at[COUNTER] = row
                             .spawn((
-                                Node {
-                                    width: percent(0),
-                                    height: percent(100),
-                                    ..default()
-                                },
-                                BackgroundColor(ACCENT),
-                                BoxShadow::new(ACCENT, px(0), px(0), px(0), px(8)),
+                                txt("", ui::display(30.0), COUNT),
+                                LineHeight::RelativeToFont(0.8),
                             ))
                             .id();
-                    })
-                    .id();
+                    });
+                    at[TRACK] = c
+                        .spawn((
+                            Node {
+                                width: px(300),
+                                height: px(3),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.03)),
+                        ))
+                        .with_children(|t| {
+                            at[FILL] = t
+                                .spawn((
+                                    Node {
+                                        width: percent(0),
+                                        height: percent(100),
+                                        ..default()
+                                    },
+                                    BackgroundColor(ACCENT),
+                                    BoxShadow::new(ACCENT, px(0), px(0), px(0), px(8)),
+                                ))
+                                .id();
+                        })
+                        .id();
+                });
             });
         })
         .id();

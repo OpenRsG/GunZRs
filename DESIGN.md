@@ -59,12 +59,13 @@ short toast, not a permanent line.
 
 ## HUD placement
 
-After the user's HUD mock, at 1 px per screen pixel (`menu::fit_hud` shrinks it only for windows
-smaller than 1280 x 720), 28 px from the edges: mode line and KILLS / DEATHS / K/D top left
-(`hud/top.rs`), compass, clock and scores top centre, kill feed top right (`hud/feed.rs`), vitals
-bottom left (`hud/vitals.rs`), weapon and ammo bottom right (`hud/weapon.rs`), crosshair, hit X
-and damage numbers in the centre (`hud/reticle.rs`), the death screen as a band across the middle
-(`hud/death.rs`), round banners upper centre. START and RESUME are metal plates
+After the user's HUD mock on a 1920 x 1080 canvas (`menu::fit_hud`: 1 px per screen pixel from
+1280 x 720 to 1920 x 1080, scaled up beyond, shrunk below, times the HUD SIZE setting), 28 px from
+the edges: mode line and KILLS / DEATHS / K/D top left (`hud/top.rs`), compass, clock and scores
+top centre, kill feed top right (`hud/feed.rs`), vitals bottom left (`hud/vitals.rs`), weapon and
+ammo bottom right (`hud/weapon.rs`), crosshair, hit X and damage numbers in the centre
+(`hud/reticle.rs`), the death screen as a full-width band in the upper third (`hud/death.rs`),
+round banners upper centre. START and RESUME are metal plates
 (`ui::metal`, `src/metal.wgsl`).
 
 ## Code

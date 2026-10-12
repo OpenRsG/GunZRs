@@ -1,6 +1,6 @@
 // Screen effects of `gfx.rs`, one fullscreen pass before bloom and tonemapping (scene-linear
 // colours): contrast, camera-turn motion blur, radial blur, speed lines and the dash burst, hit
-// flash, low-health desaturation and heartbeat, the death screen's grey soft backdrop, film
+// flash, low-health desaturation and heartbeat, the death screen's grey backdrop, film
 // grain. `gfx.rs` removes the pass while every effect is idle.
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
@@ -23,7 +23,6 @@ struct Fx {
 @group(0) @binding(2) var<uniform> fx: Fx;
 
 const TAPS: i32 = 8;
-const SOFT: i32 = 16;
 
 fn hash(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
@@ -53,16 +52,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         col = acc / f32(TAPS);
     }
     if fx.gray > 0.005 {
-        // death: a disc blur of about 12 px at 1080 lines (golden-angle taps), then no colour
-        let dims = vec2<f32>(textureDimensions(screen));
-        let reach = fx.gray * 12.0 / dims.y;
-        var acc = col;
-        for (var i = 1; i < SOFT; i++) {
-            let a = f32(i) * 2.39996;
-            let d = sqrt(f32(i) / f32(SOFT)) * reach;
-            acc += textureSampleLevel(screen, samp, uv + vec2(cos(a), sin(a)) * vec2(d * dims.y / dims.x, d), 0.0).rgb;
-        }
-        col = mix(col, acc / f32(SOFT), fx.gray);
+        // death: no colour
         col = mix(col, vec3(luma(col)), fx.gray);
     }
     if fx.contrast != 1.0 {

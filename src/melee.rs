@@ -1081,6 +1081,7 @@ fn resolve(
                 point: h.point,
                 normal: h.normal,
                 blade: true,
+                item: s.item,
             });
         }
     }

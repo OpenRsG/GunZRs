@@ -1253,7 +1253,7 @@ in the animation XML: files `man_fs_{l,r}_mt_<material>` with materials `con drt
 wat wod` (**inferred** naming: left/right foot, surface); the game plays `_mt_<material>` by looking up the polygon under the feet (see below). `system/animationevent.xml` only has `<NPC id>` entries (36 NPCs,
 233 sound events, 97 distinct files, all resolve under `sound/effect/` or `sound/effect/quest/<monster>/`)
 with `AddAnimEvent eventtype="sound" filename beginframe`; it has nothing for
-the player characters and is not used by `gunz-play`.
+the player characters. Quest monsters play it (see "NPC sounds" below).
 
 ### Sound playback and feedback (`src/audio.rs`, `src/hud.rs`)
 
@@ -1274,15 +1274,44 @@ the player characters and is not used by `gunz-play`.
   1.5 m or more above the victim's feet is a headshot (**inferred**: retail counts headshot kills but
   has no head zone in the data). Clan wars add each side's emblem. LAN protocol 3 carries the
   headshot flag with each kill.
-- **Coverage** (headless run log): surface sets 35/35, voices 13/13, misc cues 16/16, zitem
-  `snd_fire/reload/dryfire` 19/19 (`swing`, the one name without a file, is aliased to
-  `blade_swing`: **inferred**, every other melee item and `animationevent.xml` `melee_attack` use
-  it), weapon items with a fire sound 155/155, map ambiences 2/2 (Mansion) and 3/3 (Dungeon)
-  resolve and decode.
+- **Coverage** (headless run log): surface sets 35/35, voices 13/13, misc cues 33/33, narrator
+  25/25, hit beeps + character voices 17/17, zitem `snd_fire/reload/dryfire` 19/19 (`swing`, the
+  one name without a file, is aliased to `blade_swing`: **inferred**), weapon items with a
+  fire sound 159/159 (mines now `we_trap_fire`), map ambiences 2/2 (Mansion) and 3/3 (Dungeon)
+  resolve and decode. `effect.xml` names like `fx2/MAL01`, `nar/NAR01` are keyed by their last
+  path segment (before, those stems missed their type and distance).
+- **Played stems** (`.local/sound/inventory.tsv`, 453 files): player-side ("core") stems played went
+  from 112 to 175 of 196. Over all 453 files 400 now play (core 175/196, NPC 190/205, interface 19/36,
+  bgm 16/16).
 
 Other names the HUD plays (the mapping is **inferred** from the names): `hitbody00` (bullet
 hit), `blade_damage` (melee hit), `fx_myhit` (type 3, the player's own hit), `death01_a_male`
-(death), `fx_respawn` (type 1, player respawn).
+(death), `fx_respawn` (type 1, player respawn). Monsters (`Npc`) get no human pain or death clip.
+
+**Narrator** `nar01-32` (type 1, 2D; words **observed** by transcribing the clips, triggers
+**inferred**): 01-04 Cool/Nice/Great/Wonderful on half of the player's plain kills; 05 "Splendid! You
+killed them all!" a team round won by the player's kill; 06 HEADSHOT; 07 Fantastic / 08 Excellent / 09
+Unbelievable on the 2nd / 3rd / 4th+ kill within 4 s; 31 Rampage, 32 Dominating, 30 Unstoppable at 5 / 7 /
+10 kills without dying; 10 "Get ready to fight!" at a round's countdown, 11 "Let's rock!" when it goes live,
+27 "final round", 18 "New challenger" (duel round 2+); 12 You win / 13 You lose / 14 Red Team wins / 15 Blue
+Team wins / 16 Draw at a round's end (team round modes name the team) and at a non-round match's end;
+19 / 20 Red / Blue Team Boss down (Assassinate VIP killed live); 28 / 29 berserker killed by another /
+by the player. Unused: 17 "New intruder came!" (no join event), 22 and 26 (lobby/quest UI text).
+
+**Characters**: `mal|fem` 01 laugh emote, 02 cry emote, 10 falling scream (after 1.2 s of fall, with
+`fx_whoosh01` for the player), 11-13 taunt (random); `ooh_male/female` hard landing (> 11 m/s). Classified
+with an audio tagger (01 chuckle, 02 crying, 10 screaming, 11-13 speech): **inferred**. Spy case
+(`SpyCase`, the `rubber` set): `rubber_damage`, `rubber_concrete`, `rubber_hangonwall`, `we_rubber_smash`
+(its `smash` clip is the `uppercut`), `fx_rubber_chargecomplete`; `fx_blade_sheath` / `fx_dagger_sheath` /
+`fx_rubber_sheath` when a katana / dagger / case is put away (any actor, 3D); `we_weapon_rdy` only for the
+player (type 3, no 3D twin). Mines: `we_trap_fire` / `we_trap_explosion`. Status: `we_enfire` (burn),
+`we_enice` (slow), `we_enlight` (stun), `bind_a_male` (root), not for NPC skills. `fx_flashbang` loops
+(type 4) while the player is blinded. `hit1/2/3` are the stock `hit_sound` option sounds (hit / kill /
+headshot kill) when no `custom/hitsound.wav` exists.
+
+**Still unused**: `we_new_*` (5, four IMA ADPCM; no data names them, so no decoder was added), `we_bowgun_*`
+and `bowgun_dryfire` (no bowgun item), `we_smash(_2d)` and `fx_whoosh02` (no identifiable trigger),
+`mal|fem05/08` (groans, none), `we_enpoison(_2d)` (no poison status), `amb_steam2` (no map uses it).
 
 ### Music (`src/music.rs`; track choice **inferred**, files **observed**)
 
@@ -1338,11 +1367,73 @@ warned about and skipped. Headless `--shot` runs log the choice and play nothing
 device bevy logs a warning and the sinks never appear. Check: `GUNZ_GAME=<install dir> cargo test
 --release every_bgm -- --nocapture` decodes all 16 files completely.
 
-**NPC / animation-event sounds**: `animationevent.xml` names sounds as `quest/<monster>/<File>` or
-a plain stem (97 distinct, all resolve in `sound/effect/`, **observed**; stems are unique across
-`sound/`). `Cue::Anim("quest/goblin/Goblin_die")` (follows an actor) and the
-`game::PlaySound { stem, at }` message (a position) both play them; the directory part is dropped
-and case ignored.
+### NPC sounds (`src/npc.rs`, `src/npc/data.rs`; files **observed**, wiring partly **inferred**)
+
+`animationevent.xml` names sounds as `quest/<monster>/<File>` or a plain stem (97 distinct, all resolve in
+`sound/effect/`; stems are unique across `sound/`). `Cue::Anim("quest/goblin/Goblin_die")` (follows an
+actor) and the `game::PlaySound { stem, at }` message (a position) both play them; the directory part is
+dropped and case ignored. `npc.rs` sends `PlaySound` at the monster's chest, so `effect.xml` range and 2D/3D
+type apply as for every other sound.
+
+- **Animation events** (classic monsters): each `AddAnimEvent` fires once the clip has played `beginframe`
+  ticks (4800/s: 160 ticks per `.ani` frame, 30 frames/s, **inferred**; in this unit all 233 events fall
+  inside their clip, in the other units most would not). The monster's clip clock restarts whenever a clip
+  starts (action, idle/run switch, death); looping clips (`run`) repeat their events every cycle (the
+  footstep pairs `GoblinK_FX_L`/`_R` at 1768/4168). `RUST_LOG=gunz::npc=debug` logs each one as
+  `npc: <name> <clip> frame <ani frame> sound <stem>`. Check: `GUNZ_GAME=<install dir> cargo test
+  --release --lib animation_event_sounds -- --nocapture`: 233 events, 233 sound files found, none past the end
+  of its clip; two events name a clip their model does not have (`koboltK` `special_attack2`, `golem`
+  `neglect1`) and never fire.
+- **Variants** (**inferred**): the file lists 36 of the 76 `npc.xml` monsters. The quest variants (`151-153`,
+  `2011-2024`, `14x`-`17x`: lower health, same `meshname` and name string as a listed monster) use the
+  events of the listed monster with the same mesh and name key (lowest id when several are listed); all 76 find
+  one.
+- **npc2.xml actors**: `sound.die` plays when the death state begins. 26 actors are `neverblasted`; 16 of
+  them carry `neverblasted.sound` (Blitzkrieg barricade/radar `Blitzkrieg/hit_barricade|hit_rader`, treasure
+  `fx_bullethit_mt_wod`, `blitz_*` `fx_bullethit_mt_fsh`), which plays at the hit point of each `Damage`.
+  The file's own comment says an immune actor without it gets the metal bullet hit
+  (`fx_bullethit_mt_met`): the other 10 (`robot psychic general chaser tower assassin` and their `hc`
+  variants, `guardian`) use that.
+- **Actions and skills**: `zactoraction.xml` `SOUND`, `MELEESHOT`, `RANGESHOT`, `GRENADESHOT` `sound` fire
+  with their event; `zskill.xml` `sound.explosion` plays where the effect lands and `effectsound` (6
+  skills: `blade_swing`, `we_grenade_explosion`, `SkeletonCc_FX_Lightning`, `SkeletonM_FX_MagicArrow`) at
+  `effectstarttime`. `sound="hitsound"` (220 `RANGESHOT`s) names no file and is skipped: the shots' own
+  sounds are the `SOUND` events beside them. `lab_chaser_summon` has no file (aliased, see `npc.rs`).
+- Not data-defined (**unknown**): pain/hit sounds of the classic monsters (`animationevent.xml` has no
+  `melee_attacked`/`range_attacked` entry), their footsteps other than the `run` events, and any idle loop.
+  Hits on them use the generic `hitbody00`/`blade_damage`.
+
+### Interface sounds (`src/ui.rs` `cue`/`UiSound`; stems **observed**, roles **inferred**)
+
+`system/effect.xml` lists the interface cues as 2D (`type="1"`; `if_score_*` `type="3"`). No
+XML under `interface/` or `system/` names them, so which cue belongs to which action is
+**inferred** from names and lengths (decoded by `gunz-play`, 44.1 kHz wav):
+
+| Stem | Length | Played for |
+|---|---|---|
+| `mouse_over` / `mouse_click` | 0.10 / 0.26 s | every button, tab, stepper, tile, row (any `Interaction` change, all screens) |
+| `if_error` | 0.05 s | nothing selected, unaffordable or refused buy/equip |
+| `pop_up` | 0.39 s | confirmation toasts (SAVED, "Esc again to quit") |
+| `mail` / `mail_close` | 0.19 / 0.20 s | pause menu opens / closes |
+| `item` / `item_off` | 0.23 / 0.49 s | equip / unequip |
+| `item_buy` / `trash` | 0.46 / 0.43 s | buy / sell |
+| `match_enter` | 3.22 s | START: the loading screen opens |
+| `match_countdown` | 2.27 s | each round's Ready phase (round modes) |
+| `result_mark_win` / `_lose` / `_draw` | 0.27 / 0.42 / 0.50 s | end screen (VICTORY / DEFEAT / DRAW) |
+| `result_bar` | 0.57 s | end screen when XP was earned |
+| `tier_up` | 2.38 s | end screen when the match gained a level |
+| `match_accept` | 0.59 s | Blitzkrieg class card chosen |
+| `if_score_get` | 0.30 s | Blitzkrieg reward panel (the combo layer also uses this stem) |
+
+Not played (no matching UI in the port, or role unclear): `if_click` (0.44 s) and `if_mouseover`
+(1.25 s, mono; too long for a hover, so `mouse_*` serve every screen), `if_score_flyby`,
+`match_click`, `match_found`, `match_reject`, `league_*`, `tier_down`,
+`pop_up_complete_achievement`, `pop_up_hidden_achievement`, `result_placement_widget`.
+There is no effects-volume setting in the port (`Settings.music` only scales music), so these play
+at full level. `UiSound` plays through `ui::sounds` (the `Mount` archive, non-spatial), which
+loads and decodes all of them at the first frame and logs one `ui sound: <stem>: ... decodes` line
+each; `--shot` runs log `ui sound: play <stem>` instead of playing. Check: `cargo test --release
+interface_stems` decodes every stem from `.local/extract`.
 
 ### Combat options: custom hit sound, static spread (`audio.rs`, `combat.rs`)
 

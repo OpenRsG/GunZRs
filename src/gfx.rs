@@ -61,6 +61,7 @@ pub enum Knob {
     Sharpen,
     Fog,
     Fov,
+    HudScale,
     Vignette,
     Grain,
     Aberration,
@@ -74,7 +75,7 @@ pub enum Knob {
     Explosions,
 }
 
-pub const N: usize = 18;
+pub const N: usize = 19;
 
 impl Knob {
     pub const ALL: [Knob; N] = [
@@ -85,6 +86,7 @@ impl Knob {
         Knob::Sharpen,
         Knob::Fog,
         Knob::Fov,
+        Knob::HudScale,
         Knob::Vignette,
         Knob::Grain,
         Knob::Aberration,
@@ -130,6 +132,7 @@ impl Knob {
         match self {
             Knob::Exposure => format!("{v:+.1} EV"),
             Knob::Fov => format!("{v:.0} deg"),
+            Knob::HudScale => format!("x{v:.1}"),
             Knob::Contrast | Knob::Saturation => format!("{:.0}%", v * 100.0),
             Knob::Explosions if v == 0.0 => "RETAIL".into(),
             _ => format!("{:.0}%", v * 100.0),
@@ -148,6 +151,7 @@ const KNOBS: [Row; N] = [
     ("sharpen", "Sharpening", 0.0, 1.0, 0.05, [0.0, 0.3, 0.5]),
     ("fog", "Distance fog", 0.0, 1.0, 0.05, [0.0, 0.0, 0.25]),
     ("fov", "Field of view", 70.0, 120.0, 1.0, [90.0, 90.0, 90.0]),
+    ("hud_scale", "HUD size", 0.6, 1.6, 0.1, [1.0, 1.0, 1.0]),
     ("vignette", "Vignette", 0.0, 1.0, 0.05, [0.0, 0.3, 0.4]),
     ("grain", "Film grain", 0.0, 1.0, 0.05, [0.0, 0.0, 0.2]),
     ("aberration", "Aberration", 0.0, 1.0, 0.05, [0.0, 0.0, 0.2]),
@@ -366,15 +370,16 @@ impl Graphics {
 
     /// Takes a preset's settings; vsync, the frame limit and the field of view stay.
     pub fn preset(&mut self, p: Preset) {
-        let fov = self.get(Knob::Fov);
+        let (fov, hud) = (self.get(Knob::Fov), self.get(Knob::HudScale));
         self.tone = p.tone();
         self.aa = p.aa();
         self.aniso = p.aniso();
         self.knobs = KNOBS.map(|k| k.5[p as usize]);
         self.knobs[Knob::Fov as usize] = fov;
+        self.knobs[Knob::HudScale as usize] = hud;
     }
 
-    /// The preset these settings are (ignoring vsync, frame limit and field of view).
+    /// The preset these settings are (ignoring vsync, frame limit, field of view and HUD size).
     pub fn which(&self) -> Option<Preset> {
         Preset::ALL.into_iter().find(|&p| {
             let mut q = self.clone();
@@ -461,7 +466,7 @@ struct Fx {
     blur: Vec2,
     /// 1 at the start of a dash, easing to 0 over its burst.
     kick: f32,
-    /// 1 while dead: the view goes grey, dark and soft (the death screen's backdrop).
+    /// 1 while dead: the view goes grey (the death screen's backdrop).
     gray: f32,
 }
 
@@ -1210,6 +1215,7 @@ fn lighting(m: &mut ChildSpawnerCommands) {
     });
     m.spawn(heading("Display"));
     slider(m, Knob::Fov);
+    slider(m, Knob::HudScale);
     // the browser always presents in step with the display and cannot be limited
     if !cfg!(target_arch = "wasm32") {
         m.spawn(row()).with_children(|r| {

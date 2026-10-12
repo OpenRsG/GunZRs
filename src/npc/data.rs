@@ -204,6 +204,8 @@ pub struct ActorDef {
     pub boss: bool,
     /// `sound.die` stem (path as written).
     pub sound_die: String,
+    /// `neverblasted.sound`: the hit sound of a `neverblasted` actor (empty: the metal bullet hit).
+    pub sound_hit: String,
     /// `type` (`barricade`, `radar`, `knifeman`, `honor_item`, ...); empty for the quest actors.
     pub kind: String,
 }
@@ -230,6 +232,7 @@ pub fn parse_actors(xml: &str) -> io::Result<Vec<ActorDef>> {
                 never_blasted: flag(n, "neverblasted"),
                 boss: flag(n, "boss"),
                 sound_die: string(n, "sound.die"),
+                sound_hit: string(n, "neverblasted.sound"),
                 kind: string(n, "type"),
                 name,
             })
@@ -283,6 +286,8 @@ pub struct Skill {
     pub cast_pre_effect: String,
     pub cast_offset_cm: [f32; 3],
     pub sound_explosion: String,
+    /// `effectsound`: played when the effect starts (6 skills).
+    pub sound_effect: String,
     pub resist: u32,
     /// Extra missiles: (delay s after the previous, yaw offset rad).
     pub repeats: Vec<(f32, f32)>,
@@ -334,6 +339,7 @@ pub fn parse_skills(xml: &str) -> io::Result<HashMap<u32, Skill>> {
             cast_pre_effect: string(n, "castingpreeffect"),
             cast_offset_cm: vec3(n, "castingeffectAddPos"),
             sound_explosion: string(n, "sound.explosion"),
+            sound_effect: string(n, "effectsound"),
             resist: num(n, "resisttype") as u32,
             repeats: n
                 .children()

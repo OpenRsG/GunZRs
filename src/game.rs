@@ -212,6 +212,8 @@ pub struct Impact {
     pub point: Vec3,
     pub normal: Vec3,
     pub blade: bool,
+    /// zitem id of the weapon (the spy case's blows sound different).
+    pub item: u32,
 }
 
 /// The locally controlled actor.
@@ -650,6 +652,12 @@ pub enum Cue {
     DryFire { item: u32 },
     /// Verbatim `sound` attribute of the animation that just started (`man_jump`, `fx_dash`).
     Anim(String),
+    /// An emote or taunt clip started (`bow wave cry laugh dance taunt`).
+    Emote(&'static str),
+    /// Landed from a hard fall.
+    HardLand,
+    /// Fell for a long time.
+    FallScream,
 }
 
 #[cfg(test)]

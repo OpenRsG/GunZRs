@@ -10,7 +10,8 @@ use crate::map::Map;
 use crate::session::band;
 use crate::ui::{
     ACCENT, BUTTON, Chosen, Cut, DANGER, DIM, Flat, GOLD, INK, LINE, OK, OnFill, RAISED, SCRIM,
-    TEXT, caption, compact, digits, display, panel, section, shadow, shape, strong, tracking,
+    TEXT, UiSound, caption, compact, cue, digits, display, panel, section, shadow, shape, strong,
+    tracking,
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -198,6 +199,7 @@ pub(super) fn select_ui(
     open: Query<Entity, With<SelectRoot>>,
     cards: Query<(Entity, &Card, &Interaction, Has<Chosen>)>,
     mut count: Query<&mut Text, With<Countdown>>,
+    mut sound: MessageWriter<UiSound>,
 ) {
     let Some(sel) = &blitz.select else {
         for e in &open {
@@ -303,6 +305,7 @@ pub(super) fn select_ui(
             if let Some(s) = &mut blitz.select {
                 s.sel = card.0;
                 s.done = true;
+                sound.write(UiSound(cue::CONFIRM));
             }
         }
         let want = card.0 == chosen;
@@ -454,6 +457,7 @@ pub(super) fn reward_ui(
     blitz: Res<Blitz>,
     camera: Query<Entity, With<Camera3d>>,
     open: Query<(), With<RewardRoot>>,
+    mut sound: MessageWriter<UiSound>,
 ) {
     let Some(p) = &blitz.payout else { return };
     if !open.is_empty() {
@@ -462,6 +466,7 @@ pub(super) fn reward_ui(
     let Ok(camera) = camera.single() else {
         return;
     };
+    sound.write(UiSound(cue::REWARD));
     let r = &blitz.cfg.reward;
     let share = if p.won { r.mvp_win } else { r.mvp_lose };
     let mut rows = vec![];

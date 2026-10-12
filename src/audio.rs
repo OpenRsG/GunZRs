@@ -8,17 +8,22 @@
 
 use crate::{
     actor::{Actor, ActorData},
+    combat::is_melee,
     game::{
-        ActorSound, Blast, Blocked, Cue, Damage, Dead, Fire, Impact, Killed, Loadout, PlaySound,
-        Player, Settings,
+        ActorSound, Afflict, Blast, Blocked, Cue, Damage, Dead, Fire, Impact, Killed, Loadout, Npc,
+        PlaySound, Player, Settings, Team, Vip,
     },
-    item::Item,
+    item::{Item, WeaponKind},
     level::Level,
     map::Map,
+    menu::Mode,
+    modes::{Phase, Round},
     mrs::Vfs,
     phase::{MatchApp, MatchSystems},
     pickup::{Picked, SOUND as PICKUP_SOUND},
     profile::Profile,
+    projectile::Flashed,
+    session::{Clock, Rules},
     view::{SCALE, Shot, to_bevy},
 };
 use bevy::prelude::*;
@@ -53,6 +58,9 @@ impl Plugin for AudioPlugin {
                 (
                     combat_sounds,
                     feedback,
+                    announcer,
+                    status_sounds,
+                    ringing,
                     actor_sounds,
                     requested,
                     later,
@@ -377,9 +385,11 @@ fn ambients(vfs: &Vfs, dir: &str) -> Vec<Ambient> {
 
 fn fire_sound(item: &Item) -> Option<&str> {
     let w = item.weapon.as_ref()?;
-    w.snd_fire
-        .as_deref()
-        .or((item.kind == "melee").then_some("blade_swing"))
+    w.snd_fire.as_deref().or(match w.kind {
+        WeaponKind::Mine => Some("we_trap_fire"),
+        _ if item.kind == "melee" => Some("blade_swing"),
+        _ => None,
+    })
 }
 
 /// Stems in the surface families (`man_fs_l`, `man_jump`, `fx_bullethit`, `fx_slugdrop`).
@@ -408,7 +418,7 @@ const VOICES: [&str; 13] = [
     "fem07",
     "death01_a_male",
 ];
-const MISC: [&str; 16] = [
+const MISC: [&str; 33] = [
     "blade_swing",
     "blade_damage",
     "blade_concrete",
@@ -424,7 +434,46 @@ const MISC: [&str; 16] = [
     "fx_explosion01",
     "we_grenade_explosion",
     "we_flashbang_explosion",
+    "we_trap_fire",
+    "we_trap_explosion",
+    "rubber_damage",
+    "rubber_concrete",
+    "rubber_hangonwall",
+    "we_rubber_smash",
+    "fx_rubber_chargecomplete",
+    "fx_chargecomplete",
+    "fx_blade_sheath",
+    "fx_dagger_sheath",
+    "fx_rubber_sheath",
+    "fx_whoosh01",
+    "fx_flashbang",
+    "we_enfire",
+    "we_enice",
+    "we_enlight",
+    "bind_a_male",
     PICKUP_SOUND,
+];
+/// Narrator lines in use (the words are in `docs/formats.md`), hit beeps and the characters'
+/// voices (`mal|fem` NN, `ooh`).
+const NARRATOR: [u32; 25] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 27, 28, 29, 30, 31, 32,
+];
+const HITS: [&str; 3] = ["hit1", "hit2", "hit3"];
+const CHARACTER: [&str; 14] = [
+    "mal01",
+    "mal02",
+    "mal10",
+    "mal11",
+    "mal12",
+    "mal13",
+    "fem01",
+    "fem02",
+    "fem10",
+    "fem11",
+    "fem12",
+    "fem13",
+    "ooh_male",
+    "ooh_female",
 ];
 
 fn load(
@@ -466,7 +515,10 @@ fn load(
                             .and_then(|v| v.parse::<f32>().ok());
                         let flat = matches!(n.attribute("type"), Some("1" | "3" | "4" | "5"));
                         Some((
-                            n.attribute("NAME")?.to_ascii_lowercase(),
+                            n.attribute("NAME")?
+                                .rsplit('/')
+                                .next()?
+                                .to_ascii_lowercase(),
                             Reach {
                                 max: max.map_or(DEFAULT_REACH, |m| m * SCALE),
                                 flat,
@@ -498,6 +550,14 @@ fn load(
         ),
         ("voices", VOICES.map(String::from).to_vec()),
         ("misc cues", MISC.map(String::from).to_vec()),
+        ("narrator", NARRATOR.map(|n| format!("nar{n:02}")).to_vec()),
+        (
+            "hit beeps, character voices",
+            HITS.iter()
+                .chain(&CHARACTER)
+                .map(|s| s.to_string())
+                .collect(),
+        ),
         (
             "zitem snd_fire/snd_reload/snd_dryfire",
             data.items
@@ -583,9 +643,9 @@ impl Sfx<'_, '_> {
         self.emit(&stem, h, local, at, speed);
     }
 
-    /// The player's own `custom/hitsound.wav`, decoded on first use; a missing or unplayable file
-    /// is logged once and the hit stays silent.
-    fn play_hitsound(&mut self, profile: &Profile) {
+    /// The player's own `custom/hitsound.wav`, decoded on first use; without a playable file
+    /// (logged once) the retail `stock` stem plays instead.
+    fn play_hitsound(&mut self, profile: &Profile, stock: &str) {
         const KEY: &str = "custom/hitsound";
         let h = match self.sounds.cache.get(KEY) {
             Some(h) => h.clone(),
@@ -605,8 +665,9 @@ impl Sfx<'_, '_> {
                 h
             }
         };
-        if let Some(h) = h {
-            self.emit("hitsound", h, true, Vec3::ZERO, 1.0);
+        match h {
+            Some(h) => self.emit("hitsound", h, true, Vec3::ZERO, 1.0),
+            None => self.play(stock, true, Vec3::ZERO),
         }
     }
 
@@ -669,18 +730,27 @@ fn voice(woman: bool) -> &'static str {
     if woman { "fem" } else { "mal" }
 }
 
-/// The player's optional `custom/hitsound.wav` on every hit it lands. (The combo layer's own
-/// kill and spree sounds are `hud/combo.rs`.)
+/// The player's optional `custom/hitsound.wav` on every hit it lands; without one the retail
+/// `hit1` (a hit), `hit2` (a kill) and `hit3` (a headshot kill) stand in (**inferred**: 0.1 s
+/// type 3 beeps listed with `fx_myhit`). (The combo layer's own kill and spree sounds are
+/// `hud/combo.rs`.)
 fn feedback(
     settings: Res<Settings>,
     profile: Res<Profile>,
     mut damage: MessageReader<Damage>,
+    mut killed: MessageReader<Killed>,
     players: Query<(), With<Player>>,
     mut sfx: Sfx,
 ) {
+    let dead: Vec<(Entity, bool)> = killed.read().map(|k| (k.victim, k.head)).collect();
     for d in damage.read() {
         if settings.hit_sound && players.contains(d.attacker) && d.attacker != d.target {
-            sfx.play_hitsound(&profile);
+            let stock = match dead.iter().find(|k| k.0 == d.target) {
+                None => "hit1",
+                Some((_, false)) => "hit2",
+                Some((_, true)) => "hit3",
+            };
+            sfx.play_hitsound(&profile, stock);
         }
     }
 }
@@ -698,7 +768,7 @@ fn combat_sounds(
     mut later: ResMut<Later>,
     transforms: Query<&GlobalTransform>,
     players: Query<(), With<Player>>,
-    loadouts: Query<&Loadout>,
+    npcs: Query<(), With<Npc>>,
     actors: Query<&Actor>,
     mut sfx: Sfx,
 ) {
@@ -740,20 +810,25 @@ fn combat_sounds(
             continue;
         }
         seen.push(d.target);
-        let melee = loadouts.get(d.attacker).ok().is_some_and(|l| {
-            data.items
-                .get(l.slots[l.current].item)
-                .is_some_and(|i| i.kind == "melee")
-        });
+        let kind = data
+            .items
+            .get(d.item)
+            .and_then(|i| i.weapon.as_ref())
+            .map(|w| w.kind);
         sfx.play(
-            if melee { "blade_damage" } else { "hitbody00" },
+            match kind {
+                Some(WeaponKind::SpyCase) => "rubber_damage",
+                Some(k) if is_melee(k) => "blade_damage",
+                _ => "hitbody00",
+            },
             false,
             d.point,
         );
         if players.contains(d.attacker) && d.attacker != d.target {
             sfx.play("fx_myhit", true, d.point);
         }
-        if !dead.contains(&d.target) {
+        // Monsters have their own pain and death sounds (`npc.rs`).
+        if !dead.contains(&d.target) && !npcs.contains(d.target) {
             // Pain grunt, longer for harder hits (**inferred**: `*_shot_01..04` are 0.3-0.8 s).
             let tier = match d.amount {
                 a if a < 10.0 => 1,
@@ -765,7 +840,7 @@ fn combat_sounds(
             sfx.play(&stem, players.contains(d.target), at(d.target));
         }
     }
-    for k in &dead {
+    for k in dead.iter().filter(|k| !npcs.contains(**k)) {
         // No female death clip exists; her longest pain clip stands in (**inferred**).
         let stem = if woman(*k) {
             "fem_shot_04"
@@ -782,7 +857,16 @@ fn combat_sounds(
             break;
         }
         if i.blade {
-            let stem = ["blade_concrete", "fx_bladeon_concrete"][sfx.sounds.rand(2)];
+            let rubber = data
+                .items
+                .get(i.item)
+                .and_then(|i| i.weapon.as_ref())
+                .is_some_and(|w| w.kind == WeaponKind::SpyCase);
+            let stem = if rubber {
+                "rubber_concrete"
+            } else {
+                ["blade_concrete", "fx_bladeon_concrete"][sfx.sounds.rand(2)]
+            };
             sfx.play(stem, false, i.point);
         } else {
             let surf = sfx.surface(i.point, Some(i.normal));
@@ -803,9 +887,10 @@ fn actor_sounds(
     mut respawned: RemovedComponents<Dead>,
     transforms: Query<&GlobalTransform>,
     players: Query<(), With<Player>>,
-    player: Query<(Entity, &Loadout, Has<Dead>), With<Player>>,
-    // the player it was seen on and its weapon (a new match has a new player entity)
-    mut current: Local<Option<(Entity, usize)>>,
+    actors: Query<&Actor>,
+    loadouts: Query<(Entity, &Loadout, Has<Dead>), With<Actor>>,
+    // every actor's weapon slot last frame
+    mut held: Local<HashMap<Entity, usize>>,
     mut sfx: Sfx,
 ) {
     let at = |e: Entity| {
@@ -813,17 +898,25 @@ fn actor_sounds(
             .get(e)
             .map_or(Vec3::ZERO, |t| t.translation() + Vec3::Y)
     };
+    let weapon = |id| data.items.get(id).and_then(|i| i.weapon.as_ref());
     for c in cues.read() {
         let local = players.contains(c.actor);
-        let item = |id| data.items.get(id).and_then(|i| i.weapon.as_ref());
+        let woman = actors.get(c.actor).is_ok_and(|a| a.woman);
+        let v = voice(woman);
+        let spy_case = loadouts.get(c.actor).is_ok_and(|(_, l, _)| {
+            weapon(l.slots[l.current].item).is_some_and(|w| w.kind == WeaponKind::SpyCase)
+        });
         let feet = at(c.actor) - Vec3::Y;
         let name = match &c.cue {
             Cue::Footstep { left } => {
                 let surf = sfx.surface(feet, None);
                 Some(sfx.surfaced(if *left { "man_fs_l" } else { "man_fs_r" }, surf))
             }
-            Cue::Reload { item: i } => item(*i).and_then(|w| w.snd_reload.clone()),
-            Cue::DryFire { item: i } => item(*i).and_then(|w| w.snd_dryfire.clone()),
+            Cue::Reload { item: i } => weapon(*i).and_then(|w| w.snd_reload.clone()),
+            Cue::DryFire { item: i } => weapon(*i).and_then(|w| w.snd_dryfire.clone()),
+            // The spy case has its own blunt versions of three blade cues (**inferred** from
+            // the `rubber_*` names and its `smash` clip being the `uppercut` one).
+            Cue::Anim(s) if spy_case && rubber(s).is_some() => rubber(s).map(str::to_owned),
             // Animation sounds with surface files (`man_jump`) use the floor under the actor.
             Cue::Anim(s)
                 if sfx
@@ -834,6 +927,19 @@ fn actor_sounds(
                 Some(sfx.surfaced(&s.to_ascii_lowercase(), surf))
             }
             Cue::Anim(s) => Some(s.clone()),
+            // Character voices `mal|fem NN` (**inferred** from clip classification: 01 a
+            // chuckle, 02 crying, 10 a 4 s scream, 11-13 spoken lines).
+            Cue::Emote("laugh") => Some(format!("{v}01")),
+            Cue::Emote("cry") => Some(format!("{v}02")),
+            Cue::Emote("taunt") => Some(format!("{v}1{}", 1 + sfx.sounds.rand(3))),
+            Cue::Emote(_) => None,
+            Cue::HardLand => Some(if woman { "ooh_female" } else { "ooh_male" }.to_owned()),
+            Cue::FallScream => {
+                if local {
+                    sfx.play("fx_whoosh01", true, Vec3::ZERO);
+                }
+                Some(format!("{v}10"))
+            }
         };
         if let Some(name) = name {
             sfx.play(&name, local, at(c.actor));
@@ -847,12 +953,248 @@ fn actor_sounds(
             sfx.play("fx_respawn", true, Vec3::ZERO);
         }
     }
-    // Weapon switch: `we_weapon_rdy` (a short 2D click, **inferred** from the name).
-    if let Ok((e, l, dead)) = player.single() {
-        if current.is_some_and(|(pe, c)| pe == e && c != l.current) && !dead {
-            sfx.play("we_weapon_rdy", true, Vec3::ZERO);
+    // Weapon switch: `we_weapon_rdy` (a short click, **inferred** from the name) and, when a
+    // blade is put away, its `fx_*_sheath` (**inferred**: blade/katana, dagger, spy case).
+    for (e, l, dead) in &loadouts {
+        if let Some(&was) = held.get(&e)
+            && was != l.current
+            && !dead
+        {
+            let local = players.contains(e);
+            // a type 3 (2D stereo) file with no 3D twin: only the player's own switch sounds
+            if local {
+                sfx.play("we_weapon_rdy", true, Vec3::ZERO);
+            }
+            let sheath = match l
+                .slots
+                .get(was)
+                .and_then(|s| weapon(s.item))
+                .map(|w| w.kind)
+            {
+                Some(WeaponKind::Katana | WeaponKind::DoubleKatana) => Some("fx_blade_sheath"),
+                Some(WeaponKind::Dagger) => Some("fx_dagger_sheath"),
+                Some(WeaponKind::SpyCase) => Some("fx_rubber_sheath"),
+                _ => None,
+            };
+            if let Some(s) = sheath {
+                sfx.play(s, local, at(e));
+            }
         }
-        *current = Some((e, l.current));
+        held.insert(e, l.current);
+    }
+    held.retain(|e, _| loadouts.contains(*e));
+}
+
+/// The spy case's own cue for a blade cue.
+fn rubber(blade: &str) -> Option<&'static str> {
+    match blade {
+        "uppercut" => Some("we_rubber_smash"),
+        "hangonwall" => Some("rubber_hangonwall"),
+        "fx_chargecomplete" => Some("fx_rubber_chargecomplete"),
+        _ => None,
+    }
+}
+
+/// Kills within this many seconds of each other chain into a multikill (the combo layer's
+/// own window).
+const CHAIN_SECS: f32 = 4.0;
+
+/// Narrator state: the player's kill chain and spree, and the round state last seen.
+#[derive(Default)]
+struct Announcer {
+    last_kill: f32,
+    chain: u32,
+    spree: u32,
+    round: Option<(Phase, u32)>,
+    wins: [u32; 2],
+    over: bool,
+}
+
+/// The narrator (`nar/narNN`, type 1 = 2D; the words are **observed** by transcribing the
+/// clips, which event says them is **inferred**): praise on the player's kills, headshots,
+/// multikills and sprees, the round flow, VIP and berserker kills, the match result.
+#[allow(clippy::too_many_arguments)]
+fn announcer(
+    settings: Res<Settings>,
+    time: Res<Time>,
+    rules: Option<Res<Rules>>,
+    round: Option<Res<Round>>,
+    clock: Option<Res<Clock>>,
+    mut killed: MessageReader<Killed>,
+    players: Query<(), With<Player>>,
+    mine: Query<&Team, With<Player>>,
+    vips: Query<&Team, With<Vip>>,
+    mut a: Local<Announcer>,
+    mut sfx: Sfx,
+) {
+    let now = time.elapsed_secs();
+    let say = |sfx: &mut Sfx, n: u32| sfx.play(&format!("nar{n:02}"), true, Vec3::ZERO);
+    for k in killed.read() {
+        if players.contains(k.victim) {
+            (a.chain, a.spree) = (0, 0);
+        }
+        // a VIP falling at a round's reset is not a kill
+        if let Ok(team) = vips.get(k.victim)
+            && round.as_ref().is_some_and(|r| r.phase == Phase::Live)
+        {
+            say(&mut sfx, if *team == Team::Red { 19 } else { 20 });
+        }
+        if !players.contains(k.killer) || k.killer == k.victim {
+            continue;
+        }
+        a.chain = if now - a.last_kill < CHAIN_SECS {
+            a.chain + 1
+        } else {
+            1
+        };
+        (a.last_kill, a.spree) = (now, a.spree + 1);
+        if !settings.kill_sounds {
+            continue;
+        }
+        // the sprees of the combo layer: Rampage 5, Dominating 7, Unstoppable 10
+        let line = match (a.spree, a.chain) {
+            (5, _) => Some(31),
+            (7, _) => Some(32),
+            (10, _) => Some(30),
+            (_, 2) => Some(7),
+            (_, 3) => Some(8),
+            (_, 4..) => Some(9),
+            _ if k.head => Some(6),
+            // praise on every other plain kill
+            _ if sfx.sounds.rand(2) == 0 => Some(1 + sfx.sounds.rand(4) as u32),
+            _ => None,
+        };
+        if let Some(n) = line {
+            say(&mut sfx, n);
+        }
+    }
+    let (Some(rules), Some(round)) = (rules, round) else {
+        return;
+    };
+    let now_round = (round.phase, round.n);
+    if a.round != Some(now_round) {
+        if rules.mode.rounds() {
+            let teams = rules.mode.teams() && !matches!(rules.mode, Mode::Spy | Mode::Infected);
+            match round.phase {
+                Phase::Ready => {
+                    // the round that can end the match; a duel's next challenger
+                    let last = teams
+                        && rules.kill_limit.is_some_and(|n| {
+                            round.wins.iter().max().copied().unwrap_or(0) + 1 >= n
+                        });
+                    say(
+                        &mut sfx,
+                        if last {
+                            27
+                        } else if rules.mode.duel() && round.n > 1 {
+                            18
+                        } else {
+                            10
+                        },
+                    );
+                }
+                Phase::Live => say(&mut sfx, 11),
+                Phase::Over => {
+                    let winner = (0..2).find(|&i| round.wins[i] > a.wins[i]);
+                    let line = match (round.title(), winner) {
+                        ("ROUND DRAWN", _) => Some(16),
+                        ("RED TEAM WINS", _) => Some(14),
+                        ("BLUE TEAM WINS", _) => Some(15),
+                        ("ROUND WON", _) if now - a.last_kill < 0.3 && teams => Some(5),
+                        (_, Some(i)) if teams => Some(14 + i as u32),
+                        ("ROUND WON", _) => Some(12),
+                        ("ROUND LOST", _) => Some(13),
+                        _ => None,
+                    };
+                    if let Some(n) = line {
+                        say(&mut sfx, n);
+                    }
+                }
+                Phase::Done => {}
+            }
+        }
+        a.wins = round.wins;
+        a.round = Some(now_round);
+    }
+    // The other modes' result; the round modes said theirs when the last round ended.
+    let over = clock.as_ref().is_some_and(|c| c.over.is_some());
+    if over && !a.over && !rules.mode.rounds() {
+        let mine = mine.single().ok().copied().filter(|_| rules.mode.teams());
+        let line = match (clock.and_then(|c| c.over.clone()).as_deref(), mine) {
+            (Some("VICTORY"), Some(Team::Red)) => 14,
+            (Some("VICTORY"), Some(Team::Blue)) => 15,
+            (Some("DEFEAT"), Some(Team::Red)) => 15,
+            (Some("DEFEAT"), Some(Team::Blue)) => 14,
+            (Some("VICTORY"), _) => 12,
+            (Some("DEFEAT"), _) => 13,
+            _ => 16,
+        };
+        say(&mut sfx, line);
+    }
+    a.over = over;
+}
+
+/// Status effects as sound: `we_enfire` (burning), `we_enice` (slowed), `we_enlight` (stunned),
+/// `bind_a_male` (rooted); **inferred** from the names, the only data users of the `we_en*` set
+/// are NPC skills (`system/zskill.xml` `sound.explosion`), which `npc.rs` plays itself.
+fn status_sounds(
+    mut afflicted: MessageReader<Afflict>,
+    transforms: Query<&GlobalTransform>,
+    players: Query<(), With<Player>>,
+    npcs: Query<(), With<Npc>>,
+    mut sfx: Sfx,
+) {
+    for f in afflicted.read() {
+        if npcs.contains(f.by) {
+            continue;
+        }
+        let stem = if f.dot > 0.0 {
+            "we_enfire"
+        } else if f.stun {
+            "we_enlight"
+        } else if f.root {
+            "bind_a_male"
+        } else if f.slow < 1.0 {
+            "we_enice"
+        } else {
+            continue;
+        };
+        let at = transforms
+            .get(f.target)
+            .map_or(Vec3::ZERO, |t| t.translation() + Vec3::Y);
+        sfx.play(stem, players.contains(f.target), at);
+    }
+}
+
+/// The ringing in the player's ears while a flashbang blinds it: `fx_flashbang` (type 4, a 2D
+/// loop; **inferred** trigger).
+#[derive(Component)]
+struct Ringing;
+
+fn ringing(
+    mut sfx: Sfx,
+    added: Query<(), (Added<Flashed>, With<Player>)>,
+    blind: Query<(), (With<Flashed>, With<Player>)>,
+    live: Query<Entity, With<Ringing>>,
+) {
+    if blind.is_empty() {
+        for e in &live {
+            sfx.commands.entity(e).despawn();
+        }
+    } else if !added.is_empty() && live.is_empty() {
+        let Some(h) = sfx
+            .sounds
+            .handle(&sfx.level.vfs, &mut sfx.assets, "fx_flashbang")
+        else {
+            return;
+        };
+        if sfx.shot.is_some() {
+            info!("sfx fx_flashbang (2D loop)");
+            sfx.commands.spawn(Ringing);
+        } else {
+            sfx.commands
+                .spawn((Ringing, AudioPlayer::new(h), PlaybackSettings::LOOP));
+        }
     }
 }
 

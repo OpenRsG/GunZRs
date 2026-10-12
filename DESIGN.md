@@ -50,7 +50,8 @@ Angular, never rounded: `ui::Cut::Chamfer` for panels and hero frames, `Notch` f
 secondary buttons, `Slant` for choice buttons; `ui::shape` draws them, so a shaped node keeps its
 `BackgroundColor` clear. A selected choice is filled with the accent and its label turns
 `ON_ACCENT`; values on a scale are segment bars (`ui::segs`). Faint diagonal hatching
-(`ui::hatch`) fills empty art frames and section rules; the hazard band (`ui::hazard`) marks the
+(`ui::hatch`) fills empty art frames and section rules, and stands in for a map's picture that was
+not rendered (`ui::art` crops one to a box); the hazard band (`ui::hazard`) marks the
 top edge and the SELECTED flag. One entrance per event with `ui::ease_out` (transform and alpha
 only, 150 ms or less), then hold and fade. Feedback for an action (saved, purchased, sold) is a
 short toast, not a permanent line.

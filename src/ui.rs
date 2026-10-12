@@ -337,6 +337,22 @@ pub fn hatch(color: Color) -> ImageNode {
     tiled(HATCH, color)
 }
 
+/// A map's picture ([`crate::view::PREVIEW`]) filling a `w` x `h` box, cropped around its centre
+/// to the box's shape; `tint` multiplies it (white as is).
+pub fn art(image: Handle<Image>, w: f32, h: f32, tint: Color) -> ImageNode {
+    let full = Vec2::new(crate::view::PREVIEW.0 as f32, crate::view::PREVIEW.1 as f32);
+    let keep = if w / h > full.x / full.y {
+        Vec2::new(full.x, full.x * h / w)
+    } else {
+        Vec2::new(full.y * w / h, full.y)
+    };
+    ImageNode {
+        rect: Some(Rect::from_center_size(full / 2.0, keep)),
+        color: tint,
+        ..ImageNode::new(image)
+    }
+}
+
 /// The orange and black hazard band (top edge of the screen, the SELECTED flag).
 pub fn hazard() -> ImageNode {
     tiled(HAZARD, Color::WHITE)

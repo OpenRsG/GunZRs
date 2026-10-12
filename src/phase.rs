@@ -38,7 +38,7 @@ use crate::{
     quest::{self, Quest},
     session::{Clock, PauseAt, Rules, StartVitals, band},
     ui::{
-        ACCENT, BACKDROP, Cut, DIM, INK, SURFACE, Segs, caption, display, hatch, mono, segs,
+        self, ACCENT, BACKDROP, Cut, DIM, INK, SURFACE, Segs, caption, display, hatch, mono, segs,
         shadow, shape, strong, tracking,
     },
     view::{self, Shot},
@@ -565,6 +565,7 @@ fn spawn_loading(
     mut images: ResMut<Assets<Image>>,
     shot: Option<Res<Shot>>,
     launch: Res<Launch>,
+    profile: Res<Profile>,
 ) {
     commands.insert_resource(ClearColor(BACKDROP));
     let camera = view::spawn_camera(
@@ -575,18 +576,31 @@ fn spawn_loading(
         Vec3::NEG_Z,
     )
     .id();
-    loading_screen(&mut commands, camera, &launch.config, true);
+    let art = map_art(&profile, &launch.config).map(|i| images.add(i));
+    loading_screen(&mut commands, camera, &launch.config, true, art);
+}
+
+/// The picture of the map the loading screen is for ([`Profile::preview`]); a quest or a LAN
+/// join has no map of its own.
+fn map_art(profile: &Profile, c: &Config) -> Option<Image> {
+    match (&c.net, &c.scenario, &c.map) {
+        (Some(Net::Join(_)), ..) => None,
+        (_, Some(_), _) if c.mode == Mode::Quest => None,
+        (_, _, Some(map)) => profile.preview(map),
+        _ => None,
+    }
 }
 
 /// The loading screen, in the menu's look (a 1920 x 1080 canvas): the map's name huge in display,
-/// the mode, a segment bar and the step being read in mono, and a hatched frame where the map's
-/// preview would go (the data has none). `live` lets [`loading_ui`] drive the bar; without it
+/// the mode, a segment bar and the step being read in mono, and the map's picture in a frame
+/// (`art`; a hatch when it was not made). `live` lets [`loading_ui`] drive the bar; without it
 /// the bar is full: that is the [`Cover`].
 fn loading_screen<'a>(
     commands: &'a mut Commands,
     camera: Entity,
     c: &Config,
     live: bool,
+    art: Option<Handle<Image>>,
 ) -> EntityCommands<'a> {
     let (title, line) = match (&c.net, &c.scenario, &c.map) {
         (Some(Net::Join(_)), ..) => ("LAN match".to_owned(), "Joining the host".to_owned()),
@@ -664,15 +678,18 @@ fn loading_screen<'a>(
                 ..default()
             },
             shape(Cut::Chamfer(18), SURFACE),
-            children![(
-                Node {
-                    width: percent(100),
-                    height: percent(100),
-                    ..default()
-                },
-                hatch(Color::srgba(1.0, 1.0, 1.0, 0.005)),
-            )],
-        ));
+        ))
+        .with_children(|frame| {
+            let inner = Node {
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            };
+            match art {
+                Some(pic) => frame.spawn((inner, ui::art(pic, 596.0, 396.0, Color::WHITE))),
+                None => frame.spawn((inner, hatch(Color::srgba(1.0, 1.0, 1.0, 0.005)))),
+            };
+        });
     });
     root
 }
@@ -869,8 +886,10 @@ fn enter_match(world: &mut World) {
         .query_filtered::<Entity, With<Camera3d>>()
         .single(world)
     {
+        let art = map_art(world.resource::<Profile>(), &config)
+            .map(|i| world.resource_mut::<Assets<Image>>().add(i));
         let mut commands = world.commands();
-        loading_screen(&mut commands, camera, &config, false).insert((
+        loading_screen(&mut commands, camera, &config, false, art).insert((
             Cover(0),
             BackgroundColor(BACKDROP),
             GlobalZIndex(1000),

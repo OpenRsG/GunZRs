@@ -38,6 +38,12 @@ cargo run --release --bin gunz-play -- "/path/to/GUNZ THE DUEL"
 The menu, the loading screen (map name, step and a bar) and the match share one window and one
 process: START, MAIN MENU and PLAY AGAIN never close and reopen it.
 
+The map tiles, the MATCH banner and the loading screen show a picture of each map. The retail
+data has none, so they are rendered from your own install once (under a minute, 960x540 PNGs in
+`previews/` beside your profile file, never committed): `./start.sh` does it when pictures are
+missing, or run `cargo run --release --bin gunz -- --previews` and then start the game. Without a
+picture (and in the browser build) a hatch stands in.
+
 | Steam install | `GAME` folder |
 |---|---|
 | Linux (native) | `~/.steam/steam/steamapps/common/GUNZ THE DUEL` |

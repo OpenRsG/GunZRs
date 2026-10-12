@@ -620,12 +620,22 @@ bar (`into/need`), the name and the level badge, all from the profile; at the bo
 `MAP // MODE // N BOTS · SKILL` summary, JOIN LAN, HOST LAN and START. F1-F7 switch pages, Enter
 starts (neither while the clan name is typed), the first Esc toasts "PRESS ESC AGAIN TO QUIT" and a
 second within 2 s quits; `menu::Toast` messages are drawn above the footer for 2.2 s.
-The MATCH page (`src/menu/matchpage.rs`): `01 MAP` is a 5-column grid of 141x104 tiles (hatched art
-area, index, name) with RANDOM; the hero shows "MAP NN / N", the map name and `MODE · TIME · KILLS`;
+The MATCH page (`src/menu/matchpage.rs`): `01 MAP` is a 5-column grid of 141x104 tiles (the map's
+picture, index, name) with RANDOM; the hero shows "MAP NN / N", the map name and `MODE · TIME · KILLS`
+over the chosen map's picture (faded to the backdrop at its left and bottom);
 `02 RULES` has the 18 mode buttons, the mode's description and four stepper wells (time limit, kill
-limit, bots, bot skill) with segment bars. The tiles carry no map picture: the retail `banner_<map>.tga`
-strips (360x32, name baked in) exist for 21 of the 30 maps and `minimap_<map>.bmp` (a top-down plan)
-for 17, so a hatch stands in. The retail `defaultbutton_*` textures and `bg_play.png` (the old lobby
+limit, bots, bot skill) with segment bars. **Map previews** (not retail, own design): the data has no
+map picture (the retail `banner_<map>.tga` strips, 360x32 with the name baked in, exist for 21 of the
+30 maps and `minimap_<map>.bmp`, a top-down plan, for 17), so `gunz --previews` renders one 960x540
+PNG per map from the install into `previews/<map>.png` beside the profile file (`GUNZ_PROFILE`
+moves it), skipping maps that have one; `start.sh` runs it. Each is a `gunz MAP --vantage --shot`
+run of the map viewer (no characters, HUD or post effects). **Inferred** camera (`Level::vantage`):
+every spawn dummy at 1.6 m, looking along its own direction and 20 and 40 degrees to either side;
+the view whose 15 rays over the lens's 90 degrees travel farthest through the drawn polygons wins
+(a hit counts up to 25 m, a miss 2 m, so void and sky score low). The collision mesh is not used:
+its invisible walls made Stairway a black picture. The menu tiles (dimmed until chosen or hovered),
+the hero and the loading screen use it (a hatch where it is missing and in the browser build);
+Quest mode and LAN joins have no map picture. The retail `defaultbutton_*` textures and `bg_play.png` (the old lobby
 backdrop) are unused. No font file exists in the archives (`*.ttf` absent; the retail UI uses system
 fonts such as the `FONTb20b` of `combatinterface.xml`), so text uses the fonts of `ui.rs`. Maps are
 the 30 directories under `maps/` holding an `.RS` file; weapon

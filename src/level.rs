@@ -56,6 +56,68 @@ impl Level {
             spawns
         }
     }
+
+    /// Where a picture of the map is taken from, as (eye, direction) in Bevy space: of every
+    /// spawn point at eye height, looking where the map's designers aimed it (and 20 and 40
+    /// degrees to either side), the view that stays open longest over the 90 degrees the lens
+    /// sees, measured on the drawn polygons (the collision mesh has invisible walls). A ray
+    /// that hits nothing sees sky or void, so it counts as a wall 2 m away; hits count up to
+    /// 25 m.
+    pub fn vantage(&self) -> (Vec3, Vec3) {
+        let map = &self.map;
+        let tris: Vec<[Vec3; 3]> = map
+            .polygons
+            .iter()
+            .flat_map(|p| {
+                let v = &map.vertices[p.first as usize..(p.first + p.count) as usize];
+                let at = |i: usize| Vec3::from(to_bevy(v[i].pos)) * SCALE;
+                (1..v.len().saturating_sub(1)).map(move |i| [at(0), at(i), at(i + 1)])
+            })
+            .collect();
+        let mut best = (-1.0, (Vec3::Y * 1.6, Vec3::NEG_Z));
+        for (feet, dir) in self.spawn_points() {
+            let eye = feet + Vec3::Y * 1.6;
+            for turn in [0.0f32, -20.0, 20.0, -40.0, 40.0] {
+                let yaw = (-dir.x).atan2(-dir.z) + turn.to_radians();
+                let mut open = 0.0;
+                for side in [-35.0f32, -17.0, 0.0, 17.0, 35.0] {
+                    for pitch in [-12.0f32, 0.0, 12.0] {
+                        let ray = Quat::from_euler(
+                            EulerRot::YXZ,
+                            yaw + side.to_radians(),
+                            pitch.to_radians(),
+                            0.0,
+                        ) * Vec3::NEG_Z;
+                        open += nearest(&tris, eye, ray).map_or(2.0, |d| d.min(25.0));
+                    }
+                }
+                if open > best.0 {
+                    best = (open, (eye, Quat::from_rotation_y(yaw) * Vec3::NEG_Z));
+                }
+            }
+        }
+        best.1
+    }
+}
+
+/// Distance along `dir` to the nearest triangle in `tris`, both sides (Moller-Trumbore).
+fn nearest(tris: &[[Vec3; 3]], from: Vec3, dir: Vec3) -> Option<f32> {
+    tris.iter()
+        .filter_map(|&[a, b, c]| {
+            let (e1, e2) = (b - a, c - a);
+            let p = dir.cross(e2);
+            let det = e1.dot(p);
+            if det.abs() < 1e-9 {
+                return None;
+            }
+            let s = from - a;
+            let u = s.dot(p) / det;
+            let q = s.cross(e1);
+            let v = dir.dot(q) / det;
+            let t = e2.dot(q) / det;
+            (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0).then_some(t)
+        })
+        .min_by(f32::total_cmp)
 }
 
 /// Registers the map material and its embedded shader. The map and its props are spawned by
@@ -255,5 +317,28 @@ pub fn spawn_level(
                 two_sided: m.two_sided,
             })),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ray_finds_the_nearest_triangle_from_either_side() {
+        let tri = |z| {
+            [
+                Vec3::new(-1.0, -1.0, z),
+                Vec3::new(1.0, -1.0, z),
+                Vec3::new(0.0, 1.0, z),
+            ]
+        };
+        let tris = [tri(-5.0), tri(-3.0)];
+        assert_eq!(nearest(&tris, Vec3::ZERO, Vec3::NEG_Z), Some(3.0));
+        assert_eq!(nearest(&tris, Vec3::ZERO, Vec3::Z), None);
+        assert_eq!(
+            nearest(&tris, Vec3::new(0.0, 0.0, -4.0), Vec3::Z),
+            Some(1.0)
+        );
     }
 }

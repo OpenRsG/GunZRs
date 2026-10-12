@@ -1045,6 +1045,8 @@ impl Plugin for MenuPlugin {
                     chrome::quiet_look,
                     chrome::mark,
                     matchpage::bars,
+                    matchpage::art_look,
+                    matchpage::hero,
                     chrome::toast,
                     preview,
                     demo,
@@ -1167,7 +1169,14 @@ fn build(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     shot: Option<Res<Shot>>,
+    previews: Option<Res<matchpage::Previews>>,
 ) {
+    // the maps' pictures are read once (they are the same on every visit)
+    let art = previews.as_deref().cloned().unwrap_or_else(|| {
+        let art = matchpage::Previews::load(&profile, &cat, &mut images);
+        commands.insert_resource(art.clone());
+        art
+    });
     commands.insert_resource(shop::Icons::load(&cat.vfs, &data, &mut images));
     let clan_art =
         ClanArt::load(&cat.vfs, &mut images).unwrap_or_else(|e| panic!("clan data: {e}"));
@@ -1280,7 +1289,7 @@ fn build(
                             },
                         ));
                     });
-                matchpage::fill(p, cfg, &cat, &profile);
+                matchpage::fill(p, cfg, &cat, &profile, &art);
             });
             root.spawn(page_gap(Page::Player, 20.0))
                 .with_children(|p| player::fill(p, cfg, &cat, &profile));

@@ -196,6 +196,18 @@ impl Profile {
         Some(base.join("gunzrs").join("profile.txt"))
     }
 
+    /// `previews/` beside the profile file, where the maps' pictures live (`gunz --previews`
+    /// makes them); `None` for a throwaway profile and in the browser.
+    pub fn previews(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.with_file_name("previews"))
+    }
+
+    /// The picture of map `name` (`view::PREVIEW` px), if it was made.
+    pub fn preview(&self, name: &str) -> Option<Image> {
+        let png = fs::read(self.previews()?.join(format!("{name}.png"))).ok()?;
+        crate::view::decode(&png, "png", true, bevy::image::ImageSampler::linear())
+    }
+
     /// The saved profile (a new one if the file does not exist). Panics on an unreadable or
     /// corrupt file rather than overwrite it later. `headless`: no file unless `GUNZ_PROFILE`.
     pub fn open(headless: bool) -> Self {

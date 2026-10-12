@@ -4,7 +4,7 @@
 use super::*;
 use crate::ui::{
     self, ACCENT, BACKDROP, Cut, DIM, INK, MUTE, OnFill, SURFACE, Segs, TEXT, button, caption,
-    digits, flat_cut, hatch, hazard, mono, section, segs, shape, strong, tracking,
+    digits, flat_cut, hatch, hazard, mono, section, segs, shadow, shape, strong, tracking,
 };
 
 /// The segment bar of a stepper; [`bars`] lights it from the config.
@@ -23,6 +23,59 @@ fn frame(w: f32, h: f32) -> impl Bundle {
             ..default()
         },
         shape(Cut::Chamfer(18), SURFACE.with_alpha(0.62)),
+    )
+}
+
+/// The pictures of the maps ([`Profile::preview`]), in `Catalog::maps` order; `None` where one
+/// was not made (the tile then shows the hatch).
+#[derive(Resource, Clone)]
+pub(super) struct Previews(Vec<Option<Handle<Image>>>);
+
+impl Previews {
+    pub(super) fn load(profile: &Profile, cat: &Catalog, images: &mut Assets<Image>) -> Self {
+        Self(
+            cat.maps
+                .iter()
+                .map(|m| profile.preview(m).map(|i| images.add(i)))
+                .collect(),
+        )
+    }
+}
+
+/// A map tile's picture, dimmed until the tile is chosen or hovered ([`art_look`]).
+#[derive(Component)]
+pub(super) struct MapArt;
+
+/// The picture behind the hero's map name ([`hero`]).
+#[derive(Component)]
+pub(super) struct HeroArt;
+
+/// A tile's picture when it is neither chosen nor hovered.
+const DIMMED: Color = Color::srgb(0.65, 0.65, 0.65);
+
+/// The chosen map's picture; none in Quest mode (it has no map of its own) or if it was not made.
+fn shown(cfg: &Config, cat: &Catalog, art: &Previews) -> Option<Handle<Image>> {
+    let at = cat.maps.iter().position(|m| Some(m) == cfg.map.as_ref())?;
+    art.0[at].clone().filter(|_| cfg.mode != Mode::Quest)
+}
+
+/// A full-size gradient from the backdrop at alpha `a[0]` through `a[1]` to `a[2]`, drawn over
+/// the hero's picture.
+fn fade(gradient: fn(Vec<ColorStop>) -> LinearGradient, a: [f32; 3]) -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            top: px(0),
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        },
+        BackgroundGradient::from(gradient(vec![
+            ColorStop::new(BACKDROP.with_alpha(a[0]), percent(0)),
+            ColorStop::new(BACKDROP.with_alpha(a[1]), percent(50)),
+            ColorStop::new(BACKDROP.with_alpha(a[2]), percent(100)),
+        ])),
     )
 }
 
@@ -97,8 +150,15 @@ fn well(
 
 /// The page's panels, children of the MATCH [`PageRoot`]. The caller adds the quest panel
 /// (`ModeShow(true)`), which takes the map panel's place in Quest mode.
-pub(super) fn fill(p: &mut ChildSpawnerCommands, cfg: &Config, cat: &Catalog, profile: &Profile) {
+pub(super) fn fill(
+    p: &mut ChildSpawnerCommands,
+    cfg: &Config,
+    cat: &Catalog,
+    profile: &Profile,
+    art: &Previews,
+) {
     let ctx = (cfg, cat, profile);
+    let shown = shown(cfg, cat, art);
     p.spawn((ModeShow(false), frame(800.0, 804.0)))
         .with_children(|m| {
             m.spawn(section(1, "MAP")).with_children(|s| {
@@ -118,22 +178,26 @@ pub(super) fn fill(p: &mut ChildSpawnerCommands, cfg: &Config, cat: &Catalog, pr
             })
             .with_children(|g| {
                 for (i, name) in cat.maps.iter().enumerate() {
-                    g.spawn((
-                        Act::Map(i),
-                        flat_cut(141.0, 104.0, Cut::Notch(12)),
-                        children![
-                            (
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: px(0),
-                                    top: px(0),
-                                    width: percent(100),
-                                    height: px(62),
-                                    ..default()
-                                },
-                                hatch(Color::srgba(1.0, 1.0, 1.0, 0.006))
-                            ),
-                            (
+                    let pic = &art.0[i];
+                    g.spawn((Act::Map(i), flat_cut(141.0, 104.0, Cut::Notch(12))))
+                        .with_children(|t| {
+                            let top = Node {
+                                position_type: PositionType::Absolute,
+                                left: px(0),
+                                top: px(0),
+                                width: percent(100),
+                                height: px(62),
+                                ..default()
+                            };
+                            match pic {
+                                Some(img) => t.spawn((
+                                    MapArt,
+                                    top,
+                                    ui::art(img.clone(), 141.0, 62.0, DIMMED),
+                                )),
+                                None => t.spawn((top, hatch(Color::srgba(1.0, 1.0, 1.0, 0.006)))),
+                            };
+                            t.spawn((
                                 Node {
                                     position_type: PositionType::Absolute,
                                     top: px(8),
@@ -142,9 +206,10 @@ pub(super) fn fill(p: &mut ChildSpawnerCommands, cfg: &Config, cat: &Catalog, pr
                                 },
                                 Text::new(format!("{:02}", i + 1)),
                                 mono(11.0),
-                                TextColor(MUTE)
-                            ),
-                            (
+                                TextColor(if pic.is_some() { TEXT } else { MUTE }),
+                                shadow(),
+                            ));
+                            t.spawn((
                                 Node {
                                     position_type: PositionType::Absolute,
                                     left: px(12),
@@ -154,10 +219,9 @@ pub(super) fn fill(p: &mut ChildSpawnerCommands, cfg: &Config, cat: &Catalog, pr
                                 Text::new(title(name)),
                                 strong(15.0),
                                 TextColor(TEXT),
-                                OnFill
-                            ),
-                        ],
-                    ));
+                                OnFill,
+                            ));
+                        });
                 }
             });
         });
@@ -200,6 +264,33 @@ pub(super) fn fill(p: &mut ChildSpawnerCommands, cfg: &Config, cat: &Catalog, pr
                             ColorStop::new(Color::srgb(0.039, 0.043, 0.051), percent(100)),
                         ],
                     ))
+                ),
+                (
+                    HeroArt,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(0),
+                        top: px(0),
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                    ui::art(
+                        shown.clone().unwrap_or_default(),
+                        1016.0,
+                        330.0,
+                        Color::WHITE
+                    ),
+                    if shown.is_some() {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    },
+                    // the name stays readable: the left and the bottom fade to the backdrop
+                    children![
+                        fade(LinearGradient::to_right, [0.9, 0.55, 0.05]),
+                        fade(LinearGradient::to_bottom, [0.0, 0.1, 1.0])
+                    ]
                 ),
                 (
                     Node {
@@ -333,5 +424,51 @@ pub(super) fn bars(state: Res<State>, mut bars: Query<(&SegOf, &mut Segs)>) {
             _ => (cfg.skill * 10.0).round() as usize,
         };
         s.set_if_neq(Segs { lit });
+    }
+}
+
+/// Dims the pictures of the map tiles that are neither chosen nor hovered.
+pub(super) fn art_look(
+    tiles: Query<(&Act, &Interaction, Has<Chosen>, &Children)>,
+    mut art: Query<&mut ImageNode, With<MapArt>>,
+) {
+    for (act, hover, chosen, kids) in &tiles {
+        let tint = match (act, chosen, hover) {
+            (Act::Map(_), true, _) => Color::WHITE,
+            (Act::Map(_), _, Interaction::None) => DIMMED,
+            (Act::Map(_), ..) => Color::srgb(0.8, 0.8, 0.8),
+            _ => continue,
+        };
+        for &kid in kids {
+            if let Ok(mut pic) = art.get_mut(kid)
+                && pic.color != tint
+            {
+                pic.color = tint;
+            }
+        }
+    }
+}
+
+/// Shows the chosen map's picture in the hero.
+pub(super) fn hero(
+    state: Res<State>,
+    cat: Res<Catalog>,
+    art: Res<Previews>,
+    mut hero: Single<(&mut ImageNode, &mut Visibility), With<HeroArt>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+    let (node, vis) = &mut *hero;
+    match shown(&state.cfg, &cat, &art) {
+        Some(pic) => {
+            if node.image != pic {
+                node.image = pic;
+            }
+            vis.set_if_neq(Visibility::Inherited);
+        }
+        None => {
+            vis.set_if_neq(Visibility::Hidden);
+        }
     }
 }

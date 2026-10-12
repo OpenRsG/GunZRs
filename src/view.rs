@@ -188,6 +188,9 @@ fn take_shot(
     }
 }
 
+/// Size of a map's picture (`Profile::preview`).
+pub const PREVIEW: (u32, u32) = (960, 540);
+
 /// Size of a headless `--shot` image: 1280x720, or `GUNZ_SHOT_SIZE=WxH` (to check small windows).
 pub fn shot_size() -> (u32, u32) {
     std::env::var("GUNZ_SHOT_SIZE")

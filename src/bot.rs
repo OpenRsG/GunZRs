@@ -294,6 +294,10 @@ struct BotAi {
     /// Technique move in progress and seconds until the next roll.
     moves: Option<Moves>,
     move_cd: f32,
+    /// Aim error (yaw, pitch rad), the error it drifts to and seconds until a new one is picked.
+    aim: Vec2,
+    aim_goal: Vec2,
+    aim_t: f32,
 }
 
 impl BotAi {
@@ -358,6 +362,9 @@ impl BotAi {
             climb_cd: 3.0,
             moves: None,
             move_cd: 3.0,
+            aim: Vec2::ZERO,
+            aim_goal: Vec2::ZERO,
+            aim_t: 0.0,
         }
     }
 }
@@ -1468,10 +1475,20 @@ fn bot_ai(
             (c.y - eye.y).atan2(Vec2::new(c.x - eye.x, c.z - eye.z).length())
         });
         if !melee && ai.throw.is_none() && !scripted {
-            // Aim error: weaker bots are worse shots.
-            let e = 1.5 - skill;
-            intent.yaw += (rnd(&mut ai.rng) - 0.5) * 0.18 * e;
-            intent.pitch += (rnd(&mut ai.rng) - 0.5) * 0.1 * e;
+            // Aim error: weaker bots are worse shots. It drifts to a new value a few times a
+            // second; a fresh one every frame shook the gun (and the spectator camera).
+            ai.aim_t -= dt;
+            if ai.aim_t <= 0.0 {
+                let e = 1.5 - skill;
+                ai.aim_t = 0.3;
+                ai.aim_goal = Vec2::new(
+                    (rnd(&mut ai.rng) - 0.5) * 0.18 * e,
+                    (rnd(&mut ai.rng) - 0.5) * 0.1 * e,
+                );
+            }
+            ai.aim = ai.aim.lerp(ai.aim_goal, (12.0 * dt).min(1.0));
+            intent.yaw += ai.aim.x;
+            intent.pitch += ai.aim.y;
         }
         if let Some(pitch) = press {
             intent.pitch = pitch;

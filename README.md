@@ -1,23 +1,48 @@
 <div align="center">
 
+<img src="docs/media/demo.gif" alt="Captioned clips: a K-style double butterfly and slash shot, a wall cancel climb, a D-style yoyo step, a dagger E-lunge, a free-for-all deathmatch, a rocket on the ULTRA preset, quest monsters, the ELIMINATED screen and the main menu" width="720">
+
 # GunZRs
 
-A clean-room Rust port of **GunZ: The Duel**, built on [Bevy](https://bevyengine.org).
-It loads the maps, characters, weapons and effects straight from your Steam install.
+**GunZ: The Duel, rebuilt in Rust.** A clean-room port on [Bevy](https://bevyengine.org) that plays
+the original maps, characters, weapons, monsters and sounds straight from your Steam install, with
+the butterflies, wall cancels and yoyo steps that made the game.
 
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)](https://www.rust-lang.org)
 [![Bevy](https://img.shields.io/badge/Bevy-0.19-232326)](https://bevyengine.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Get the game on Steam](https://img.shields.io/badge/Steam-GunZ%3A%20The%20Duel-1b2838?logo=steam)](https://store.steampowered.com/app/3139440/GunZ_The_Duel/)
 
-<img src="docs/media/demo.webp" alt="A dash with afterimages, a wall run and kick, a fight against three bots, the killcam, a rifle kill with the ELIMINATED confirmation, and the main menu, in Mansion" width="800">
-
-<sub>Mansion, recorded headlessly with <code>--shot</code> and <code>GUNZ_SEQ</code>: dash, wall run, three skill-1 bots, killcam, a kill, the menu.</sub>
+[Quick start](#quick-start) · [Techniques](#k-style-and-d-style-techniques) · [Game modes](#game-modes) · [Browser](#in-the-browser-webgpu) · [How it works](#how-it-works)
 
 </div>
 
-No game files are included (the demo animation is a capture for illustration). You need your own copy
-of the game; the port only reads its `.mrs` archives and never runs `Gunz.exe`.
+## Highlights
+
+- **The real moves.** Butterfly up to the quadruple BF, slash shot, half step, forbidden step, wall
+  cancel, flash climb, dagger flash, yoyo steps, E-lunge: all 38 techniques of the community K-style
+  and D-style guides, each one played headless and checked in the log. Bots use them too, more
+  often the better they are.
+- **18 game modes.** The 15 retail modes with the original rules (deathmatch is everyone against
+  everyone, the berserker is whoever kills first) plus Infected, Gun Game and Dynamic Duels.
+- **The whole game world.** All 30 maps, quest, challenge and survival scenarios, 76 monsters with
+  their own AI, Blitzkrieg with radars, waves and classes, clans and a shop with 215 items.
+- **Bots that play.** Path-finding across stairs, drops and wall kicks, weapon choice by range,
+  grenades, retreats, guarding and techniques scaled by skill.
+- **Original look, or better.** The ORIGINAL preset draws the image exactly as the game did; ENHANCED
+  and ULTRA add HDR, bloom, lit characters, full explosions and simulated blood.
+- **Plays where you are.** Linux (Windows and macOS builds in CI), a WebGPU browser build with touch
+  controls, and LAN multiplayer.
+
+| | | |
+|:-:|:-:|:-:|
+| <img src="docs/media/menu.jpg" alt="Main menu, MATCH page: map grid, Mansion hero panel, the 18 modes" width="280"> | <img src="docs/media/kstyle.jpg" alt="Training in Mansion: a slash trail, the combo meter and the damage number on a dummy" width="280"> | <img src="docs/media/dstyle.jpg" alt="Dagger dash afterimages down the Mansion corridor" width="280"> |
+| Main menu | K-style against the dummies | D-style dagger dashes |
+| <img src="docs/media/explosion.jpg" alt="A rocket explosion on the ULTRA preset: fireball, sparks and smoke" width="280"> | <img src="docs/media/monsters.jpg" alt="Quest monsters in Citadel fighting the player" width="280"> | <img src="docs/media/blitzkrieg.jpg" alt="Blitzkrieg: the lane over the rooftops with the minimap" width="280"> |
+| ULTRA explosions | Quest monsters | Blitzkrieg |
+
+No game files are included (the demo and screenshots are captures for illustration). You need your own
+copy of the game; the port only reads its `.mrs` archives and never runs `Gunz.exe`.
 
 ## Quick start
 
@@ -83,7 +108,7 @@ with its limit and a live speed curve, and, in the browser, raw input (unacceler
 in Chromium browsers; the desktop build always reads raw mouse motion). Everything is saved in
 the profile.
 
-GRAPHICS (a main-menu tab, and in the Esc menu) has three presets and every setting by itself:
+GRAPHICS & SOUND (a main-menu tab, and in the Esc menu) has three presets and every setting by itself:
 ORIGINAL draws the image exactly as the game always did (no tonemapping, no effects, 4x MSAA);
 ENHANCED (the default) and ULTRA add HDR with tonemapping, bloom, SMAA, sharpening, anisotropic
 filtering, distance fog, vignette, film grain, chromatic aberration and camera-turn motion blur;
@@ -173,6 +198,32 @@ Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly (dagge
 train), up to the quadruple butterfly and forbidden step (yoyo half) from 0.85; the better the bot, the
 more often it tries them. They also climb a wall with a hang to reach an enemy on a ledge.
 
+## Game modes
+
+Bots fill the seats (`--bots N`, skill 0-1). Limits come from the retail `gametypecfg.xml`; rules the
+data does not hold follow public descriptions of the original and are marked **inferred** in
+`docs/formats.md`.
+
+| Mode | Rules |
+|---|---|
+| Deathmatch | Free for all: everyone against everyone, bots included; respawn after 5 s |
+| Team DM | Red against Blue with respawns; team kills count |
+| Gladiator, Team Gladiator | The same with melee weapons only |
+| Elimination | Team rounds; nobody respawns until the round is decided |
+| Assassinate | Team rounds; each side has a VIP, the round ends when one dies |
+| Duel | One on one; the winner stays, the loser goes to the back of the queue, the rest watch |
+| Duel tournament | A knockout bracket of duels; on time-out the one who dealt more damage wins |
+| Berserker | Deathmatch where the first killer becomes the berserker: a blue aura, 150 % damage, armour and then health draining (never below 1), a refill per kill; whoever kills it takes over |
+| Gunman | Deathmatch with a random melee weapon and gun every life |
+| Spy | Rounds: hidden spies with the spy items (`spymode.xml`) against trackers who get pings |
+| Blitzkrieg | Two bases whose radars send soldier waves down the lanes; barricades, honor upgrades, nine classes, minimap, announcer and rewards |
+| Clan War | Your clan against a rival clan, 4 against 4, elimination rounds, both emblems shown |
+| Quest | Quest, challenge quest and survival scenarios with bot allies: sectors, waves, bosses, portals, drops |
+| Training | Dummies to slash and shoot; no XP |
+| Infected *(port extra)* | Rounds: one random player turns zombie (blade only, faster, tougher, knockback hits); whoever a zombie kills joins them; survivors win at the timer |
+| Gun Game *(port extra)* | Free for all up a 12-step weapon ladder; a kill upgrades your weapon, a melee kill demotes the victim, a kill from the last step wins |
+| Dynamic Duels *(port extra)* | Several duels at once on one map, each in its own arena phase; winners stay, losers queue and watch, Space switches the watched arena |
+
 ## Status
 
 ### Working
@@ -188,12 +239,11 @@ more often it tries them. They also climb a wall with a hang to reach an enemy o
 | Throwables and items | Frag, flashbang, smoke and stun grenades, mines, medikits, repair kits; health, armour and ammo pickups from the maps' item spawn points |
 | Combat | HP / AP damage, hit reactions, knockback and blast states, slow / stun / root / burn effects, death camera; optional fixed (non-random) bullet spread |
 | Kill camera | When someone kills you, the camera swoops to your killer and orbits it (mouse turns, wheel zooms) under a floating "*name* killed YOU" blood tag, with a blood burst on your corpse |
-| Modes | Deathmatch, team deathmatch, gladiator, team gladiator, elimination, assassinate, duel, duel tournament, berserker, gunman, spy (with tracker pings and spy items), blitzkrieg (nine classes, upgrades, minimap, announcer, rewards), clan war, training |
-| Extra modes (not in retail) | The port's own takes on modes community servers made popular, built from retail items and maps: **Infected** (one random player turns zombie each round: blade only, faster, tougher, knockback hits; whoever a zombie kills joins them; survivors win at the round timer), **Gun Game** (free for all up a 12-step weapon ladder, a kill upgrades your weapon, a melee kill demotes the victim, a kill from the last step wins), **Dynamic Duels** (several 1-on-1 duels at once on one map, each in its own arena phase; winners stay, losers queue and watch, Space switches the watched arena) |
+| Modes | All 18 of [Game modes](#game-modes), with retail limits; LAN plays deathmatch, team deathmatch, gladiator and team gladiator |
 | Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
 | Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards; sacrifice items unlock special scenarios, a random dice roll picks the route, quest items stay in your inventory, level limits and challenge time bonuses |
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
-| Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall hang climbs), grenade and smoke throws, pickups, retreating, skill level |
+| Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall hang climbs) and D-style moves with a dagger (dagger flash, float step, yoyo half, E-lunge, dagger machine), grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
 | Menus and HUD | One look throughout (`src/ui.rs`, rules in [`DESIGN.md`](DESIGN.md)): dark angular panels, an ember-orange accent, a hazard band, Big Shoulders / Chakra Petch / JetBrains Mono type. Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS & SOUND, quest picker) with F1-F7 tabs, a player strip (bounty, medals, XP bar, level badge), a map grid with the chosen map as a hero panel, segmented steppers, toasts for confirmations, an animated 3D character in a viewport with dash and slash trail demos, Enter to start and Esc twice to quit; a loading screen, and a pause menu, end screen and Blitzkrieg class select in the same style; START and RESUME are brushed orange metal (a shader with bevel, reflections and a moving highlight). HUD (size adjustable on the GRAPHICS & SOUND page): mode, map and KILLS / DEATHS / K/D top left; a compass with your bearing, your score, the clock and the leader's score (team scores in team modes) and the mode's status line top centre; name, level, segmented armour and a health bar on a dark backing whose orange trail lags behind damage bottom left, with a pulsing red edge and CRITICAL at low health; weapon slots with their keys, the weapon's name, fire mode and type, magazine, reserve, round pips and RELOAD prompts bottom right; a crosshair that opens with running, jumping and shots, hit and kill markers, floating damage numbers (orange for headshots), damage direction arcs, status effect timers, a ranked scoreboard with K/D; a sliding kill feed at the top right with weapon tags, HEADSHOT tags and clan emblems in a clan war; ELIMINATED and the victim's name under the crosshair when you kill; a combo meter at the left with its multiplier, score and "+N" popups, and multikill and killing-spree banners; an ELIMINATED death screen over a grey view with the killer, their weapon, the damage you took, the health the killer has left, their hits and a respawn bar; round banners; end-of-match screen with XP and bounty earned |
 | Sound and music | 400 of the install's 453 sound files play: weapon sounds, surface footsteps, jumps and landings, voices (pain, death, emotes, taunts, the falling scream), the announcer (kills, headshots, multikills and sprees, round countdown, start, final round, results), status-effect and flashbang sounds, quest monsters' sounds on their animation frames (`animationevent.xml`), interface sounds (hover, click, shop, toasts, pause, loading, end screen, level up), map ambience, background music with crossfades; synthesized combo, kill and killing-spree sounds and your own hit sound (`custom/hitsound.wav` next to the profile). Music, effects and announcer volume sliders on the GRAPHICS & SOUND page (0 = off), and on Linux the output device (any PulseAudio / PipeWire sink, switched live through `pactl`). Which file belongs to which event is mostly read from file names (**inferred**; list and the 53 unused files in `docs/formats.md`) |
@@ -282,7 +332,7 @@ headlessly. `gunz-play` adds `--script`, `--time`, `--hp`, `--ap`, `--at`, `--di
 and `--pause-at S [--pause-page controls|graphics]` for
 reproducible runs (syntax in `src/bin/gunz-play.rs`). With `GUNZ_SEQ=SECS` and a `%` in the shot
 path it also saves the last SECS seconds at 20 fps, which is how the demo above was made (the
-clips were captioned and joined with Pillow, then encoded to animated WebP with `ffmpeg`).
+clips were captioned with Pillow and encoded to a GIF with `ffmpeg`; the scripts are not part of the repo).
 `GUNZ_PROFILE=PATH` uses another profile file. `RUST_LOG=gunz::bot=debug` logs bot decisions;
 `GUNZ_FRAMETIMES=1` logs frame times (add `GUNZ_NOVSYNC=1` for uncapped frames).
 
@@ -295,11 +345,15 @@ are the original binary formats. `Gunz.exe` is Themida-packed, so every format h
 from the data files themselves. The notes are in [`docs/formats.md`](docs/formats.md), and
 `CREDITS.md` lists outside sources.
 
-# Reverse-engineering framework
+## Reverse-engineering framework
 
-Local, target-independent investigations with OMP, REA and Ghidra.
+Local, target-independent investigations with OMP, REA and Ghidra, used for static questions about
+the retail files.
 
-## Start
+<details>
+<summary>Setup, commands and checks</summary>
+
+### Start
 
 ```sh
 bash scripts/setup-tools.sh
@@ -310,7 +364,7 @@ The isolated OMP profile is `reverse-engineering`. Its existing profile data was
 preserved during migration. Only REA is registered; AISandbox is denied.
 Other profiles and target installations are unchanged.
 
-## One function
+### One function
 
 ```sh
 bash scripts/query.sh /absolute/path/to/program function_name
@@ -343,14 +397,14 @@ Fresh runs retain previous evidence. Invalid snapshots/profile changes are not
 silently retried; an explicit fresh run can replace the active cache reference.
 Original targets remain read-only and are never executed by this command.
 
-## Several related questions
+### Several related questions
 
 Use the OMP agent and keep one REA MCP session open: open one selected input,
 follow bounded strings/xrefs/functions, reuse returned dossier facets, save a
 snapshot, then close. Warm same-session queries avoid repeated imports. The CLI
 helper is for one-off questions, not a second analysis engine.
 
-## Check the framework
+### Check the framework
 
 ```sh
 bash scripts/check-framework.sh
@@ -365,7 +419,7 @@ and `.local/re/query-check/`.
 
 Measured runs and coverage limits: `docs/reverse-engineering.md`.
 
-## Prerequisites
+### Prerequisites
 
 - Node 22.19+, supported Node 24, or Node 26+.
 - Extracted Ghidra 12.1.4, defaulting to `~/tools/ghidra_12.1.4_PUBLIC`.
@@ -382,7 +436,7 @@ Native paths are stored in ignored `.local/` files. The current runner is
 Linux-oriented; rootless `strace` bootstrap uses signed Arch packages. No Windows
 or macOS host verification is claimed. No system Java setting is changed.
 
-## OMP instructions
+### OMP instructions
 
 `.omp/AGENTS.md` routes tasks, `.omp/RULES.md` supplies short sticky invariants,
 and `.omp/rules/re-workflow.md` describes question-first native investigations.
@@ -393,3 +447,5 @@ source provenance and licenses.
 Static inspection is the default. Running an unknown target or capturing its
 runtime requires separate authorization. The local decompiler runs with your
 user permissions; it is not an OS security sandbox.
+
+</details>

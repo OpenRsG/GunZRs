@@ -2230,8 +2230,11 @@ translation; forward is -Z. All numbers **observed** from keys except where mark
   frames, low confidence); `runB` 4.80 m/s backwards. There is no strafe clip.
 - Tumble (10 frames, 0.333 s), wall kick (`jumpwallF` 1.0 s, B/L/R 1.333 s), `runLW`/`runRW` (2.0 s),
   `*_down` (1.0 s), `runW` (0.6 s) keep the root in place, except `runW`, which climbs 3.3 m
-  (feet dummy y 0.16 -> 3.43 m; m/s per frame 6 8 0 1 2 3 4 4 8 15 9 9 10 9 5 3 3). Tumble and kick
-  distances are therefore gameplay values (inferred).
+  (feet dummy y 0.16 -> 3.43 m, `Bip01` +3.21 m; m/s per frame 6 8 0 1 2 3 4 4 8 15 9 9 10 9 5 3 3).
+  The capsule climbs by that profile (`climb`), so the drawn `runW` keeps `Bip01` at its frame-0
+  height (`Animator::lift_lock`); before, the model rose with the clip on top of the capsule's
+  climb, ending 3.2 m above it and through ceilings (**port rule**). Tumble and kick distances are
+  therefore gameplay values (inferred).
 - Melee root motion (forward m / clip s): katana attack1 .97/.30, attack2 .76/.30, attack3 1.04/.40,
   attack4 1.25/.80, slash .98/.83, charge .55; returns +.55/+.24/-.81; sword .78 .89 1.31 1.01, slash 1.0;
   blade .74 .85 .98 .59, slash .81; air clips and 2h dagger 0.

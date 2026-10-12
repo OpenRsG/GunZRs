@@ -76,22 +76,22 @@ const SPINE: [&str; 2] = ["Bip01 Spine1", "Bip01 Spine2"];
 /// Share of the aim pitch per [`SPINE`] bone (**inferred**; sums to 1).
 const SPINE_SHARE: [f32; 2] = [0.5, 0.5];
 
-/// Model-space horizontal root position (Bevy axes, cm) at `secs`.
-fn root_xz(node: &Node, secs: f32) -> Vec2 {
+/// Model-space root position (Bevy axes, cm) at `secs`.
+fn root_at(node: &Node, secs: f32) -> Vec3 {
     sample(
         &node.pos,
         secs * FPS * TICKS_PER_FRAME as f32,
         pos,
         Vec3::lerp,
     )
-    .map_or(Vec2::ZERO, |p| Vec2::new(p.x, p.z))
+    .unwrap_or(Vec3::ZERO)
 }
 
 /// Horizontal movement of `node` between two clip times as an [`root_delta`] vector.
 fn root_move(node: &Node, t0: f32, t1: f32) -> Vec3 {
-    let d = root_xz(node, t1) - root_xz(node, t0);
+    let d = root_at(node, t1) - root_at(node, t0);
     // Model root faces +Z; the actor model is turned by PI so it faces -Z.
-    Vec3::new(-d.x, 0.0, -d.y) * SCALE
+    Vec3::new(-d.x, 0.0, -d.z) * SCALE
 }
 
 /// Horizontal displacement of the root bone `Bip01` between clip times `t0` and `t1` (seconds,
@@ -205,6 +205,9 @@ pub struct Animator {
     /// Keep `Bip01` at its frame-0 horizontal position so the visual stays on its entity; the
     /// caller moves the entity by [`Animator::take_root_motion`].
     pub root_lock: bool,
+    /// With `root_lock`, keep `Bip01` at its frame-0 height too: for a clip whose climb the
+    /// caller already gives the entity (`runW` rises 3.2 m while the capsule climbs its profile).
+    pub lift_lock: bool,
     /// Radians, positive aims up; bent through the spine after sampling (bone clips only).
     pub aim_pitch: f32,
     /// Playback speed of the upper-body clip (on top of `speed`); [`Animator::set_upper`]
@@ -226,6 +229,7 @@ impl Animator {
             looping,
             elu: None,
             root_lock: false,
+            lift_lock: false,
             aim_pitch: 0.0,
             upper_speed: 1.0,
             targets: None,
@@ -689,8 +693,11 @@ fn animate(
                     Kind::Bone => {
                         let mut s = sample_transform(node, tick, t.fallback);
                         if a.root_lock && r.root == Some(i) && !node.pos.is_empty() {
-                            let h = root_xz(node, 0.0);
-                            (s.translation.x, s.translation.z) = (h.x, h.y);
+                            let h = root_at(node, 0.0);
+                            (s.translation.x, s.translation.z) = (h.x, h.z);
+                            if a.lift_lock {
+                                s.translation.y = h.y;
+                            }
                         }
                         if let (Some(w), Some(from)) = (fade_w, from)
                             && let Some(f) = from.get(&e)

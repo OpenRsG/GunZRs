@@ -2472,6 +2472,8 @@ fn drive(
         let reload_clip = a.upper == Some("reload");
         if let Some(an) = an.as_mut() {
             an.root_lock = true;
+            // the capsule climbs by `climb()`; the clip's own 3.2 m rise would double it
+            an.lift_lock = name == "runW";
             if want != a.playing || a.restart {
                 a.restart = false;
                 a.playing = want;

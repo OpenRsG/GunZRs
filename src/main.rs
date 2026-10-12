@@ -122,15 +122,21 @@ fn make_previews(game: &str) -> Result<(), String> {
                     maps.iter()
                         .filter(|m| {
                             let part = dir.join(format!("{m}.part.png"));
-                            let ok = Command::new(&exe)
-                                .args([game, m, "--vantage", "--shot"])
-                                .arg(&part)
-                                .env("GUNZ_SHOT_SIZE", &size)
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .status()
-                                .is_ok_and(|s| s.success())
-                                && fs::rename(&part, dir.join(format!("{m}.png"))).is_ok();
+                            // a frame captured before the pipelines compiled is black: retry
+                            let ok = (0..3).any(|_| {
+                                Command::new(&exe)
+                                    .args([game, m, "--vantage", "--shot"])
+                                    .arg(&part)
+                                    .env("GUNZ_SHOT_SIZE", &size)
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .status()
+                                    .is_ok_and(|s| s.success())
+                                    && !black(&part)
+                            }) && fs::rename(&part, dir.join(format!("{m}.png"))).is_ok();
+                            if !ok {
+                                fs::remove_file(&part).ok();
+                            }
                             println!("preview {m}{}", if ok { "" } else { ": FAILED" });
                             !ok
                         })
@@ -146,6 +152,22 @@ fn make_previews(game: &str) -> Result<(), String> {
         0 => Ok(()),
         n => Err(format!("{n} maps failed")),
     }
+}
+
+/// Whether a picture is (nearly) all black: over 95% of its pixels darker than 8/255.
+fn black(png: &std::path::Path) -> bool {
+    let Some(data) = fs::read(png)
+        .ok()
+        .and_then(|b| view::decode(&b, "png", true, bevy::image::ImageSampler::linear())?.data)
+    else {
+        return true;
+    };
+    let px = data.len() / 4;
+    let dark = data
+        .chunks_exact(4)
+        .filter(|p| p[..3].iter().all(|&c| c < 8))
+        .count();
+    px == 0 || dark * 20 > px * 19
 }
 
 /// Camera override (position, direction) in Bevy coordinates.

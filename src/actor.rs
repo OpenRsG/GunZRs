@@ -108,6 +108,9 @@ const SUPER_FALL: f32 = 1.5;
 const FLY_WINDOW: f32 = 0.5;
 /// Climb speed (m/s) of a wall hang with forward + jump held.
 const HANG_CLIMB: f32 = 4.0;
+/// Seconds a hang may climb (2 m), and only one hang per time in the air: hanging, kicking
+/// off and hanging again on the same wall climbed any wall without end.
+const HANG_CLIMB_SECS: f32 = 0.5;
 /// How far (m) from the capsule's side the wall touched last may be for a guard to still cling to
 /// it: the hang presses into it at 1 m/s, well inside `WALL_LOSE`.
 const HANG_REACH: f32 = 0.1;
@@ -507,6 +510,9 @@ pub struct Actor {
     die: &'static str,
     /// Already wall-ran since last touching the ground.
     wall_spent: bool,
+    /// Already hung on a wall since last touching the ground, and seconds that hang climbed.
+    hang_spent: bool,
+    hang_up: f32,
     /// Next hit reaction clip (alternates `damage` / `damage2`).
     hurt: bool,
     /// Seconds spent in the air (landing sound).
@@ -687,6 +693,8 @@ impl ActorSpawner<'_, '_> {
                     pitch: 0.0,
                     die: "die",
                     wall_spent: false,
+                    hang_spent: false,
+                    hang_up: 0.0,
                     hurt: false,
                     air: 0.0,
                     tech: Tech::default(),
@@ -2004,6 +2012,7 @@ fn drive(
             && g.wall
             && intent.guard
             && !a.grounded
+            && !a.hang_spent
             && (cancelable
                 || matches!(
                     a.state,
@@ -2032,6 +2041,7 @@ fn drive(
                 }
             );
             a.state = State::Hang { n };
+            (a.hang_spent, a.hang_up) = (true, 0.0);
             a.wall = Some((n, now));
             a.vel = Vec3::ZERO;
             a.restart = true;
@@ -2268,7 +2278,8 @@ fn drive(
             State::WallRun { side, left, .. } if left > 0.0 && side != 0.0 => (RUN_GRAVITY, FALL),
             State::WallRun { .. } => (SLIDE_GRAVITY, FALL),
             State::Hang { .. } => {
-                a.vel.y = if walk.y > 0.5 && intent.jump {
+                a.vel.y = if walk.y > 0.5 && intent.jump && a.hang_up < HANG_CLIMB_SECS {
+                    a.hang_up += dt;
                     HANG_CLIMB
                 } else {
                     0.0
@@ -2342,6 +2353,7 @@ fn drive(
             }
             a.air = 0.0;
             a.wall_spent = false;
+            a.hang_spent = false;
             (a.tech.dashed, a.tech.hold_spent, a.tech.kicked, a.tech.fall) =
                 (false, false, false, 0.0);
         } else {
@@ -2403,7 +2415,9 @@ fn drive(
                 _ if fwd.dot(n) > 0.3 => "runW_downB",
                 _ => "runW_downF",
             },
-            State::Hang { .. } if walk.y > 0.5 && intent.jump => "runW",
+            State::Hang { .. } if walk.y > 0.5 && intent.jump && a.hang_up < HANG_CLIMB_SECS => {
+                "runW"
+            }
             State::Hang { .. } => "runW_downF",
             _ if !a.grounded => {
                 if a.vel.y > 0.0 {

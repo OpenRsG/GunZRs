@@ -1809,8 +1809,11 @@ faces a wall 7 m ahead). Observed lines:
 - `...;w+dash:0.15;w+attack:0.05;wait:0.1;2:0.1;wait:0.3;attack:0.1;wait:0.2;1:0.1` -> `tech: switch cancel`, `tech: slash shot`,
   `tech: flash step`.
 - `2:0.1;wait:0.5;attack:0.1;reload:0.1;3:0.1;attack:0.5` -> `reload: ... (mag 6+24)`, `tech: reload cancel`, `tech: reload shot` 0.1 s later.
-- `wait:0.2;w:0.5;w+jump:0.25;w+guard:0.4;w+guard+jump:0.8` (at the wall) -> `tech: wall hang`, then `runW` climbing to the
-  ceiling (`.local/moves/hang1.png`, `hang2.png`).
+- `wait:0.2;w:0.5;w+jump:0.25;w+guard:0.4;w+guard+jump:0.8` (at the wall) -> `tech: wall hang`, then `runW` climbing
+  (`.local/moves/hang1.png`, `hang2.png`). One hang per time in the air (landing allows the next) and it climbs at most
+  0.5 s (2 m, **port limit**): before, tapping forward + jump while hanging, or kicking off and hanging again, climbed
+  any wall to the top of the map. `w:0.5;w+jump:0.25;w:0.3;w+guard:0.3` then 12 x `w+guard+jump:0.1;w+guard:0.1`:
+  `runW` 12 times before, 5 now (`.local/HangFix/`).
 - Wall hang held and released (`W`, per-frame temporary log of the player's height, sheets `.local/MeleeWall/sheet_hang.png`,
   `sheet_fall.png`): `w:0.5;w+jump:0.25;w:0.6;guard:8;wait:1.5` -> `tech: wall hang` at 2.85 s, `State::Hang` until 10.83 s with
   y = 3.646 m in every frame (before: it crept up 0.03 m in 8 s, the capsule pressed into the slightly leaning wall), then

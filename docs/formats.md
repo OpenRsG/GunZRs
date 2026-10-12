@@ -583,11 +583,11 @@ textures (`crosshair02`, `hit_marker`, `kill_marker`, `ingame_hpbar`, `ingame_ti
   segments (40,111,162)->(64,150,220) as one bar.
 - **Weapon icons**: the shop's item icons (`itemicon.xml` cells of `interface/loadable/*`, loaded
   through `shop::Icons`) for the weapon strip; the kill feed still uses the kill-log atlas.
-- **Fonts**: none in the archives. `ui.rs` embeds Barlow (SIL OFL, `assets/fonts`): Barlow Medium for
-  running text (it replaces Bevy's default font) and Barlow Condensed Medium, SemiBold and Bold for
-  labels, buttons, titles and the tabular-figure numbers of the HUD.
+- **Fonts**: none in the archives. `ui.rs` embeds Chakra Petch (running text, rows, buttons; it
+  replaces Bevy's default font), Big Shoulders Display (titles) and JetBrains Mono (numbers,
+  captions), all SIL OFL in `assets/fonts`.
 
-Layout (logical px at 1280 x 720, scaled down below that by `menu::fit`; colours, fonts and widgets
+Layout (logical px at 1280 x 720, scaled down below that by `menu::fit_hud`; colours, fonts and widgets
 from `ui.rs`, sharp plates instead of rounded cards): health and armour bottom left with no card (a
 44 px HP number over a 6 px bar with a pale trail that waits 0.5 s after damage then drains, a 3 px
 armour bar; the number pops on a hit and turns red under 30%); weapon strip (up to six item-icon tiles
@@ -612,15 +612,23 @@ in the accent, K/D ratio); the clan strip and the "earned" line sit on it.
 
 ### Main menu and match flow (`src/menu.rs`, `src/session.rs`)
 
-Retail art used: `bg_play.png` (1920x1080 lobby backdrop, drawn on a quad behind the 3D preview),
-`gunz_logo_hq.png` (231x96). Buttons are flat square tiles with a 2 px bar under them, tabs are text
-with an accent underline (accent amber
-`ui::ACCENT`, hover / pressed / selected states in `ui::hover`); the retail `defaultbutton_*` textures are
-unused.
-The `banner_<map>.tga` strips (360x32, a map picture with its name) exist for only 21 of the 30
-maps, so the map list is plain buttons. No font file exists in the archives (`*.ttf` absent; the
-retail UI uses system fonts such as the `FONTb20b` of `combatinterface.xml`), so text uses the Barlow
-fonts of `ui.rs`. Maps are the 30 directories under `maps/` holding an `.RS` file; weapon
+Retail art used: `gunz_logo_hq.png` (231x96, in the header's logo slot). The look is "ember lobby"
+(`DESIGN.md`, `src/ui.rs`); the menu is laid out at 1920x1080 and scaled to the window. Every page
+sits between one header and footer (`src/menu/chrome.rs`): the hazard band, a dark backdrop with a
+vignette and a faint watermark word per page, the logo, the F1-F7 tabs, then bounty, medals, the XP
+bar (`into/need`), the name and the level badge, all from the profile; at the bottom ESC QUIT, the
+`MAP // MODE // N BOTS · SKILL` summary, JOIN LAN, HOST LAN and START. F1-F7 switch pages, Enter
+starts (neither while the clan name is typed), the first Esc toasts "PRESS ESC AGAIN TO QUIT" and a
+second within 2 s quits; `menu::Toast` messages are drawn above the footer for 2.2 s.
+The MATCH page (`src/menu/matchpage.rs`): `01 MAP` is a 5-column grid of 141x104 tiles (hatched art
+area, index, name) with RANDOM; the hero shows "MAP NN / N", the map name and `MODE · TIME · KILLS`;
+`02 RULES` has the 18 mode buttons, the mode's description and four stepper wells (time limit, kill
+limit, bots, bot skill) with segment bars. The tiles carry no map picture: the retail `banner_<map>.tga`
+strips (360x32, name baked in) exist for 21 of the 30 maps and `minimap_<map>.bmp` (a top-down plan)
+for 17, so a hatch stands in. The retail `defaultbutton_*` textures and `bg_play.png` (the old lobby
+backdrop) are unused. No font file exists in the archives (`*.ttf` absent; the retail UI uses system
+fonts such as the `FONTb20b` of `combatinterface.xml`), so text uses the fonts of `ui.rs`. Maps are
+the 30 directories under `maps/` holding an `.RS` file; weapon
 candidates are zitem weapons that have a name and a model (melee -> slot 1, range -> slots 2/3,
 custom -> slot 4; `character` part sets: 170 for the man, 259 for the woman).
 
@@ -1364,10 +1372,10 @@ either way. It replaces the old `if_score_get` kill-streak blip.
 - **Meter** (left of the screen, 24 px in, 34% down: clear of KILLS/DEATHS top left, the clock, the feed from y = 100,
   the confirmation at 56% and the vitals): hit count (64 px digits, punches +30% for 0.12 s per hit), "COMBO", a
   multiplier badge (pops +60% for 0.3 s on a step, its box shadow grows with the multiplier), a bar draining over the
-  2.5 s window, the score (rolls up at ~12/s) and "+N" popups (hits white, kills amber, 0.8 s, rising 34 px). Colour
+  2.5 s window, the score (rolls up at ~12/s) and "+N" popups (hits white, kills in the accent, 0.8 s, rising 34 px). Colour
   ramps INK -> ACCENT -> DANGER with the multiplier. Hidden without a combo.
 - **Banner** (upper centre, 19% down, between the clock and the confirmation): headline 44/52/60/70/82 px by tier in
-  the same ramp (tier 0 pale amber .. tier 4 red), slams in from 2.2x to 0.92x then 1.0x (0.24 s), shakes for 0.4 s,
+  the same ramp (tier 0 pale accent .. tier 4 red), slams in from 2.2x to 0.92x then 1.0x (0.24 s), shakes for 0.4 s,
   holds, fades out; 2 s in all. A radial screen-edge flash of the tier colour (0.32 alpha at the edge, 0.45 s).
   A newer banner replaces the old one.
 - **Sounds** (`synth.rs`: sums of sines and additive saws, exponential envelopes, exponential pitch sweeps, one-pole
@@ -2304,11 +2312,14 @@ medals earned, shown on the profile header), `rented` (`zitem id:expiry,..`, exp
 also in `owned`), `clan` (see "Clans"). A corrupt file stops the game instead of being overwritten.
 Rentals past their expiry are removed at load (also from the equipment, melee and ranged fall back to the
 starter weapons) with a log line `profile: rental of item N expired and was removed`; the inventory shows the time
-left (`[rented, 2d 5h left]`). A rental cannot be sold (**inferred**).
+left (`2D 5H LEFT` under the item's name). A rental cannot be sold (**inferred**).
 Headless `--shot` runs use a throwaway default profile unless `GUNZ_PROFILE` is set. The file is
 rewritten whenever the profile changes (a kill, a purchase, SAVE, Start). The browser build keeps
 the same text in the page's `localStorage` (`gunzrs.profile`).
-Headless shot hooks: `GUNZ_INV_SLOT=N` (9 = quest items) and `GUNZ_INV_SELL=1` (presses SELL on the first row).
+Headless shot hooks: `GUNZ_SHOP_SLOT=N` (shop category = its equipment slot), `GUNZ_INV_SLOT=N` (9 = quest items) and
+`GUNZ_INV_SELL=1` (presses SELL on the first row). Purchases, sales and equips show a toast (`PURCHASED · NAME`,
+`SOLD · +N`, `EQUIPPED · NAME`, errors in capitals); the inventory equips with its EQUIP button (UNEQUIP on an
+item already worn in an emptyable slot).
 
 ### Pause-menu toggles (`profile::OPTS`, `session.rs`)
 

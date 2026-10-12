@@ -13,11 +13,16 @@
 
 ## Game assets
 
-- [Barlow](https://github.com/jpt/barlow) 1.408 (Barlow Medium, Barlow Condensed Medium,
-  SemiBold and Bold) by The Barlow Project Authors: SIL Open Font License 1.1, text in
-  `assets/fonts/OFL.txt`; unmodified copies from
-  [google/fonts](https://github.com/google/fonts/tree/main/ofl), embedded in the game by
-  `src/ui.rs`.
+- Fonts embedded in the game by `src/ui.rs` and copied for the web page, all SIL Open Font
+  License 1.1, from [google/fonts](https://github.com/google/fonts/tree/main/ofl):
+  - [Chakra Petch](https://github.com/m4rc1e/Chakra-Petch) Medium, SemiBold and Bold by The Chakra
+    Petch Project Authors, unmodified; license `assets/fonts/OFL-ChakraPetch.txt`.
+  - [Big Shoulders Display](https://github.com/xotypeco/big_shoulders) by The Big Shoulders Project
+    Authors: the ExtraBold (800) instance of the variable font, subset to Latin with fontTools;
+    license `assets/fonts/OFL-BigShoulders.txt`.
+  - [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) by The JetBrains Mono Project
+    Authors: the Bold (700) instance of the variable font, subset to Latin with fontTools; license
+    `assets/fonts/OFL-JetBrainsMono.txt`.
 
 ## Workflow reference
 

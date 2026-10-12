@@ -36,8 +36,11 @@ use crate::{
     npc::NpcDemo,
     profile::{MatchGain, Profile, opt_mut},
     quest::{self, Quest},
-    session::{Clock, PauseAt, Rules, StartVitals},
-    ui::{ACCENT, DIM, INK, LINE, compact, display, shadow, strong},
+    session::{Clock, PauseAt, Rules, StartVitals, band},
+    ui::{
+        ACCENT, BACKDROP, Cut, DIM, INK, SURFACE, Segs, caption, display, hatch, mono, segs,
+        shadow, shape, strong, tracking,
+    },
     view::{self, Shot},
 };
 use bevy::{
@@ -63,9 +66,6 @@ use std::{
 
 /// Simulated seconds before a headless script starts, so pipelines compile and actors land.
 pub const LEAD: f32 = 1.5;
-
-/// The menu's and the loading screen's background.
-pub const BACKDROP: Color = Color::srgb(0.05, 0.05, 0.07);
 
 /// What the window shows.
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -274,7 +274,13 @@ impl Plugin for PhasePlugin {
                 }),
             )
             .add_systems(OnEnter(Screen::Match), enter_match)
-            .add_systems(Update, uncover.run_if(in_state(Screen::Match)))
+            .add_systems(
+                Update,
+                // the cover is the loading screen: the menu's scale, not the HUD's
+                (uncover, crate::menu::fit.after(crate::menu::fit_hud))
+                    .run_if(in_state(Screen::Match))
+                    .run_if(any_with_component::<Cover>),
+            )
             .add_systems(
                 Update,
                 (leave_hook.run_if(resource_exists::<Hooks>), leave)
@@ -545,16 +551,13 @@ fn poll(
 }
 
 #[derive(Component)]
-struct Fill;
-
-#[derive(Component)]
-struct Sweep;
+struct LoadBar;
 
 #[derive(Component)]
 struct StepText;
 
-const BAR: f32 = 420.0;
-const SWEEP: f32 = 90.0;
+/// Segments of the loading bar.
+const LOAD_SEGS: usize = 32;
 
 /// OnEnter(Loading): the loading screen.
 fn spawn_loading(
@@ -575,9 +578,10 @@ fn spawn_loading(
     loading_screen(&mut commands, camera, &launch.config, true);
 }
 
-/// The loading screen, in the menu's look: the map's name, the mode, a bar with a highlight
-/// sweeping along it (so the wait never looks frozen) and the step being read. `live` lets
-/// [`loading_ui`] drive the bar; without it the bar is full: that is the [`Cover`].
+/// The loading screen, in the menu's look (a 1920 x 1080 canvas): the map's name huge in display,
+/// the mode, a segment bar and the step being read in mono, and a hatched frame where the map's
+/// preview would go (the data has none). `live` lets [`loading_ui`] drive the bar; without it
+/// the bar is full: that is the [`Cover`].
 fn loading_screen<'a>(
     commands: &'a mut Commands,
     camera: Entity,
@@ -601,64 +605,74 @@ fn loading_screen<'a>(
         Node {
             width: percent(100),
             height: percent(100),
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
-            row_gap: px(10),
+            column_gap: px(100),
+            padding: UiRect::horizontal(px(140)),
             ..default()
         },
     ));
     root.with_children(|root| {
-        root.spawn((Text::new("LOADING"), strong(18.0), TextColor(DIM)));
-        root.spawn((
-            Text::new(title.to_uppercase()),
-            display(72.0),
-            TextColor(INK),
-            shadow(),
-        ));
-        root.spawn((
-            Text::new(line.to_uppercase()),
-            strong(20.0),
-            TextColor(ACCENT),
-        ));
+        root.spawn(band());
+        root.spawn(Node {
+            flex_grow: 1.0,
+            flex_basis: px(0),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(12),
+            ..default()
+        })
+        .with_children(|left| {
+            left.spawn(caption("Loading", 20.0));
+            left.spawn((
+                Text::new(title.to_uppercase()),
+                display(180.0),
+                TextColor(INK),
+                tracking(0.01, 180.0),
+                shadow(),
+            ));
+            left.spawn((
+                Text::new(line.to_uppercase()),
+                strong(30.0),
+                TextColor(ACCENT),
+                tracking(0.14, 30.0),
+            ));
+            left.spawn(Node {
+                width: percent(100),
+                margin: UiRect::top(px(48)),
+                ..default()
+            })
+            .with_children(|w| {
+                let mut bar = w.spawn(segs(LOAD_SEGS, if live { 0 } else { LOAD_SEGS }, 14.0, 5.0));
+                if live {
+                    bar.insert(LoadBar);
+                }
+            });
+            let mut step = left.spawn((
+                Text::new("STARTING"),
+                mono(20.0),
+                TextColor(DIM),
+                tracking(0.14, 20.0),
+            ));
+            if live {
+                step.insert(StepText);
+            }
+        });
         root.spawn((
             Node {
-                width: px(BAR),
-                height: px(4),
-                margin: UiRect::top(px(26)),
-                overflow: Overflow::clip(),
+                width: px(620),
+                height: px(420),
+                padding: UiRect::all(px(12)),
                 ..default()
             },
-            BackgroundColor(LINE),
-        ))
-        .with_children(|bar| {
-            let mut fill = bar.spawn((
+            shape(Cut::Chamfer(18), SURFACE),
+            children![(
                 Node {
-                    width: percent(if live { 0 } else { 100 }),
+                    width: percent(100),
                     height: percent(100),
                     ..default()
                 },
-                BackgroundColor(ACCENT),
-            ));
-            if live {
-                fill.insert(Fill);
-                bar.spawn((
-                    Sweep,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(-SWEEP),
-                        width: px(SWEEP),
-                        height: percent(100),
-                        ..default()
-                    },
-                    BackgroundColor(INK.with_alpha(0.45)),
-                ));
-            }
-        });
-        let mut step = root.spawn((Text::new("STARTING"), compact(18.0), TextColor(DIM)));
-        if live {
-            step.insert(StepText);
-        }
+                hatch(Color::srgba(1.0, 1.0, 1.0, 0.005)),
+            )],
+        ));
     });
     root
 }
@@ -680,12 +694,11 @@ fn uncover(mut commands: Commands, mut cover: Query<(Entity, &mut Cover)>) {
     }
 }
 
-/// Fills the bar towards the finished steps and moves the sweep.
+/// Lights the bar towards the finished steps and writes the step being read.
 fn loading_ui(
     time: Res<Time>,
     mut loading: ResMut<Loading>,
-    mut fill: Single<&mut Node, (With<Fill>, Without<Sweep>)>,
-    mut sweep: Single<&mut Node, (With<Sweep>, Without<Fill>)>,
+    mut bar: Single<&mut Segs, With<LoadBar>>,
     mut text: Single<&mut Text, With<StepText>>,
 ) {
     let (done, total) = (loading.done.load(Ordering::Relaxed), loading.steps.len());
@@ -697,14 +710,18 @@ fn loading_ui(
     };
     let dt = time.delta_secs();
     loading.shown += (target - loading.shown) * (1.0 - (-5.0 * dt).exp());
-    fill.width = percent(loading.shown * 100.0);
-    sweep.left = px(-SWEEP + (time.elapsed_secs() * 0.9).fract() * (BAR + SWEEP));
+    let lit = (loading.shown * LOAD_SEGS as f32).round() as usize;
+    if bar.lit != lit {
+        bar.lit = lit;
+    }
+    // trailing dots, so the screen never looks frozen
+    let dots = ".".repeat((time.elapsed_secs() * 2.5) as usize % 4);
     let label = if loading.built {
-        format!("BUILDING THE LEVEL   {0}/{0}", total + 1)
+        format!("BUILDING THE LEVEL   {0}/{0}{dots}", total + 1)
     } else {
         let at = done.min(total - 1);
         format!(
-            "{}   {}/{}",
+            "{}   {}/{}{dots}",
             loading.steps[at].to_uppercase(),
             at + 1,
             total + 1

@@ -34,7 +34,7 @@ build=$(cat "$wasm" "$dist/pkg/gunz-play.js" | sha256sum | cut -c1-16)
 html=$(<web/index.html)
 printf '%s\n' "${html//__BUILD__/$build}" > "$dist/index.html"
 cp web/serve.py "$dist/"
-mkdir -p "$dist/fonts" && cp assets/fonts/*.ttf assets/fonts/OFL.txt "$dist/fonts/"
+mkdir -p "$dist/fonts" && cp assets/fonts/*.ttf assets/fonts/OFL-*.txt "$dist/fonts/"
 # Precompressed copies; serve.py (or any server with precompressed-file support) sends them.
 for f in "$dist/pkg/"*.wasm "$dist/pkg/"*.js "$dist/index.html"; do
   gzip -9 -k -f "$f"

@@ -10,13 +10,20 @@ use super::{HP_TIERS, HURT_SLOTS, Hud, Indicator, LOW_HP, LowHp, Marks, Root, fx
 use crate::{
     actor::ActorData,
     controls::{Action, Input},
-    game::{Dead, Fire, Loadout, Player, Score, Settings, Status, Team, Vitals},
+    game::{Dead, Fire, Frozen, Loadout, Player, Score, Settings, Status, Team, Vitals},
     gfx::Knob,
     profile::{MatchGain, Profile, Ranks},
     session::{Clock, HOLD},
-    ui::{self, ACCENT, BLUE, DANGER, DIM, INK, LINE, PLATE, RED, SCRIM, SHADOW},
+    ui::{
+        self, ACCENT, BLUE, Cut, DANGER, DIM, INK, LINE, ON_ACCENT, PLATE, RAISED, RED, SCRIM,
+        SHADOW, SURFACE,
+    },
 };
-use bevy::{prelude::*, text::Justify, ui::UiTargetCamera};
+use bevy::{
+    prelude::*,
+    text::Justify,
+    ui::{GlobalZIndex, UiTargetCamera},
+};
 
 /// Rows of the scoreboard and the weapon tiles of the strip.
 const BOARD_ROWS: usize = 12;
@@ -122,6 +129,10 @@ pub(super) struct Cell(usize, usize);
 /// The weapon strip and ammo panel (bottom right; bottom centre on a touch screen).
 #[derive(Component)]
 pub(super) struct WeaponBox;
+
+/// The scoreboard panel (`clan.rs` hangs its strip on it).
+#[derive(Component)]
+pub struct BoardRoot;
 
 /// The magazine / reserve / hint row of the weapon plate (hidden for melee: name only).
 #[derive(Component)]
@@ -640,47 +651,38 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                     });
                 });
             });
-        // Scoreboard: 720 x 440, centred (the clan strip sits on its top right).
+        // Scoreboard: 900 wide on the 1920 canvas; `board_fit` places and scales it (the clan
+        // strip sits on its top right).
         r.spawn((
             Show::Board,
+            BoardRoot,
+            // above the end screen's scrim (`session.rs`, 10) and the reward panel
+            GlobalZIndex(11),
             Visibility::Hidden,
-            plate_on(
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: percent(50),
-                    top: percent(50),
-                    margin: UiRect {
-                        left: px(-360),
-                        top: px(-220),
-                        ..default()
-                    },
-                    width: px(720),
-                    padding: UiRect::axes(px(24), px(18)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(3),
-                    ..default()
-                },
-                PLATE.with_alpha(0.88),
-            ),
+            UiTransform::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(50),
+                width: px(900),
+                padding: UiRect::all(px(22)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                ..default()
+            },
+            ui::shape(Cut::Chamfer(18), SURFACE),
         ))
         .with_children(|b| {
-            b.spawn((
-                Node {
-                    height: px(34),
-                    ..default()
-                },
-                children![text("SCOREBOARD", ui::display(20.0), ACCENT)],
-            ));
+            b.spawn(ui::section(1, "Scoreboard"));
             let cols = [
-                ("#", 34.0),
-                ("PLAYER", 350.0),
-                ("KILLS", 90.0),
-                ("DEATHS", 90.0),
-                ("K/D", 70.0),
+                ("#", 50.0),
+                ("PLAYER", 400.0),
+                ("KILLS", 120.0),
+                ("DEATHS", 120.0),
+                ("K/D", 110.0),
             ];
             b.spawn(Node {
-                height: px(22),
-                padding: UiRect::horizontal(px(12)),
+                height: px(28),
+                padding: UiRect::horizontal(px(16)),
                 align_items: AlignItems::Center,
                 ..default()
             })
@@ -691,7 +693,7 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                             width: px(w),
                             ..default()
                         },
-                        children![text(name, ui::strong(13.0), DIM)],
+                        children![ui::caption(name, 14.0)],
                     ));
                 }
             });
@@ -699,12 +701,12 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                 b.spawn((
                     Row(i),
                     Node {
-                        height: px(25),
-                        padding: UiRect::horizontal(px(12)),
+                        height: px(40),
+                        padding: UiRect::horizontal(px(16)),
                         align_items: AlignItems::Center,
                         ..default()
                     },
-                    BackgroundColor(Color::NONE),
+                    ui::shape(Cut::Notch(12), RAISED),
                 ))
                 .with_children(|row| {
                     row.spawn((
@@ -712,18 +714,18 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
                         Node {
                             position_type: PositionType::Absolute,
                             left: px(0),
-                            top: px(4),
-                            width: px(3),
-                            height: px(17),
+                            top: px(8),
+                            width: px(4),
+                            height: px(24),
                             ..default()
                         },
                         BackgroundColor(Color::NONE),
                     ));
                     for (c, (_, w)) in cols.iter().enumerate() {
                         let font = if c == 1 {
-                            ui::strong(16.0)
+                            ui::strong(22.0)
                         } else {
-                            ui::digits(16.0)
+                            ui::digits(22.0)
                         };
                         row.spawn((
                             Node {
@@ -748,7 +750,7 @@ pub(super) fn spawn_ui(mut commands: Commands, cameras: Query<Entity, With<Camer
             b.spawn((
                 Earned,
                 Text::new(""),
-                ui::compact(16.0),
+                ui::compact(22.0),
                 TextColor(ACCENT),
                 Node {
                     margin: UiRect::top(px(8)),
@@ -1144,7 +1146,7 @@ pub(super) fn scores(
     actors: Query<(&Name, &Score, Has<Player>, Option<&Team>)>,
     mut texts: Query<(&Label, &mut Text), Without<Cell>>,
     mut shows: Query<(&Show, &mut Visibility), (Without<Tick>, Without<Row>)>,
-    mut rows: Query<(&Row, &mut Node, &mut BackgroundColor), Without<Stripe>>,
+    mut rows: Query<(&Row, &mut Node, &mut ImageNode), Without<Stripe>>,
     mut stripes: Query<(&Stripe, &mut BackgroundColor), Without<Row>>,
     mut cells: Query<(&Cell, &mut Text, &mut TextColor), Without<Label>>,
     mut line: Query<
@@ -1268,22 +1270,23 @@ pub(super) fn scores(
     }
     let mut list: Vec<_> = actors.iter().collect();
     list.sort_by_key(|(_, s, _, _)| (std::cmp::Reverse(s.kills), s.deaths));
-    for (Row(i), mut n, mut bg) in &mut rows {
+    for (Row(i), mut n, mut img) in &mut rows {
         let (display, fill) = match list.get(*i) {
-            None => (Display::None, Color::NONE),
-            Some(_) => (Display::Flex, PLATE.with_alpha(0.5)),
+            None => (Display::None, RAISED),
+            Some((_, _, true, _)) => (Display::Flex, ACCENT),
+            Some(_) => (Display::Flex, RAISED),
         };
         if n.display != display {
             n.display = display;
         }
-        if bg.0 != fill {
-            bg.0 = fill;
+        if img.color != fill {
+            img.color = fill;
         }
     }
-    // Team colour, except the player's own row: an ACCENT bar instead.
+    // Team colour, except the player's own row (filled with the accent): its stripe is dark.
     for (Stripe(i), mut bg) in &mut stripes {
         let c = match list.get(*i) {
-            Some((_, _, true, _)) => ACCENT,
+            Some((_, _, true, _)) => ON_ACCENT,
             Some((_, _, _, Some(Team::Red))) => RED,
             Some((_, _, _, Some(Team::Blue))) => BLUE,
             _ => Color::NONE,
@@ -1305,9 +1308,38 @@ pub(super) fn scores(
             _ => format!("{:.2}", s.kills as f32 / s.deaths.max(1) as f32),
         };
         set(&mut t, text);
-        let want = if *you { ACCENT } else { INK };
+        let want = if *you { ON_ACCENT } else { INK };
         if color.0 != want {
             color.0 = want;
+        }
+    }
+}
+
+/// The board is a 1920-canvas panel: while the match is over it hangs below the headline at full
+/// size, under the HUD scale (Tab) it sits in the middle of the screen at 0.8 so it keeps the
+/// size it had at 1280.
+pub(super) fn board_fit(
+    frozen: Option<Res<Frozen>>,
+    mut board: Query<(&Show, &mut Node, &mut UiTransform)>,
+) {
+    let (top, y, scale) = if frozen.is_some() {
+        (px(230), px(0), 1.0)
+    } else {
+        (percent(50), percent(-50), 0.8)
+    };
+    for (show, mut node, mut tf) in &mut board {
+        if *show != Show::Board {
+            continue;
+        }
+        let translation = Val2::new(percent(-50), y);
+        if node.top != top {
+            node.top = top;
+        }
+        if tf.translation != translation {
+            tf.translation = translation;
+        }
+        if tf.scale.x != scale {
+            tf.scale = Vec2::splat(scale);
         }
     }
 }

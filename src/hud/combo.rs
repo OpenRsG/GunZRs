@@ -393,7 +393,7 @@ struct Parts {
     flash: Entity,
 }
 
-/// INK at 0, amber at 0.5, danger red at 1: how hot a multiplier or tier burns.
+/// INK at 0, the accent at 0.5, danger red at 1: how hot a multiplier or tier burns.
 fn heat(t: f32) -> Color {
     let mix =
         |a: Color, b: Color, t: f32| Color::from(LinearRgba::from(a).mix(&LinearRgba::from(b), t));

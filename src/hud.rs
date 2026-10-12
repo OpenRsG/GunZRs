@@ -22,6 +22,8 @@ mod feed;
 mod fx;
 mod panels;
 
+pub use panels::BoardRoot;
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
@@ -44,6 +46,7 @@ impl Plugin for HudPlugin {
                         panels::reticle,
                         panels::weapon,
                         panels::scores,
+                        panels::board_fit,
                         panels::banner,
                         crate::menu::fit_hud,
                         panels::touch_layout,

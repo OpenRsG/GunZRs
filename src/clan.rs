@@ -14,8 +14,8 @@ use crate::{
     profile::{MatchGain, Profile},
     session::{Clock, Rules},
     ui::{
-        ACCENT, DIM, INK, LINE, RAISED, body, button, compact, digits, display, heading, panel,
-        shadow, strong,
+        ACCENT, Cut, DIM, EDGE, INK, MUTE, ON_ACCENT, RAISED, Segs, TEXT, body, button, caption,
+        compact, digits, display, mono, primary, section, segs, shadow, shape, strong, tracking,
     },
     view::decode,
 };
@@ -510,6 +510,13 @@ pub(crate) struct Ui {
     sure: bool,
 }
 
+impl Ui {
+    /// The name box has the keyboard (the menu leaves Enter and the F keys alone).
+    pub(crate) fn typing(&self) -> bool {
+        self.typing
+    }
+}
+
 #[derive(Component, Clone, Copy)]
 enum Act {
     Emblem(i32),
@@ -528,8 +535,10 @@ enum Txt {
     Msg,
     Emblem,
     Back,
-    Info,
-    Members,
+    Wins,
+    Losses,
+    Points,
+    Rank,
 }
 
 /// Shown only while the profile has (`true`) or lacks (`false`) a clan.
@@ -540,6 +549,18 @@ struct Show(bool);
 #[derive(Component)]
 struct Table;
 
+/// The member tiles live here.
+#[derive(Component)]
+struct Members;
+
+/// The name well (tinted while it takes keys).
+#[derive(Component)]
+struct NameBox;
+
+/// The segment bar of the emblem (`false`) or background (`true`) stepper: the position in the list.
+#[derive(Component)]
+struct Pos(bool);
+
 /// The big emblem on the page (its first child is the emblem on top of the background).
 #[derive(Component)]
 struct Preview;
@@ -548,169 +569,258 @@ struct Preview;
 const NO_CLAN: &str = "You are not a member of any clan.";
 
 pub(crate) fn fill(p: &mut ChildSpawnerCommands, clan: &ClanArt) {
-    let row = || Node {
-        align_items: AlignItems::Center,
-        column_gap: px(6),
-        ..default()
-    };
-    let cap = |s: &str, w: f32| {
-        (
-            line(s.to_uppercase(), compact(14.0), DIM),
+    // `‹ NAME ... value ›` over a segment bar of the position in the list: the MATCH stepper well.
+    let stepper = |c: &mut ChildSpawnerCommands,
+                   name: &str,
+                   t: Txt,
+                   back: bool,
+                   step: fn(i32) -> Act,
+                   n: usize| {
+        c.spawn((
             Node {
-                width: px(w),
+                width: percent(100),
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                padding: UiRect::all(px(10)),
                 ..default()
             },
-        )
-    };
-    let value = |t: Txt| {
-        (
-            t,
-            line("", strong(16.0), INK),
-            Node {
-                width: px(220),
+            shape(Cut::Notch(8), RAISED),
+        ))
+        .with_children(|w| {
+            w.spawn(button(44.0, 44.0, "‹", 22.0, step(-1)));
+            w.spawn(Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                padding: UiRect::horizontal(px(8)),
                 ..default()
-            },
-        )
-    };
-    p.spawn(panel(560.0, AlignItems::FlexStart))
-        .with_children(|m| {
-            m.spawn(heading("CLAN"));
-            m.spawn(row()).with_children(|r| {
-                r.spawn((
-                    Preview,
-                    mark(clan, clan.emblems[0].id, clan.backgrounds[0].id, 110.0),
-                ));
-                r.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(10),
+            })
+            .with_children(|m| {
+                m.spawn(Node {
+                    width: percent(100),
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Baseline,
                     ..default()
                 })
-                .with_children(|c| {
-                    // The header: the clan's name, click to rename (or type one while creating).
-                    c.spawn((
-                        Button,
-                        Act::Name,
-                        Node {
-                            width: px(320),
-                            height: px(42),
-                            align_items: AlignItems::Center,
-                            padding: UiRect::horizontal(px(10)),
-                            border: UiRect::all(px(1)),
-                            border_radius: BorderRadius::all(px(3)),
-                            ..default()
-                        },
-                        BackgroundColor(RAISED),
-                        BorderColor::all(LINE),
-                        children![(Txt::Name, line("", display(22.0), ACCENT))],
-                    ));
-                    for (name, step, t) in [
-                        ("Emblem", Act::Emblem as fn(i32) -> Act, Txt::Emblem),
-                        ("Background", Act::Back, Txt::Back),
-                    ] {
-                        c.spawn(row()).with_children(|r| {
-                            r.spawn(cap(name, 110.0));
-                            r.spawn(button(30.0, 28.0, "<", 16.0, step(-1)));
-                            r.spawn(value(t));
-                            r.spawn(button(30.0, 28.0, ">", 16.0, step(1)));
-                        });
-                    }
+                .with_children(|r| {
+                    r.spawn(caption(name, 13.0));
+                    r.spawn((t, line("", strong(19.0), INK)));
                 });
+                m.spawn((Pos(back), segs(n, 0, 6.0, 2.0)));
             });
-            m.spawn((
-                Show(false),
+            w.spawn(button(44.0, 44.0, "›", 22.0, step(1)));
+        });
+    };
+    let tile = |c: &mut ChildSpawnerCommands, name: &str, t: Txt| {
+        c.spawn((
+            Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                padding: UiRect::axes(px(16), px(10)),
+                ..default()
+            },
+            shape(Cut::Notch(10), RAISED),
+        ))
+        .with_children(|t_| {
+            t_.spawn(caption(name, 12.0));
+            t_.spawn((t, line("", digits(28.0), INK)));
+        });
+    };
+    p.spawn((
+        Node {
+            width: px(900),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(10),
+            padding: UiRect::all(px(22)),
+            ..default()
+        },
+        shape(Cut::Chamfer(18), crate::ui::SURFACE),
+    ))
+    .with_children(|m| {
+        m.spawn(section(1, "CLAN"));
+        m.spawn(Node {
+            column_gap: px(24),
+            ..default()
+        })
+        .with_children(|r| {
+            // the emblem, large in a chamfered frame
+            r.spawn((
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(8),
+                    padding: UiRect::all(px(12)),
+                    flex_shrink: 0.0,
                     ..default()
                 },
-            ))
+                shape(Cut::Chamfer(18), RAISED),
+                children![(
+                    Preview,
+                    mark(clan, clan.emblems[0].id, clan.backgrounds[0].id, 216.0)
+                )],
+            ));
+            r.spawn(Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(10),
+                ..default()
+            })
             .with_children(|c| {
+                // The clan's name: click to type (a new name while creating, or to rename).
                 c.spawn((
-                    line(
-                        format!(
-                            "Clan creation requires level {CREATE_LEVEL} or higher and 20,000 BT, a unique name of up to {NAME_MAX} characters and {FOUNDERS} founding members (bots join for you). Click the name box and type."
-                        ),
-                        body(14.0),
-                        DIM,
-                    ),
+                    Button,
+                    Act::Name,
+                    NameBox,
                     Node {
-                        width: px(500),
+                        width: percent(100),
+                        height: px(72),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::Center,
+                        row_gap: px(2),
+                        padding: UiRect::horizontal(px(18)),
                         ..default()
                     },
+                    shape(Cut::Notch(10), RAISED),
+                    children![
+                        caption("Clan name", 13.0),
+                        (Txt::Name, line("", display(34.0), INK), tracking(0.02, 34.0))
+                    ],
                 ));
-                c.spawn(button(160.0, 40.0, "CREATE", 20.0, Act::Create));
+                stepper(c, "Emblem", Txt::Emblem, false, Act::Emblem, clan.emblems.len());
+                stepper(c, "Background", Txt::Back, true, Act::Back, clan.backgrounds.len());
             });
-            m.spawn((Show(true), row())).with_children(|r| {
-                for (label, act) in [
-                    ("RENAME", Act::Rename),
-                    ("RECRUIT", Act::Recruit),
-                    ("KICK", Act::Kick),
-                    ("LEAVE", Act::Leave),
-                ] {
-                    r.spawn(button(98.0, 36.0, label, 16.0, act));
-                }
-            });
-            m.spawn((
-                Txt::Msg,
-                line("", body(14.0), ACCENT),
+        });
+        m.spawn((
+            Show(false),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(14),
+                ..default()
+            },
+        ))
+        .with_children(|c| {
+            c.spawn((
+                line(
+                    format!(
+                        "Clan creation requires level {CREATE_LEVEL} or higher and 20,000 BT, a unique name of up to {NAME_MAX} characters and {FOUNDERS} founding members (bots join for you). Click the name box and type."
+                    ),
+                    body(16.0),
+                    DIM,
+                ),
                 Node {
-                    width: px(500),
+                    width: percent(100),
+                    ..default()
+                },
+            ));
+            c.spawn(primary(260.0, 56.0, "CREATE", 20.0, Act::Create));
+        });
+        m.spawn((
+            Show(true),
+            Node {
+                column_gap: px(8),
+                ..default()
+            },
+        ))
+        .with_children(|r| {
+            for (label, act) in [
+                ("RENAME", Act::Rename),
+                ("RECRUIT", Act::Recruit),
+                ("KICK", Act::Kick),
+                ("LEAVE", Act::Leave),
+            ] {
+                r.spawn(button(150.0, 44.0, label, 16.0, act));
+            }
+        });
+        m.spawn((Txt::Msg, line("", body(15.0), crate::ui::DANGER)));
+        m.spawn((
+            Show(true),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(10),
+                ..default()
+            },
+        ))
+        .with_children(|c| {
+            c.spawn(Node {
+                column_gap: px(8),
+                ..default()
+            })
+            .with_children(|r| {
+                tile(r, "Wins", Txt::Wins);
+                tile(r, "Losses", Txt::Losses);
+                tile(r, "Points", Txt::Points);
+                tile(r, "Ranking", Txt::Rank);
+            });
+            c.spawn(caption("Members", 13.0));
+            c.spawn((
+                Members,
+                Node {
+                    width: px(856),
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: px(8),
+                    row_gap: px(6),
                     ..default()
                 },
             ));
         });
-    p.spawn((Show(true), panel(290.0, AlignItems::FlexStart)))
-        .with_children(|m| {
-            m.spawn(heading("CLAN INFO"));
-            m.spawn((Txt::Info, line("", compact(16.0), INK)));
-            m.spawn(heading("MEMBERS"));
-            m.spawn((Txt::Members, line("", compact(16.0), INK)));
-        });
-    p.spawn(panel(340.0, AlignItems::FlexStart))
-        .with_children(|m| {
-            m.spawn(heading("RANKING"));
-            m.spawn(Node {
-                column_gap: px(8),
-                padding: UiRect::bottom(px(4)),
-                ..default()
-            })
-            .with_children(|h| {
-                h.spawn((
-                    line("RANK", compact(12.0), DIM),
+    });
+    p.spawn((
+        Node {
+            width: px(956),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(6),
+            padding: UiRect::all(px(22)),
+            ..default()
+        },
+        shape(Cut::Chamfer(18), crate::ui::SURFACE),
+    ))
+    .with_children(|m| {
+        m.spawn(section(2, "RANKING"));
+        m.spawn(Node {
+            width: percent(100),
+            column_gap: px(12),
+            padding: UiRect::horizontal(px(14)),
+            ..default()
+        })
+        .with_children(|h| {
+            for (s, w) in [("Rank", 44.0), ("Clan", 0.0), ("Points", 90.0)] {
+                let node = if w > 0.0 {
                     Node {
-                        width: px(44),
+                        width: px(w),
                         ..default()
-                    },
-                ));
-                h.spawn((
-                    line("CLAN", compact(12.0), DIM),
+                    }
+                } else {
                     Node {
                         flex_grow: 1.0,
                         flex_basis: px(0),
                         ..default()
-                    },
-                ));
+                    }
+                };
+                let justify = if s == "Points" {
+                    Justify::Right
+                } else {
+                    Justify::Left
+                };
                 h.spawn((
-                    line("POINTS", compact(12.0), DIM),
+                    caption(s, 12.0),
+                    node,
                     TextLayout {
-                        justify: Justify::Right,
-                        ..default()
-                    },
-                    Node {
-                        width: px(60),
+                        justify,
                         ..default()
                     },
                 ));
-            });
-            m.spawn((
-                Table,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(3),
-                    ..default()
-                },
-            ));
+            }
         });
+        m.spawn((
+            Table,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                ..default()
+            },
+        ));
+    });
 }
 
 pub struct ClanMenuPlugin;
@@ -755,6 +865,7 @@ fn act(
     art: Res<ClanArt>,
     mut ui: ResMut<Ui>,
     mut profile: ResMut<Profile>,
+    mut toasts: MessageWriter<crate::menu::Toast>,
 ) {
     for (i, a) in &clicks {
         if *i != Interaction::Pressed {
@@ -763,43 +874,43 @@ fn act(
         ui.typing = matches!(a, Act::Name);
         let confirm = matches!(a, Act::Leave) && ui.sure;
         ui.sure = matches!(a, Act::Leave) && !confirm;
-        let result = match *a {
+        // `Ok` is the confirmation toast (empty: none), `Err` the inline error
+        let result: Result<&str, String> = match *a {
             Act::Emblem(d) | Act::Back(d) => {
                 let back = matches!(a, Act::Back(_));
                 cycle(&art, &mut ui, &mut profile, back, d);
-                Ok(String::new())
+                Ok("")
             }
-            Act::Name => Ok(String::new()),
+            Act::Name => Ok(""),
             Act::Create => {
                 let pick = current(&art, &ui, &profile);
                 let name = ui.draft.clone();
                 profile
                     .create_clan(&name, pick, &art.rivals)
-                    .map(|()| "Clan created".to_owned())
+                    .map(|()| "CLAN CREATED")
             }
             Act::Rename => {
                 let name = ui.draft.clone();
                 profile
                     .rename_clan(&name, &art.rivals)
-                    .map(|()| "Clan renamed.".to_owned())
+                    .map(|()| "CLAN RENAMED")
             }
-            Act::Recruit => profile
-                .recruit()
-                .map(|()| "A new member has joined the clan.".to_owned()),
-            Act::Kick => profile
-                .kick()
-                .map(|()| "The selected member has been removed from the clan.".to_owned()),
+            Act::Recruit => profile.recruit().map(|()| "MEMBER JOINED"),
+            Act::Kick => profile.kick().map(|()| "MEMBER REMOVED"),
             Act::Leave if confirm => {
                 profile.clan = None;
                 ui.draft.clear();
-                Ok("You have left the clan.".to_owned())
+                Ok("YOU LEFT THE CLAN")
             }
-            Act::Leave if profile.clan.is_some() => {
-                Ok("Are you sure that you want to leave the clan? Press LEAVE again.".to_owned())
-            }
+            Act::Leave if profile.clan.is_some() => Ok("PRESS LEAVE AGAIN TO CONFIRM"),
             Act::Leave => Err(NO_CLAN.to_owned()),
         };
-        ui.msg = result.unwrap_or_else(|e| e);
+        if let Ok(t) = result
+            && !t.is_empty()
+        {
+            toasts.write(crate::menu::Toast(t.into()));
+        }
+        ui.msg = result.err().unwrap_or_default();
     }
 }
 
@@ -823,18 +934,20 @@ fn typing(mut keys: MessageReader<KeyboardInput>, mut ui: ResMut<Ui>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn refresh(
     mut commands: Commands,
     art: Res<ClanArt>,
     ui: Res<Ui>,
     profile: Res<Profile>,
-    mut texts: Query<(&Txt, &mut Text)>,
+    mut texts: Query<(&Txt, &mut Text, &mut TextColor)>,
     mut shows: Query<(&Show, &mut Node)>,
-    mut fields: Query<(&Act, &mut BorderColor)>,
-    mut preview: Query<(&mut ImageNode, &Children), With<Preview>>,
-    mut icons: Query<&mut ImageNode, Without<Preview>>,
+    mut name_box: Query<&mut ImageNode, With<NameBox>>,
+    mut bars: Query<(&Pos, &mut Segs)>,
+    mut preview: Query<(&mut ImageNode, &Children), (With<Preview>, Without<NameBox>)>,
+    mut icons: Query<&mut ImageNode, (Without<Preview>, Without<NameBox>)>,
     table: Query<Entity, With<Table>>,
+    members: Query<Entity, With<Members>>,
     fresh: Query<(), Added<Table>>,
     mut last: Local<Option<(Option<Clan>, Ui)>>,
 ) {
@@ -853,27 +966,10 @@ fn refresh(
             .find(|e| e.id == id)
             .map_or_else(String::new, |e| e.name.clone())
     };
+    let at = |list: &[Entry], id: u32| list.iter().position(|e| e.id == id).map_or(0, |i| i + 1);
     let clan = profile.clan.as_ref();
-    let info = clan.map_or_else(String::new, |c| {
-        let (rank, of) = c.ranking(&art.rivals);
-        format!(
-            "Clan Leader : {}\nWin/Lose : {} / {}\nPoint : {}\nRanking : {rank} / {of}",
-            profile.name, c.wins, c.losses, c.points
-        )
-    });
-    let members = clan.map_or_else(String::new, |c| {
-        let mut s = format!("Clan Leader   {}", profile.name);
-        for (i, m) in c.members.iter().enumerate() {
-            let rank = if i == 0 {
-                "Clan Officer"
-            } else {
-                "Clan Member"
-            };
-            s += &format!("\n{rank:<13} {m}");
-        }
-        s
-    });
-    for (t, mut text) in &mut texts {
+    let (rank, of) = clan.map_or((0, 0), |c| c.ranking(&art.rivals));
+    for (t, mut text, mut color) in &mut texts {
         let s = match t {
             Txt::Name if ui.typing => format!("{}_", ui.draft),
             Txt::Name if ui.draft.is_empty() => "(type a name)".into(),
@@ -881,11 +977,23 @@ fn refresh(
             Txt::Msg => ui.msg.clone(),
             Txt::Emblem => name_of(&art.emblems, emblem),
             Txt::Back => name_of(&art.backgrounds, bg),
-            Txt::Info => info.clone(),
-            Txt::Members => members.clone(),
+            Txt::Wins => clan.map_or(0, |c| c.wins).to_string(),
+            Txt::Losses => clan.map_or(0, |c| c.losses).to_string(),
+            Txt::Points => clan.map_or(0, |c| c.points).to_string(),
+            Txt::Rank => format!("{rank} / {of}"),
         };
         if text.0 != s {
             text.0 = s;
+        }
+        if matches!(t, Txt::Name) {
+            let c = if ui.draft.is_empty() && !ui.typing {
+                DIM
+            } else {
+                INK
+            };
+            if color.0 != c {
+                color.0 = c;
+            }
         }
     }
     for (h, mut n) in &mut shows {
@@ -895,9 +1003,17 @@ fn refresh(
             Display::None
         };
     }
-    for (a, mut b) in &mut fields {
-        if matches!(a, Act::Name) {
-            *b = BorderColor::all(if ui.typing { ACCENT } else { LINE });
+    if let Ok(mut b) = name_box.single_mut() {
+        b.color = if ui.typing { EDGE } else { RAISED };
+    }
+    for (Pos(back), mut segs) in &mut bars {
+        let lit = if *back {
+            at(&art.backgrounds, bg)
+        } else {
+            at(&art.emblems, emblem)
+        };
+        if segs.lit != lit {
+            segs.lit = lit;
         }
     }
     for (mut back, kids) in &mut preview {
@@ -905,6 +1021,48 @@ fn refresh(
         if let Some(mut icon) = kids.first().and_then(|k| icons.get_mut(*k).ok()) {
             *icon = art.icon(emblem);
         }
+    }
+    if let Ok(members) = members.single() {
+        commands
+            .entity(members)
+            .despawn_children()
+            .with_children(|g| {
+                let leader = std::iter::once(("LEADER", profile.name.as_str()));
+                let rest = clan.into_iter().flat_map(|c| {
+                    c.members
+                        .iter()
+                        .enumerate()
+                        .map(|(i, m)| (if i == 0 { "OFFICER" } else { "MEMBER" }, m.as_str()))
+                });
+                for (role, name) in leader.chain(rest) {
+                    g.spawn((
+                        Node {
+                            width: px(420),
+                            height: px(36),
+                            align_items: AlignItems::Center,
+                            column_gap: px(12),
+                            padding: UiRect::horizontal(px(14)),
+                            ..default()
+                        },
+                        shape(Cut::Notch(8), RAISED),
+                        children![
+                            (
+                                line(
+                                    role,
+                                    mono(12.0),
+                                    if role == "LEADER" { ACCENT } else { DIM }
+                                ),
+                                tracking(0.14, 12.0),
+                                Node {
+                                    width: px(74),
+                                    ..default()
+                                },
+                            ),
+                            line(name, compact(17.0), TEXT),
+                        ],
+                    ));
+                }
+            });
     }
     let Ok(table) = table.single() else { return };
     let mut rows: Vec<(String, u32, u32, u32, bool)> = art
@@ -921,27 +1079,34 @@ fn refresh(
         .despawn_children()
         .with_children(|t| {
             for (i, (name, points, emblem, bg, you)) in rows.iter().enumerate() {
-                let color = if *you { ACCENT } else { INK };
-                t.spawn(Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    ..default()
-                })
+                // the player's clan is filled with the accent, like a chosen tile
+                let (fill, index, ink) = if *you {
+                    (ACCENT, ON_ACCENT, ON_ACCENT)
+                } else {
+                    (RAISED, MUTE, INK)
+                };
+                t.spawn((
+                    Node {
+                        width: percent(100),
+                        height: px(42),
+                        align_items: AlignItems::Center,
+                        column_gap: px(12),
+                        padding: UiRect::horizontal(px(14)),
+                        ..default()
+                    },
+                    shape(Cut::Notch(8), fill),
+                ))
                 .with_children(|r| {
-                    r.spawn(mark(&art, *emblem, *bg, 26.0));
                     r.spawn((
-                        line(format!("{}.", i + 1), digits(15.0), DIM),
-                        TextLayout {
-                            justify: Justify::Right,
-                            ..default()
-                        },
+                        line(format!("{:02}", i + 1), digits(18.0), index),
                         Node {
-                            width: px(28),
+                            width: px(44),
                             ..default()
                         },
                     ));
+                    r.spawn(mark(&art, *emblem, *bg, 28.0));
                     r.spawn((
-                        line(name.clone(), strong(15.0), color),
+                        line(name.clone(), strong(18.0), ink),
                         Node {
                             flex_grow: 1.0,
                             flex_basis: px(0),
@@ -949,13 +1114,13 @@ fn refresh(
                         },
                     ));
                     r.spawn((
-                        line(points.to_string(), digits(15.0), color),
+                        line(points.to_string(), digits(18.0), ink),
                         TextLayout {
                             justify: Justify::Right,
                             ..default()
                         },
                         Node {
-                            width: px(60),
+                            width: px(90),
                             ..default()
                         },
                     ));
@@ -1021,6 +1186,7 @@ impl Plugin for ClanPlugin {
             (
                 tag,
                 overlay.run_if(not(any_with_component::<Overlay>)),
+                attach.run_if(not(any_with_component::<Strip>)),
                 strip,
                 settle,
             )
@@ -1094,8 +1260,8 @@ fn tag(
     }
 }
 
-/// The HUD additions: the header's emblems and names beside the clock, the scoreboard's clan
-/// strip, and the emblem kill feed (the stock feed is silent while a war runs).
+/// The HUD additions: the header's emblems and names beside the clock (the scoreboard's clan strip
+/// is [`attach`]ed; the emblem kill feed is the HUD's, silent while a war runs).
 fn overlay(
     mut commands: Commands,
     war: Res<ClanWar>,
@@ -1128,22 +1294,6 @@ fn overlay(
             ],
         )
     };
-    let points = |s: &Side, i: usize| {
-        (
-            Points(i),
-            line(format!("{}  {}", s.name, s.points), strong(18.0), INK),
-        )
-    };
-    let strip = |s: &Side, i: usize| {
-        (
-            Node {
-                align_items: AlignItems::Center,
-                column_gap: px(6),
-                ..default()
-            },
-            children![mark(&art, s.emblem, s.bg, 36.0), points(s, i)],
-        )
-    };
     commands
         .spawn((
             Overlay,
@@ -1159,51 +1309,53 @@ fn overlay(
         .with_children(|r| {
             r.spawn(side(&war.sides[0], 0));
             r.spawn(side(&war.sides[1], 1));
-            // Over the scoreboard's top right (the board is 720 x 440 and centred).
-            r.spawn((
-                Strip,
-                Visibility::Hidden,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: percent(50),
-                    top: percent(50),
-                    margin: UiRect {
-                        left: px(-170),
-                        top: px(-212),
-                        ..default()
-                    },
-                    column_gap: px(24),
-                    ..default()
-                },
-            ))
-            .with_children(|s| {
-                s.spawn(strip(&war.sides[0], 0));
-                s.spawn(strip(&war.sides[1], 1));
-            });
         });
 }
 
-/// The strip shows with the scoreboard (Tab or match over) and carries each clan's points; once
-/// the war is settled the player's shows the gain.
-fn strip(
+/// The clan strip hangs over the scoreboard's top right as its child, so it follows the board's
+/// place and scale and shows with it.
+fn attach(
+    mut commands: Commands,
     war: Res<ClanWar>,
-    profile: Res<Profile>,
-    input: crate::controls::Input,
-    clock: Res<Clock>,
-    mut vis: Query<&mut Visibility, With<Strip>>,
-    mut texts: Query<(&Points, &mut Text)>,
+    art: Res<ClanArt>,
+    board: Query<Entity, With<crate::hud::BoardRoot>>,
 ) {
-    let show = input.pressed(crate::controls::Action::Score) || clock.over.is_some();
-    for mut v in &mut vis {
-        let want = if show {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if *v != want {
-            *v = want;
-        }
-    }
+    let Ok(board) = board.single() else { return };
+    let side = |s: &Side, i: usize| {
+        (
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                ..default()
+            },
+            children![
+                mark(&art, s.emblem, s.bg, 32.0),
+                (
+                    Points(i),
+                    line(format!("{}  {}", s.name, s.points), strong(18.0), INK),
+                    shadow()
+                )
+            ],
+        )
+    };
+    commands.entity(board).with_children(|b| {
+        b.spawn((
+            Strip,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(-44),
+                right: px(0),
+                column_gap: px(24),
+                ..default()
+            },
+            children![side(&war.sides[0], 0), side(&war.sides[1], 1)],
+        ));
+    });
+}
+
+/// The clan strip's points text carries each clan's points; once the war is settled the player's
+/// shows the gain.
+fn strip(war: Res<ClanWar>, profile: Res<Profile>, mut texts: Query<(&Points, &mut Text)>) {
     for (Points(i), mut t) in &mut texts {
         let s = &war.sides[*i];
         let text = match (*i, war.delta, &profile.clan) {
@@ -1356,6 +1508,7 @@ mod tests {
         let rivals = rivals(&emblems, &backgrounds);
         let mut app = App::new();
         app.add_message::<KeyboardInput>()
+            .add_message::<crate::menu::Toast>()
             .insert_resource(ClanArt {
                 icons: default(),
                 backs: default(),
@@ -1386,7 +1539,14 @@ mod tests {
         press(&mut app, Act::Create);
         let clan = |app: &App| app.world().resource::<Profile>().clan.clone();
         assert_eq!(clan(&app).unwrap().name, "Phoenix");
-        assert_eq!(app.world().resource::<Ui>().msg, "Clan created");
+        let toasts: Vec<String> = app
+            .world_mut()
+            .resource_mut::<Messages<crate::menu::Toast>>()
+            .drain()
+            .map(|t| t.0)
+            .collect();
+        assert_eq!(toasts, ["CLAN CREATED"]);
+        assert!(app.world().resource::<Ui>().msg.is_empty());
         press(&mut app, Act::Name);
         let window = app.world_mut().spawn_empty().id();
         let key = |app: &mut App, code: KeyCode, text: Option<&str>| {
@@ -1417,6 +1577,8 @@ mod tests {
         assert!(clan(&app).is_some());
         press(&mut app, Act::Leave);
         assert!(clan(&app).is_none());
+        press(&mut app, Act::Leave);
+        assert_eq!(app.world().resource::<Ui>().msg, NO_CLAN);
     }
 
     /// The war's end: points move once, the XP bonus is a `Reward` of half the match's XP.

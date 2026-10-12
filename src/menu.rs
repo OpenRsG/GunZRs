@@ -8,9 +8,9 @@ use crate::{
     actor::DEFAULT_LOADOUT,
     ani::Ani,
     anim::{Animator, Loop},
-    character::{self, Character, Look, Slot, TINTS, Wardrobe},
+    character::{self, Character, Look, TINTS, Wardrobe},
     clan::{self, ClanArt},
-    dashfx::{self, HUES, Hue, STYLES, Style, Trail},
+    dashfx::{self, HUES, Hue, Style, Trail},
     elu,
     hud::try_image,
     item::{Items, WeaponKind},
@@ -20,20 +20,21 @@ use crate::{
     profile::{Profile, Ranks, progress},
     shop::{self, ShopData},
     slashfx::{self, Slash},
-    ui::{
-        ACCENT, Chosen, DIM, INK, LINE, RAISED, SHADOW, body, button, compact, digits, display,
-        flat, heading, hover, panel, primary, shadow, strong,
-    },
+    ui::{ACCENT, Chosen, DIM, INK, body, button, digits, hover, panel, section},
     view::{self, Shot},
 };
 use bevy::{
     mesh::skinning::SkinnedMeshInverseBindposes,
     prelude::*,
     text::{Justify, LineBreak},
-    ui::{RelativeCursorPosition, UiTargetCamera},
+    ui::UiTargetCamera,
     window::PrimaryWindow,
 };
 use std::{collections::HashMap, f32::consts::TAU, str::FromStr, sync::Arc};
+
+mod chrome;
+mod matchpage;
+mod player;
 
 /// Removes `flag VALUE` from `args` and parses the value; `Err` if the value is missing/bad.
 pub fn take_arg<T: FromStr>(args: &mut Vec<String>, flag: &str) -> Result<Option<T>, ()> {
@@ -539,107 +540,6 @@ fn label(s: &str, w: f32) -> impl Bundle {
     )
 }
 
-/// Marks a top-bar page tab; [`tab_look`] paints it from [`Interaction`] and [`Chosen`].
-#[derive(Component)]
-struct NavTab;
-
-/// A top-bar tab: caps text over a 3 px bar that lights up on hover and shows the accent when
-/// selected (no filled tile, unlike [`button`]).
-fn tab(text: &str, page: Page) -> impl Bundle {
-    (
-        Act::Page(page),
-        NavTab,
-        Button,
-        Node {
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            row_gap: px(7),
-            padding: UiRect::horizontal(px(2)),
-            ..default()
-        },
-        children![
-            (
-                Text::new(text.to_uppercase()),
-                strong(19.0),
-                TextColor(DIM),
-                shadow()
-            ),
-            (
-                Node {
-                    width: percent(100),
-                    height: px(3),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ),
-        ],
-    )
-}
-
-/// Hover/selected look of the top-bar tabs [`tab`] spawns: a lighter style than [`hover`]'s
-/// filled [`Flat`] buttons (tabs never get a background tile).
-#[allow(clippy::type_complexity)]
-fn tab_look(
-    tabs: Query<(&Interaction, Has<Chosen>, &Children), With<NavTab>>,
-    mut labels: Query<&mut TextColor>,
-    mut bars: Query<&mut BackgroundColor>,
-) {
-    for (i, chosen, kids) in &tabs {
-        let hot = *i != Interaction::None;
-        let ink = if chosen || hot { INK } else { DIM };
-        let bar = if chosen {
-            ACCENT
-        } else if hot {
-            DIM
-        } else {
-            Color::NONE
-        };
-        if let Some(&label) = kids.first()
-            && let Ok(mut t) = labels.get_mut(label)
-        {
-            t.set_if_neq(TextColor(ink));
-        }
-        if let Some(&under) = kids.get(1)
-            && let Ok(mut b) = bars.get_mut(under)
-        {
-            b.set_if_neq(BackgroundColor(bar));
-        }
-    }
-}
-
-/// Marks a [`quiet`] button; [`quiet_look`] lights its label on hover.
-#[derive(Component)]
-struct Quiet;
-
-/// A low-emphasis text button (QUIT): no tile, just caps text.
-fn quiet<A: Component>(text: &str, size: f32, act: A) -> impl Bundle {
-    (
-        act,
-        Quiet,
-        Button,
-        Node {
-            padding: UiRect::axes(px(12), px(10)),
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        children![(Text::new(text.to_uppercase()), strong(size), TextColor(DIM))],
-    )
-}
-
-/// DIM label, INK while hovered or pressed.
-fn quiet_look(
-    buttons: Query<(&Interaction, &Children), With<Quiet>>,
-    mut labels: Query<&mut TextColor>,
-) {
-    for (i, kids) in &buttons {
-        if let Some(&label) = kids.first()
-            && let Ok(mut t) = labels.get_mut(label)
-        {
-            t.set_if_neq(TextColor(if *i == Interaction::None { DIM } else { INK }));
-        }
-    }
-}
-
 /// What the main menu offers: maps, the characters and their clothes.
 #[derive(Resource)]
 pub(crate) struct Catalog {
@@ -722,20 +622,27 @@ enum Field {
     TimeName,
     KillsName,
     Blurb,
+    /// The MATCH hero's "MAP 29 / 30" and "MODE · TIME · KILLS" lines, the footer's summary and
+    /// the bot skill's label.
+    MapNo,
+    Hero,
+    Summary,
+    SkillName,
     Bots,
     Skill,
-    /// The piece / the dye of a body slot ([`Slot::ALL`] index).
+    /// The piece / the dye of a body slot ([`Slot::ALL`] index), and the piece's "n/total".
     Piece(usize),
     Tint(usize),
-    /// Whether the character on screen is the saved one.
-    Saved,
+    Count(usize),
     Scenario,
     Sac1,
     Sac2,
     Needs,
-    /// The effects panel: a tab's amount (a percentage) and colour name, and the ORIGINAL note.
+    /// The effects panel: a tab's amount (a percentage), colour name and its caption, and the
+    /// ORIGINAL note.
     Amount(Tab),
     Colour(Tab),
+    Caption(Tab),
     Note,
 }
 
@@ -743,6 +650,8 @@ enum Field {
 enum Act {
     Page(Page),
     Map(usize),
+    /// A random map.
+    RandomMap,
     Mode(Mode),
     Sex(bool),
     Step(Field, i32),
@@ -784,13 +693,10 @@ struct ModeShow(bool);
 #[derive(Component)]
 struct Preview;
 
-/// The colour square next to a slot's dye name.
-#[derive(Component)]
-struct Swatch(usize);
-
-/// Preview camera framings: name, eye height (m), distance (m).
+/// Preview camera framings: name, height (m) of the point shown at the viewport frame's centre,
+/// distance (m). FULL puts the feet on the floor ring.
 const FOCUS: [(&str, f32, f32); 5] = [
-    ("FULL", 1.05, 3.6),
+    ("FULL", 0.8, 3.2),
     ("HEAD", 1.62, 1.0),
     ("BODY", 1.25, 1.8),
     ("LEGS", 0.6, 1.9),
@@ -860,8 +766,8 @@ const DEMO_SETTLE: f32 = 0.4;
 const DASHES: [(f32, f32, &str); 2] = [(0.35, 1.0, "tumbleL"), (1.7, 0.0, "tumbleR")];
 const DASH_TIME: f32 = 0.45;
 const DEMO_END: f32 = 2.7;
-/// Metres of the dash at FULL framing (the preview frame is about 0.8 m wide).
-const DEMO_SPAN: f32 = 0.2;
+/// Metres of the dash at FULL framing (the viewport frame is about 2 m wide there).
+const DEMO_SPAN: f32 = 0.5;
 /// The slash demo plays the katana's combo clips (motion type 1) and ends after `SLASH_CAP`
 /// seconds at the latest.
 const SLASHES: [&str; 4] = ["attack1", "attack2", "attack3", "attack4"];
@@ -906,17 +812,6 @@ impl Clips {
     }
 }
 
-/// The amount slider of an EFFECTS tab and its filled part.
-#[derive(Component)]
-struct Slider(Tab);
-
-#[derive(Component)]
-struct Fill(Tab);
-
-/// Container shown only while its [`Tab`] is the EFFECTS panel's.
-#[derive(Component)]
-struct TabShow(Tab);
-
 /// The katana in the preview character's hand: hidden, but during the slash demo.
 #[derive(Component)]
 struct Sword;
@@ -935,8 +830,14 @@ fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32
         | Field::TimeName
         | Field::KillsName
         | Field::Blurb
+        | Field::MapNo
+        | Field::Hero
+        | Field::Summary
+        | Field::SkillName
         | Field::Amount(_)
         | Field::Colour(_)
+        | Field::Caption(_)
+        | Field::Count(_)
         | Field::Note => {}
         Field::Time => {
             let secs: Vec<u32> = cfg.mode.limits().minutes.iter().map(|m| m * 60).collect();
@@ -950,19 +851,16 @@ fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32
         Field::Skill => cfg.skill = ((cfg.skill * 10.0).round() + d as f32).clamp(0.0, 10.0) / 10.0,
         Field::Piece(s) => {
             // the base piece, then every piece of the wardrobe
-            let list = &cat.wardrobe(cfg.woman).slots[s];
-            let n = list.len() as i32 + 1;
-            let at = cfg.look.parts[s]
-                .and_then(|p| list.iter().position(|q| q.part == p))
-                .map_or(0, |i| i as i32 + 1);
-            let next = (at + d).rem_euclid(n) as usize;
-            cfg.look.parts[s] = next.checked_sub(1).map(|i| list[i].part);
+            let (_, at, n) = piece(cfg, cat, s);
+            let next = (at as i32 - 1 + d).rem_euclid(n as i32) as usize;
+            cfg.look.parts[s] = next
+                .checked_sub(1)
+                .map(|i| cat.wardrobe(cfg.woman).slots[s][i].part);
         }
         Field::Tint(s) => {
             let t = (cfg.look.tints[s] as i32 + d).rem_euclid(TINTS.len() as i32);
             cfg.look.tints[s] = t as u8;
         }
-        Field::Saved => {}
         Field::Sac1 | Field::Sac2 => {
             let Some(q) = &cat.quest else { return };
             let slot = (field == Field::Sac2) as usize;
@@ -998,47 +896,73 @@ fn step(cfg: &mut Config, cat: &Catalog, profile: &Profile, field: Field, d: i32
     }
 }
 
+/// A slot's current piece: its name, its 1-based place among the base piece and the wardrobe's
+/// pieces, and how many places there are.
+fn piece<'a>(cfg: &Config, cat: &'a Catalog, s: usize) -> (&'a str, usize, usize) {
+    let list = &cat.wardrobe(cfg.woman).slots[s];
+    match cfg.look.parts[s].and_then(|p| list.iter().position(|q| q.part == p)) {
+        Some(i) => (&list[i].name, i + 2, list.len() + 1),
+        None => ("Default", 1, list.len() + 1),
+    }
+}
+
 fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String {
     let clock = |s: u32| format!("{}:{:02}", s / 60, s % 60);
     match field {
-        Field::MapName if cfg.mode == Mode::Quest => "Quest".into(),
-        Field::MapName => cfg.map.as_deref().map(title).unwrap_or_default(),
-        Field::Time => cfg.time_limit.map_or("Off".into(), clock),
-        Field::Kills => cfg.kill_limit.map_or("Off".into(), |k| k.to_string()),
-        Field::TimeName => cfg.mode.time_name().into(),
-        Field::KillsName => cfg.mode.kills_name().into(),
+        Field::MapName if cfg.mode == Mode::Quest => "QUEST".into(),
+        Field::MapName => cfg
+            .map
+            .as_deref()
+            .map(title)
+            .unwrap_or_default()
+            .to_uppercase(),
+        Field::Time => cfg.time_limit.map_or("OFF".into(), clock),
+        Field::Kills => cfg.kill_limit.map_or("OFF".into(), |k| k.to_string()),
+        Field::TimeName => cfg.mode.time_name().to_uppercase(),
+        Field::KillsName => cfg.mode.kills_name().to_uppercase(),
         Field::Blurb => cfg.mode.blurb().into(),
         Field::Bots => cfg.bots.to_string(),
-        Field::Skill => format!(
-            "{:.1}  {}",
-            cfg.skill,
-            match cfg.skill {
-                s if s < 0.34 => "Easy",
-                s if s < 0.67 => "Normal",
-                _ => "Hard",
-            }
-        ),
+        Field::Skill => format!("{:.1}", cfg.skill),
+        Field::SkillName => match cfg.skill {
+            s if s < 0.34 => "EASY",
+            s if s < 0.67 => "NORMAL",
+            _ => "HARD",
+        }
+        .into(),
+        Field::MapNo if cfg.mode == Mode::Quest => "QUEST".into(),
+        Field::MapNo => {
+            let at = cfg
+                .map
+                .as_ref()
+                .and_then(|m| cat.maps.iter().position(|c| c == m));
+            format!("MAP {:02} / {}", at.map_or(0, |i| i + 1), cat.maps.len())
+        }
+        Field::Hero => {
+            let time = cfg.time_limit.map_or("No time limit".into(), clock);
+            let kills = cfg.kill_limit.map_or("No kill limit".into(), |k| {
+                format!("{k} {}", cfg.mode.kills_name())
+            });
+            format!("{} · {time} · {kills}", cfg.mode.name()).to_uppercase()
+        }
+        Field::Summary => format!(
+            "{} // {} // {} BOTS · {}",
+            value(cfg, cat, profile, Field::MapName),
+            cfg.mode.name(),
+            cfg.bots,
+            value(cfg, cat, profile, Field::SkillName)
+        )
+        .to_uppercase(),
+        // long item names are cut so the count stays clear of the step buttons
         Field::Piece(s) => {
-            let list = &cat.wardrobe(cfg.woman).slots[s];
-            match cfg.look.parts[s].and_then(|p| list.iter().position(|q| q.part == p)) {
-                _ if list.is_empty() => "Default (no other)".into(),
-                // long item names are cut so the count stays clear of the step buttons
-                Some(i) => {
-                    let name = &list[i].name;
-                    let short: String = name.chars().take(18).collect();
-                    let cut = if short.len() < name.len() { "." } else { "" };
-                    format!("{short}{cut} {}/{}", i + 1, list.len())
-                }
-                None => format!("Default  0/{}", list.len()),
-            }
+            let name = piece(cfg, cat, s).0;
+            let short: String = name.chars().take(15).collect();
+            let cut = if short.len() < name.len() { "." } else { "" };
+            format!("{short}{cut}")
         }
         Field::Tint(s) => TINTS[cfg.look.tints[s] as usize % TINTS.len()].0.into(),
-        Field::Saved => {
-            if (profile.woman, profile.look) == (cfg.woman, cfg.look) {
-                "Saved: matches use this character.".into()
-            } else {
-                "Not saved yet: SAVE keeps it (START saves too).".into()
-            }
+        Field::Count(s) => {
+            let (_, at, n) = piece(cfg, cat, s);
+            format!("{at}/{n}")
         }
         Field::Sac1 | Field::Sac2 => {
             let id = cfg.sacrifice[(field == Field::Sac2) as usize];
@@ -1074,17 +998,17 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
         }
         Field::Amount(t) if amount(profile, t) <= 0.0 => "OFF".into(),
         Field::Amount(t) => format!("{:.0}%", amount(profile, t) * 100.0),
-        Field::Colour(t) => format!(
-            "COLOUR  {}",
-            HUES.iter()
-                .find(|h| h.0
-                    == match t {
-                        Tab::Dash => profile.dash.hue,
-                        Tab::Slash => profile.slash.hue,
-                    })
-                .unwrap()
-                .2
-        ),
+        Field::Colour(t) | Field::Caption(t) => {
+            let hue = match t {
+                Tab::Dash => profile.dash.hue,
+                Tab::Slash => profile.slash.hue,
+            };
+            let name = HUES.iter().find(|h| h.0 == hue).unwrap().2;
+            match field {
+                Field::Caption(_) => format!("{name} COLOUR"),
+                _ => name.into(),
+            }
+        }
         Field::Note if dashfx::original(profile) => "ORIGINAL: no trails".into(),
         Field::Note => String::new(),
         Field::Scenario => cfg
@@ -1095,6 +1019,11 @@ fn value(cfg: &Config, cat: &Catalog, profile: &Profile, field: Field) -> String
     }
 }
 
+/// A short confirmation shown over the menu for about two seconds (SAVED, PURCHASED, SOLD, ...);
+/// any menu page may write one.
+#[derive(Message, Clone, Debug)]
+pub(crate) struct Toast(pub String);
+
 /// The main menu: its screen is built when [`Screen::Menu`] is entered, from the [`Launch`]'s config.
 pub struct MenuPlugin;
 
@@ -1102,18 +1031,30 @@ impl Plugin for MenuPlugin {
     /// Needs `ProfilePlugin` (the clan tab reads the profile) built before.
     fn build(&self, app: &mut App) {
         app.init_resource::<Clips>()
+            .add_message::<Toast>()
             .add_plugins((shop::ShopPlugin, clan::ClanMenuPlugin))
             .add_systems(OnEnter(Screen::Menu), (prepare, build).chain())
             .add_systems(
                 Update,
                 (
-                    auto_start, act, refresh, hover, tab_look, quiet_look, preview, demo, orbit,
+                    auto_start,
+                    act,
+                    refresh,
+                    hover,
+                    chrome::tab_look,
+                    chrome::quiet_look,
+                    chrome::mark,
+                    matchpage::bars,
+                    chrome::toast,
+                    preview,
+                    demo,
+                    orbit,
                     fit,
                 )
                     .chain()
                     .in_set(MenuSystems),
             )
-            .add_systems(Update, fx_panel.in_set(MenuSystems));
+            .add_systems(Update, (player::fx_panel, player::look).in_set(MenuSystems));
     }
 }
 
@@ -1171,7 +1112,7 @@ fn prepare(world: &mut World) {
     world.insert_resource(Demo::default());
     world.insert_resource(Fx(tab));
     world.insert_resource(Shown::default());
-    world.insert_resource(ClearColor(crate::phase::BACKDROP));
+    world.insert_resource(ClearColor(crate::ui::BACKDROP));
     world.resource_scope(|world, cat: Mut<Catalog>| crate::music::menu(world, &cat.vfs));
     let start_first = world
         .get_resource::<Hooks>()
@@ -1233,10 +1174,7 @@ fn build(
     let img = |n: &str, images: &mut Assets<Image>| {
         try_image(&cat.vfs, images, n).unwrap_or_else(|| panic!("interface/default/{n} missing"))
     };
-    let (logo, bg) = (
-        img("gunz_logo_hq.png", &mut images),
-        img("bg_play.png", &mut images),
-    );
+    let logo = img("gunz_logo_hq.png", &mut images);
     let camera = view::spawn_camera(
         &mut commands,
         &mut images,
@@ -1245,21 +1183,8 @@ fn build(
         Vec3::NEG_Z,
     )
     .id();
-    // Lobby background as a quad behind the character (UI sits on top of the 3D view). A child of
-    // the camera, far back, so it fills the view however far the camera pulls back (the slash
-    // demo); at the default framing it looks as it did 7 m away (scaled 60 / 7).
-    commands.spawn((
-        Mesh3d(meshes.add(Rectangle::new(162.9, 91.7))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(bg),
-            base_color: Color::srgb(0.85, 0.85, 0.9),
-            unlit: true,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, -0.43, -60.0),
-        ChildOf(camera),
-    ));
     commands.spawn((Preview, Transform::default(), Visibility::Hidden));
+    player::floor(&mut commands, &mut meshes, &mut materials);
 
     let cfg = &state.cfg;
     let row = || Node {
@@ -1312,6 +1237,7 @@ fn build(
     commands
         .spawn((
             UiTargetCamera(camera),
+            chrome::Root,
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -1319,213 +1245,26 @@ fn build(
             },
         ))
         .with_children(|root| {
-            // dark bands behind the tabs and the buttons, fading into the lobby picture
-            for (top, stops) in [(true, [0.8, 0.0]), (false, [0.0, 0.85])] {
-                let c = |a| SHADOW.with_alpha(a);
-                root.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: if top { px(0) } else { Val::Auto },
-                        bottom: if top { Val::Auto } else { px(0) },
-                        width: percent(100),
-                        height: px(110),
-                        ..default()
-                    },
-                    BackgroundGradient::from(LinearGradient::to_bottom(vec![
-                        ColorStop::new(c(stops[0]), percent(0)),
-                        ColorStop::new(c(stops[1]), percent(100)),
-                    ])),
-                ));
-            }
-            root.spawn((
-                ImageNode::new(logo),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(24),
-                    top: px(12),
-                    width: px(231),
-                    height: px(96),
-                    ..default()
-                },
-            ));
-            // Tabs: caps text, ACCENT underline on the selected page (tab_look paints it).
-            root.spawn(Node {
-                position_type: PositionType::Absolute,
-                left: px(280),
-                top: px(44),
-                column_gap: px(28),
-                ..default()
-            })
-            .with_children(|t| {
-                for (label, page) in [
-                    ("MATCH", Page::Match),
-                    ("PLAYER", Page::Player),
-                    ("SHOP", Page::Shop),
-                    ("INVENTORY", Page::Inventory),
-                    ("CLAN", Page::Clan),
-                    ("CONTROLS", Page::Controls),
-                    ("GRAPHICS", Page::Graphics),
-                ] {
-                    t.spawn(tab(label, page));
-                }
-            });
-            // Player strip: name, level + XP bar, bounty, medals.
-            let (level, into, need) = progress(profile.xp);
-            let frac = if need == 0 {
-                1.0
-            } else {
-                (into as f32 / need as f32).clamp(0.0, 1.0)
-            };
-            root.spawn(Node {
-                position_type: PositionType::Absolute,
-                top: px(14),
-                right: px(24),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::End,
-                row_gap: px(3),
-                ..default()
-            })
-            .with_children(|s| {
-                s.spawn((
-                    Text::new(profile.name.to_uppercase()),
-                    display(22.0),
-                    TextColor(INK),
-                    shadow(),
-                ));
-                s.spawn(Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    ..default()
-                })
-                .with_children(|r| {
-                    r.spawn((Text::new("LV"), compact(14.0), TextColor(DIM), shadow()));
-                    r.spawn((
-                        Text::new(level.to_string()),
-                        digits(15.0),
-                        TextColor(ACCENT),
-                        shadow(),
-                    ));
-                    r.spawn((
-                        Node {
-                            width: px(110),
-                            height: px(6),
-                            ..default()
-                        },
-                        BackgroundColor(RAISED),
-                    ))
-                    .with_children(|bar| {
-                        bar.spawn((
-                            Node {
-                                width: px(110.0 * frac),
-                                height: percent(100),
-                                ..default()
-                            },
-                            BackgroundColor(ACCENT),
-                        ));
-                    });
-                    r.spawn((
-                        Text::new(format!("{into}/{need}")),
-                        digits(14.0),
-                        TextColor(DIM),
-                        shadow(),
-                    ));
-                });
-                s.spawn(Node {
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    ..default()
-                })
-                .with_children(|r| {
-                    r.spawn((Text::new("BOUNTY"), compact(13.0), TextColor(DIM), shadow()));
-                    r.spawn((
-                        Text::new(profile.bounty.to_string()),
-                        digits(16.0),
-                        TextColor(INK),
-                        shadow(),
-                    ));
-                    r.spawn((Text::new("MEDALS"), compact(13.0), TextColor(DIM), shadow()));
-                    r.spawn((
-                        Text::new(profile.medals.to_string()),
-                        digits(16.0),
-                        TextColor(INK),
-                        shadow(),
-                    ));
-                });
-            });
-            let page = |page| {
+            chrome::header(root, logo, &profile, state.page);
+            let page_gap = |page, gap| {
                 (
                     PageRoot(page),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: px(24),
-                        top: px(120),
-                        right: px(24),
-                        column_gap: px(16),
+                        left: px(40),
+                        top: px(136),
+                        right: px(40),
+                        column_gap: px(gap),
                         align_items: AlignItems::FlexStart,
                         ..default()
                     },
                 )
             };
+            let page = |p| page_gap(p, 24.0);
             root.spawn(page(Page::Match)).with_children(|p| {
-                p.spawn((ModeShow(false), panel(676.0, AlignItems::FlexStart)))
-                    .with_children(|m| {
-                        m.spawn(heading("MAP"));
-                        m.spawn(Node {
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: px(4),
-                            row_gap: px(4),
-                            ..default()
-                        })
-                        .with_children(|g| {
-                            for (i, name) in cat.maps.iter().enumerate() {
-                                g.spawn(button(200.0, 30.0, &title(name), 16.0, Act::Map(i)));
-                            }
-                        });
-                    });
-                p.spawn(panel(540.0, AlignItems::FlexStart))
-                    .with_children(|m| {
-                        m.spawn(heading("RULES"));
-                        m.spawn((
-                            Value(Field::MapName),
-                            Text::new(value(cfg, &cat, &profile, Field::MapName)),
-                            display(30.0),
-                            TextColor(INK),
-                        ));
-                        m.spawn(Node {
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: px(6),
-                            row_gap: px(6),
-                            ..default()
-                        })
-                        .with_children(|g| {
-                            for mode in Mode::ALL {
-                                g.spawn(button(122.0,
-                                    30.0,
-                                    mode.name(),
-                                    13.0,
-                                    Act::Mode(mode),
-                                ));
-                            }
-                        });
-                        m.spawn((
-                            Value(Field::Blurb),
-                            Text::new(value(cfg, &cat, &profile, Field::Blurb)),
-                            body(15.0),
-                            TextColor(DIM),
-                            Node {
-                                width: px(510),
-                                height: px(40),
-                                ..default()
-                            },
-                        ));
-                        stepper(m, "Time limit", Field::Time, 150.0, false);
-                        stepper(m, "Kill limit", Field::Kills, 150.0, false);
-                        stepper(m, "Bots", Field::Bots, 150.0, false);
-                        stepper(m, "Bot skill", Field::Skill, 150.0, false);
-                    });
-                p.spawn((ModeShow(true), panel(660.0, AlignItems::FlexStart)))
+                p.spawn((ModeShow(true), panel(800.0, AlignItems::FlexStart)))
                     .with_children(|q| {
-                        q.spawn(heading("QUEST"));
+                        q.spawn(section(1, "QUEST"));
                         stepper(q, "Scenario", Field::Scenario, 300.0, false);
                         stepper(q, "Sacrifice 1", Field::Sac1, 300.0, false);
                         stepper(q, "Sacrifice 2", Field::Sac2, 300.0, false);
@@ -1541,122 +1280,10 @@ fn build(
                             },
                         ));
                     });
+                matchpage::fill(p, cfg, &cat, &profile);
             });
-            root.spawn(page(Page::Player)).with_children(|p| {
-                p.spawn(panel(740.0, AlignItems::FlexStart))
-                    .with_children(|m| {
-                        m.spawn(heading("CHARACTER"));
-                        m.spawn(row()).with_children(|r| {
-                            r.spawn(label("Sex", 110.0));
-                            r.spawn(button(110.0, 30.0, "Man", 16.0, Act::Sex(false)));
-                            r.spawn(button(110.0, 30.0, "Woman", 16.0, Act::Sex(true)));
-                        });
-                        // per slot: `label  << < piece > >>   < swatch dye >`
-                        for (s, slot) in Slot::ALL.into_iter().enumerate() {
-                            m.spawn(row()).with_children(|r| {
-                                r.spawn(label(slot.label(), 110.0));
-                                group(r, Field::Piece(s), 236.0, true);
-                                r.spawn(Node {
-                                    width: px(10),
-                                    ..default()
-                                });
-                                let f = Field::Tint(s);
-                                r.spawn(button(28.0, 28.0, "<", 14.0, Act::Step(f, -1)));
-                                r.spawn((
-                                    Swatch(s),
-                                    Node {
-                                        width: px(16),
-                                        height: px(16),
-                                        border: UiRect::all(px(1)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(INK),
-                                    BorderColor::all(LINE),
-                                ));
-                                r.spawn((
-                                    Value(f),
-                                    Text::new(value(cfg, &cat, &profile, f)),
-                                    digits(14.0),
-                                    TextColor(INK),
-                                    TextLayout {
-                                        justify: Justify::Center,
-                                        linebreak: LineBreak::NoWrap,
-                                        ..default()
-                                    },
-                                    Node {
-                                        width: px(70),
-                                        height: px(20),
-                                        overflow: Overflow::clip(),
-                                        ..default()
-                                    },
-                                ));
-                                r.spawn(button(28.0, 28.0, ">", 14.0, Act::Step(f, 1)));
-                            });
-                        }
-                        m.spawn(row()).with_children(|r| {
-                            r.spawn(label("", 110.0));
-                            r.spawn(button(130.0, 32.0, "RANDOM", 16.0, Act::Random(false)));
-                            r.spawn(button(130.0, 32.0, "RANDOM DYES", 15.0, Act::Random(true)));
-                            r.spawn(button(110.0, 32.0, "RESET", 16.0, Act::Reset));
-                            r.spawn(button(130.0, 32.0, "SAVE", 18.0, Act::Save));
-                        });
-                        m.spawn((
-                            Value(Field::Saved),
-                            Text::new(value(cfg, &cat, &profile, Field::Saved)),
-                            body(15.0),
-                            TextColor(ACCENT),
-                            Node {
-                                margin: UiRect::left(px(116)),
-                                ..default()
-                            },
-                        ));
-                    });
-                // Frames the character preview showing through the gap between the panels.
-                p.spawn((
-                    Node {
-                        flex_grow: 1.0,
-                        align_self: AlignSelf::Stretch,
-                        margin: UiRect::vertical(px(4)),
-                        border: UiRect::all(px(1)),
-                        ..default()
-                    },
-                    BorderColor::all(LINE),
-                ));
-                // the right column: the view controls and the effects (dash, slash) settings
-                p.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(16),
-                    ..default()
-                })
-                .with_children(|col| {
-                col.spawn(panel(300.0, AlignItems::FlexStart))
-                    .with_children(|m| {
-                        m.spawn(heading("VIEW"));
-                        m.spawn(Node {
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: px(6),
-                            row_gap: px(6),
-                            ..default()
-                        })
-                        .with_children(|g| {
-                            for (i, f) in FOCUS.iter().enumerate() {
-                                g.spawn(button(84.0, 30.0, f.0, 15.0, Act::Focus(i)));
-                            }
-                        });
-                        m.spawn((
-                            Text::new("Drag the character to turn it, mouse wheel to zoom. Dyes are not in the original game; weapons and armour stats are set in INVENTORY."),
-                            body(14.0),
-                            TextColor(DIM),
-                            Node {
-                                width: px(270),
-                                ..default()
-                            },
-                        ));
-                    });
-                col.spawn(panel(300.0, AlignItems::FlexStart))
-                    .with_children(fx_ui);
-                });
-            });
+            root.spawn(page_gap(Page::Player, 20.0))
+                .with_children(|p| player::fill(p, cfg, &cat, &profile));
             root.spawn(page(Page::Clan))
                 .with_children(|p| clan::fill(p, &clan_art));
             root.spawn(page(Page::Controls))
@@ -1667,35 +1294,7 @@ fn build(
                 root.spawn(page(page_kind))
                     .with_children(|p| shop::fill(p, page_kind));
             }
-            root.spawn(Node {
-                position_type: PositionType::Absolute,
-                left: px(24),
-                right: px(24),
-                bottom: px(24),
-                justify_content: JustifyContent::SpaceBetween,
-                ..default()
-            })
-            .with_children(|f| {
-                // the browser page is this menu: nothing to quit to (the node keeps START right)
-                if cfg!(target_arch = "wasm32") {
-                    f.spawn(Node::default());
-                } else {
-                    f.spawn(quiet("QUIT", 18.0, Act::Quit));
-                }
-                f.spawn(Node {
-                    column_gap: px(16),
-                    align_items: AlignItems::Center,
-                    ..default()
-                })
-                .with_children(|r| {
-                    // no LAN in the browser
-                    if !cfg!(target_arch = "wasm32") {
-                        r.spawn(button(180.0, 48.0, "JOIN LAN", 22.0, Act::Lan(false)));
-                        r.spawn(button(180.0, 48.0, "HOST LAN", 22.0, Act::Lan(true)));
-                    }
-                    r.spawn(primary(260.0, 56.0, "START", 26.0, Act::Start));
-                });
-            });
+            chrome::footer(root, cfg, &cat, &profile);
         });
     commands.insert_resource(clan_art);
 }
@@ -1715,17 +1314,52 @@ fn act(
     mut launch: ResMut<Launch>,
     mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
+    mut toasts: MessageWriter<Toast>,
+    time: Res<Time<Real>>,
+    mut esc_at: Local<Option<f32>>,
 ) {
+    let now = time.elapsed_secs();
     if keys.just_pressed(KeyCode::Escape) {
-        exit.write(AppExit::Success);
-    }
-    for (i, a) in &clicks {
-        if *i != Interaction::Pressed {
-            continue;
+        if esc_at.is_some_and(|t| now - t < 2.0) {
+            exit.write(AppExit::Success);
+        } else {
+            *esc_at = Some(now);
+            toasts.write(Toast("Press Esc again to quit".into()));
         }
+    }
+    let mut todo: Vec<Act> = clicks
+        .iter()
+        .filter(|(i, _)| **i == Interaction::Pressed)
+        .map(|(_, a)| *a)
+        .collect();
+    // F1-F7 switch pages and Enter starts, except while the clan name is being typed
+    if !clan_ui.typing() {
+        if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]) {
+            todo.push(Act::Start);
+        }
+        let fkeys = [
+            KeyCode::F1,
+            KeyCode::F2,
+            KeyCode::F3,
+            KeyCode::F4,
+            KeyCode::F5,
+            KeyCode::F6,
+            KeyCode::F7,
+        ];
+        for (k, (_, p)) in fkeys.into_iter().zip(chrome::TABS) {
+            if keys.just_pressed(k) {
+                todo.push(Act::Page(p));
+            }
+        }
+    }
+    for a in &todo {
         match *a {
             Act::Page(p) => state.page = p,
             Act::Map(m) => state.cfg.map = Some(cat.maps[m].clone()),
+            Act::RandomMap => {
+                let n = crate::profile::wall().as_nanos() as usize;
+                state.cfg.map = Some(cat.maps[n % cat.maps.len()].clone());
+            }
             Act::Mode(m) => {
                 // Each mode has its own limit lists and defaults (`gametypecfg.xml`).
                 let lim = m.limits();
@@ -1764,6 +1398,7 @@ fn act(
             Act::Save => {
                 (profile.woman, profile.look) = (state.cfg.woman, state.cfg.look);
                 profile.save();
+                toasts.write(Toast("SAVED · MATCHES USE THIS CHARACTER".into()));
             }
             Act::Focus(f) => {
                 orbit.focus = f;
@@ -1868,21 +1503,12 @@ fn refresh(
     orbit: Res<Orbit>,
     fx: Res<Fx>,
     mut values: Query<(&Value, &mut Text)>,
-    mut swatches: Query<(&Swatch, &mut BackgroundColor)>,
     buttons: Query<(Entity, &Act, Has<Chosen>)>,
-    mut pages: Query<(&PageRoot, &mut Node), (Without<ModeShow>, Without<TabShow>)>,
-    mut modes: Query<(&ModeShow, &mut Node), Without<TabShow>>,
-    mut tabs: Query<(&TabShow, &mut Node), (Without<ModeShow>, Without<PageRoot>)>,
+    mut pages: Query<(&PageRoot, &mut Node), Without<ModeShow>>,
+    mut modes: Query<(&ModeShow, &mut Node)>,
 ) {
     if !state.is_changed() && !profile.is_changed() && !orbit.is_changed() && !fx.is_changed() {
         return;
-    }
-    for (s, mut bg) in &mut swatches {
-        let t = TINTS[state.cfg.look.tints[s.0] as usize % TINTS.len()].1;
-        let c = BackgroundColor(Color::srgb(t[0], t[1], t[2]));
-        if *bg != c {
-            *bg = c;
-        }
     }
     let cfg = &state.cfg;
     for (v, mut t) in &mut values {
@@ -1925,13 +1551,6 @@ fn refresh(
             Display::None
         };
     }
-    for (t, mut n) in &mut tabs {
-        n.display = if t.0 == fx.0 {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
 }
 
 /// Respawns the character model when sex or clothes change.
@@ -1948,6 +1567,7 @@ fn preview(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     profile: Res<Profile>,
+    mut floor: Query<&mut Visibility, (With<player::Floor>, Without<Preview>)>,
 ) {
     let (parent, mut vis) = root.into_inner();
     let want = if state.page == Page::Player {
@@ -1957,6 +1577,9 @@ fn preview(
     };
     if *vis != want {
         *vis = want;
+    }
+    for mut v in &mut floor {
+        v.set_if_neq(want);
     }
     let cfg = &state.cfg;
     // the slash demo's sword: the equipped melee weapon if it is a katana, else the starting one
@@ -2185,192 +1808,6 @@ fn hold(commands: &mut Commands, sword: Option<Entity>, on: bool) {
     }
 }
 
-/// The amount sliders (drag), their filled parts, and saving the effect settings once they settle.
-fn fx_panel(
-    mouse: Res<ButtonInput<MouseButton>>,
-    sliders: Query<(&Interaction, &RelativeCursorPosition, &Slider)>,
-    mut fill: Query<(&mut Node, &Fill)>,
-    mut profile: ResMut<Profile>,
-    mut dragging: Local<Option<Tab>>,
-    mut saved: Local<Option<(Trail, Slash)>>,
-) {
-    if !mouse.pressed(MouseButton::Left) {
-        *dragging = None;
-    } else if let Some((.., s)) = sliders.iter().find(|s| *s.0 == Interaction::Pressed) {
-        *dragging = Some(s.0);
-    }
-    if let Some(t) = *dragging
-        && let Some((_, rel, _)) = sliders.iter().find(|s| s.2.0 == t)
-        && let Some(n) = rel.normalized
-    {
-        let v = ((n.x + 0.5).clamp(0.0, 1.0) * 20.0).round() / 20.0;
-        if amount(&profile, t) != v {
-            match t {
-                Tab::Dash => profile.dash.amount = v,
-                Tab::Slash => profile.slash.amount = v,
-            }
-        }
-    }
-    for (mut n, f) in &mut fill {
-        let w = percent(amount(&profile, f.0) * 100.0);
-        if n.width != w {
-            n.width = w;
-        }
-    }
-    let now = (profile.dash, profile.slash);
-    match &*saved {
-        None => *saved = Some(now),
-        Some(s) if *s != now && !mouse.pressed(MouseButton::Left) => {
-            profile.save();
-            *saved = Some(now);
-        }
-        _ => {}
-    }
-}
-
-/// The EFFECTS panel: a DASH | SLASH switch over the shown tab's style, colour and amount, then
-/// the demo button and, when the graphics are ORIGINAL, a note that trails are off.
-fn fx_ui(m: &mut ChildSpawnerCommands) {
-    m.spawn((
-        Node {
-            width: percent(100),
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            padding: UiRect::bottom(px(4)),
-            margin: UiRect::bottom(px(4)),
-            border: UiRect::bottom(px(1)),
-            ..default()
-        },
-        BorderColor::all(LINE),
-    ))
-    .with_children(|h| {
-        h.spawn((Text::new("EFFECTS"), display(20.0), TextColor(ACCENT)));
-        // a segmented control: the tabs share one hairline border with no gap between them
-        h.spawn((
-            Node {
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(3)),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            BorderColor::all(LINE),
-        ))
-        .with_children(|r| {
-            r.spawn(button(70.0, 28.0, "DASH", 14.0, Act::Tab(Tab::Dash)));
-            r.spawn(button(70.0, 28.0, "SLASH", 14.0, Act::Tab(Tab::Slash)));
-        });
-    });
-    fx_tab(
-        m,
-        Tab::Dash,
-        STYLES.map(|(s, _, label)| (label, Act::Style(s))).to_vec(),
-    );
-    fx_tab(
-        m,
-        Tab::Slash,
-        slashfx::STYLES
-            .map(|(s, _, label)| (label, Act::Cut(s)))
-            .to_vec(),
-    );
-    m.spawn(Node {
-        column_gap: px(10),
-        align_items: AlignItems::Center,
-        ..default()
-    })
-    .with_children(|r| {
-        r.spawn(button(124.0, 30.0, "DEMO", 16.0, Act::Demo));
-        r.spawn((
-            Value(Field::Note),
-            crate::controls::text("", compact(13.0), DIM),
-        ));
-    });
-}
-
-/// One tab of the EFFECTS panel: the style buttons (two to a row), the colour and the amount.
-fn fx_tab(m: &mut ChildSpawnerCommands, tab: Tab, styles: Vec<(&'static str, Act)>) {
-    m.spawn((
-        TabShow(tab),
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: px(8),
-            ..default()
-        },
-    ))
-    .with_children(|m| {
-        m.spawn(Node {
-            flex_wrap: FlexWrap::Wrap,
-            column_gap: px(6),
-            row_gap: px(6),
-            ..default()
-        })
-        .with_children(|g| {
-            for (label, act) in styles {
-                g.spawn(button(131.0, 28.0, label, 14.0, act));
-            }
-        });
-        m.spawn((
-            Value(Field::Colour(tab)),
-            crate::controls::text("", compact(14.0), DIM),
-        ));
-        m.spawn(Node {
-            column_gap: px(6),
-            ..default()
-        })
-        .with_children(|g| {
-            for (h, _, label) in HUES {
-                if h == Hue::Team {
-                    g.spawn(button(52.0, 28.0, label, 13.0, Act::Hue(tab, h)));
-                    continue;
-                }
-                let c = h.color(None, 0.0);
-                let mut dot = Node {
-                    width: px(16),
-                    height: px(16),
-                    border_radius: BorderRadius::all(px(8)),
-                    ..default()
-                };
-                dot.border = UiRect::ZERO;
-                g.spawn((Act::Hue(tab, h), flat(30.0, 28.0)))
-                    .with_children(|b| {
-                        let mut e = b.spawn((
-                            dot,
-                            BackgroundColor(Color::linear_rgb(
-                                c.red.min(1.0),
-                                c.green.min(1.0),
-                                c.blue.min(1.0),
-                            )),
-                        ));
-                        if h == Hue::Rainbow {
-                            let stop = |i: f32| {
-                                let c = Color::hsl(i * 60.0, 1.0, 0.5);
-                                ColorStop::new(c, percent(i * 100.0 / 6.0))
-                            };
-                            e.insert(BackgroundGradient::from(LinearGradient::to_right(
-                                (0..=6).map(|i| stop(i as f32)).collect(),
-                            )));
-                        }
-                    });
-            }
-        });
-        m.spawn(crate::controls::row()).with_children(|r| {
-            r.spawn(crate::controls::boxed("Amount", compact(14.0), INK, 52.0));
-            r.spawn((Slider(tab), crate::controls::slider_track(100.0)))
-                .with_children(|t| {
-                    t.spawn(crate::controls::slider_groove(6.0))
-                        .with_children(|g| {
-                            g.spawn((Fill(tab), crate::controls::slider_fill()));
-                        });
-                });
-            r.spawn(button(22.0, 24.0, "-", 15.0, Act::Amount(tab, -1)));
-            r.spawn(button(22.0, 24.0, "+", 15.0, Act::Amount(tab, 1)));
-            r.spawn((
-                Value(Field::Amount(tab)),
-                crate::controls::text("", digits(14.0), ACCENT),
-            ));
-        });
-    });
-}
-
 /// The amount of a tab's trail (0..=1).
 fn amount(profile: &Profile, tab: Tab) -> f32 {
     match tab {
@@ -2379,34 +1816,43 @@ fn amount(profile: &Profile, tab: Tab) -> f32 {
     }
 }
 
-/// Shrinks the menu to fit windows smaller than its 1280 x 720 layout (phones, small browser
-/// windows). UI placed at a projected 3D point divides by the scale.
-pub fn fit(windows: Query<&Window, With<PrimaryWindow>>, scale: ResMut<UiScale>) {
-    fit_by(windows, scale, 1.0);
+/// Scales the menu's 1920 x 1080 layout to the window (both ways: down for phones and small
+/// windows, up for 4K). UI placed at a projected 3D point divides by the scale.
+pub fn fit(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>) {
+    let (w, h) = window_size(&windows);
+    set_scale(&mut scale, (w / 1920.0).min(h / 1080.0));
 }
 
-/// [`fit`] for the match HUD: it is anchored to the screen edges, so it may overflow the height
-/// a little (`tall` = 1.25 shrinks it 20% less than the menu on a wide, short phone screen);
-/// while paused or over it is the menu's scale.
+/// The match HUD: laid out at 1280 x 720 and only ever shrunk, anchored to the screen edges, so
+/// it may overflow the height a little (it shrinks 20% less than its width asks on a wide, short
+/// phone screen). While paused or over, the pause and end screens and the settings overlays are
+/// menus: [`fit`]'s scale.
 pub fn fit_hud(
     windows: Query<&Window, With<PrimaryWindow>>,
-    scale: ResMut<UiScale>,
+    mut scale: ResMut<UiScale>,
     frozen: Option<Res<crate::game::Frozen>>,
 ) {
-    // the pause and end screens and the settings overlays are as tall as the menus
-    fit_by(windows, scale, if frozen.is_some() { 1.0 } else { 1.25 });
+    let (w, h) = window_size(&windows);
+    let s = if frozen.is_some() {
+        (w / 1920.0).min(h / 1080.0)
+    } else {
+        (w / 1280.0).min(h / 720.0 * 1.25).min(1.0)
+    };
+    set_scale(&mut scale, s);
 }
 
-fn fit_by(windows: Query<&Window, With<PrimaryWindow>>, mut scale: ResMut<UiScale>, tall: f32) {
+fn window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> (f32, f32) {
     // headless `--shot` runs have no window: the image size stands in
-    let (w, h) = windows.single().map_or_else(
+    windows.single().map_or_else(
         |_| {
             let (w, h) = view::shot_size();
             (w as f32, h as f32)
         },
         |w| (w.width(), w.height()),
-    );
-    let s = (w / 1280.0).min(h / 720.0 * tall).min(1.0);
+    )
+}
+
+fn set_scale(scale: &mut UiScale, s: f32) {
     if s > 0.0 && scale.0 != s {
         scale.0 = s;
     }
@@ -2430,8 +1876,8 @@ fn orbit(
     touches: Res<Touches>,
     ui: Query<&Interaction>,
     mut model: Single<&mut Transform, With<Preview>>,
-    mut camera: Single<&mut Transform, (With<Camera3d>, Without<Preview>)>,
-    window: Query<&Window, With<PrimaryWindow>>,
+    camera: Single<(&mut Transform, &Camera), (With<Camera3d>, Without<Preview>)>,
+    frame: Query<&UiGlobalTransform, With<player::Frame>>,
     mut turned: Local<Option<f32>>,
 ) {
     let player = state.page == Page::Player;
@@ -2465,19 +1911,28 @@ fn orbit(
     };
     let d = d * if player { orbit.zoom } else { 1.0 } * far;
     model.translation.x = demo.x * d / FOCUS[0].2;
-    // the character stands in the preview frame between the panels (a third of the half width
-    // right of the screen centre), clear of the CHARACTER panel; `aspect * d` scales the half
-    // width of the view at distance d
-    let aspect = window
-        .single()
-        .map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
-    let goal = Vec3::new(if player { -0.18 * aspect * d } else { 0.0 }, h, d);
+    // the character stands at the centre of the viewport frame: the camera slides sideways and
+    // up so the frame's centre (in half screens from the screen's, right and down) shows the
+    // model's focus point; `d * 0.5625` (tan of half GunZ's vertical FOV) is the half height of
+    // the view at distance d
+    let (mut eye, cam) = camera.into_inner();
+    let size = cam
+        .physical_target_size()
+        .map_or(Vec2::new(16.0, 9.0), |s| s.as_vec2());
+    let at = frame
+        .iter()
+        .next()
+        .filter(|_| player)
+        .map_or(Vec2::ZERO, |f| (f.translation - size / 2.0) / (size / 2.0));
+    let half = d * 0.5625 * Vec2::new(size.x / size.y.max(1.0), 1.0);
+    // (`h * far` keeps the feet on the floor ring while the camera backs off)
+    let goal = Vec3::new(-at.x * half.x, h * far + at.y * half.y, d);
     let t = if shot.is_some() {
         1.0
     } else {
         1.0 - (-time.delta_secs() * 8.0).exp()
     };
-    camera.translation = camera.translation.lerp(goal, t);
+    eye.translation = eye.translation.lerp(goal, t);
 }
 
 #[cfg(test)]

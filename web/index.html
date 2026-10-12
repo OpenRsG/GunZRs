@@ -8,51 +8,51 @@
  <title>GunZRs</title>
  <link rel="modulepreload" href="pkg/gunz-play.js?v=__BUILD__">
  <style>
-  /* Barlow / Barlow Condensed, shipped from assets/fonts (web/build.sh copies them to
-     dist/fonts; served plain at web/fonts when opened without a build). Mirrors src/ui.rs:
-     one weight per cut, no faux-bold synthesis. */
+  /* Chakra Petch and Big Shoulders Display, shipped from assets/fonts (web/build.sh copies them
+     to dist/fonts). Mirrors src/ui.rs: one file per cut, declared for every weight so the
+     browser never synthesizes bold. */
   @font-face {
-   font-family: "Barlow";
-   font-weight: 500;
-   src: url("fonts/Barlow-Medium.ttf") format("truetype")
+   font-family: "Chakra Petch";
+   font-weight: 100 549;
+   src: url("fonts/ChakraPetch-Medium.ttf") format("truetype")
   }
 
   @font-face {
-   font-family: "Barlow Condensed";
-   font-weight: 500;
-   src: url("fonts/BarlowCondensed-Medium.ttf") format("truetype")
+   font-family: "Chakra Petch";
+   font-weight: 550 649;
+   src: url("fonts/ChakraPetch-SemiBold.ttf") format("truetype")
   }
 
   @font-face {
-   font-family: "Barlow Condensed";
-   font-weight: 600;
-   src: url("fonts/BarlowCondensed-SemiBold.ttf") format("truetype")
+   font-family: "Chakra Petch";
+   font-weight: 650 900;
+   src: url("fonts/ChakraPetch-Bold.ttf") format("truetype")
   }
 
   @font-face {
-   font-family: "Barlow Condensed";
-   font-weight: 700;
-   src: url("fonts/BarlowCondensed-Bold.ttf") format("truetype")
+   font-family: "Big Shoulders Display";
+   font-weight: 100 900;
+   src: url("fonts/BigShouldersDisplay-ExtraBold.ttf") format("truetype")
   }
 
   /* Tokens mirrored from src/ui.rs (INK/DIM/ACCENT/ON_ACCENT/DANGER/OK/SURFACE/RAISED/PLATE/
-     LINE/SCRIM/SHADOW). Only this page's own dark page-backdrop (--bg) is not a shared token. */
+     LINE/SCRIM/SHADOW, --bg = BACKDROP). */
   :root {
-   --bg: #07080a;
-   --ink: #f0ede6;
-   --dim: #9ea8b8;
-   --accent: #ffc74d;
-   --on-accent: #171205;
-   --danger: #f24538;
-   --ok: #73d980;
-   --surface: rgba(6, 8, 10, .86);
-   --raised: rgba(255, 255, 255, .05);
+   --bg: #0a0b0d;
+   --ink: #e9e7e2;
+   --dim: #8b8f97;
+   --accent: #ff6a1f;
+   --on-accent: #140803;
+   --danger: #ff4d3d;
+   --ok: #9be33c;
+   --surface: rgba(22, 24, 28, .94);
+   --raised: #1d2025;
    --plate: rgba(5, 6, 8, .6);
-   --line: rgba(255, 255, 255, .1);
-   --scrim: rgba(0, 0, 0, .55);
+   --line: rgba(255, 255, 255, .07);
+   --scrim: rgba(0, 0, 0, .6);
    --shadow: rgba(0, 0, 0, .65);
-   --f-body: "Barlow", sans-serif;
-   --f-cond: "Barlow Condensed", sans-serif
+   --f-body: "Chakra Petch", sans-serif;
+   --f-cond: "Big Shoulders Display", sans-serif
   }
 
   html,

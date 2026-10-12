@@ -7,14 +7,13 @@
 //! and the pause menu (an overlay) share is at the end of this file.
 
 use crate::{
-    controls,
     game::{Damage, Dead, Motor, Player, Settings, Vitals},
     level::MapMaterial,
     phase::MatchApp,
     profile::Profile,
     ui::{
-        ACCENT, Chosen, DIM, INK, LINE, SCRIM, body, button, compact, digits, heading, panel,
-        primary,
+        ACCENT, Chosen, Cut, DIM, EDGE, OnFill, SCRIM, TEXT, body, button, caption, digits,
+        display, flat_cut, heading, panel, primary, section, tracking,
     },
 };
 use bevy::{
@@ -950,7 +949,7 @@ enum Ctl {
     Aa(Aa),
     Aniso(u16),
     Fps(u16),
-    Vsync,
+    Vsync(bool),
     Done,
 }
 
@@ -969,39 +968,121 @@ enum Show {
 #[derive(Component)]
 struct OverlayRoot;
 
-/// The panel's three cards: the image, the screen effects, the preset and display.
+/// Width of one of the three lower panels; the preset bar above them spans all three.
+const COL: f32 = 596.0;
+
+/// The page: the `01 PRESET` bar over the image, screen-effect and lighting/display panels.
 pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
+    let wide = COL * 3.0 + 32.0;
     p.spawn(Node {
-        column_gap: px(16),
-        align_items: AlignItems::Stretch,
+        width: px(wide),
+        flex_direction: FlexDirection::Column,
+        row_gap: px(16),
         ..default()
     })
-    .with_children(|r| {
-        r.spawn(panel(398.0, AlignItems::FlexStart))
-            .with_children(image);
-        r.spawn(panel(398.0, AlignItems::FlexStart))
-            .with_children(effects);
-        r.spawn(panel(398.0, AlignItems::FlexStart))
-            .with_children(|d| display(d, done));
+    .with_children(|c| {
+        c.spawn(panel(wide, AlignItems::Stretch))
+            .with_children(|m| preset(m, done));
+        c.spawn(Node {
+            column_gap: px(16),
+            align_items: AlignItems::Stretch,
+            ..default()
+        })
+        .with_children(|r| {
+            r.spawn(panel(COL, AlignItems::Stretch))
+                .with_children(image);
+            r.spawn(panel(COL, AlignItems::Stretch))
+                .with_children(effects);
+            r.spawn(panel(COL, AlignItems::Stretch))
+                .with_children(lighting);
+        });
     });
 }
 
+fn row() -> Node {
+    Node {
+        width: percent(100),
+        align_items: AlignItems::Center,
+        column_gap: px(10),
+        ..default()
+    }
+}
+
+/// A row label in a box of fixed width (a fixed-width text node wraps to its narrowest).
+fn label(s: &str) -> impl Bundle {
+    (
+        Node {
+            width: px(190),
+            ..default()
+        },
+        children![caption(s, 13.0)],
+    )
+}
+
+/// A help text in DIM.
+fn help(m: &mut ChildSpawnerCommands, s: &str) {
+    m.spawn((
+        Node {
+            width: percent(100),
+            margin: UiRect::top(px(4)),
+            ..default()
+        },
+        children![(Text::new(s), body(14.0), TextColor(DIM))],
+    ));
+}
+
+/// `[-] filled track [+] value`; the track is dragged by [`drag`].
 fn slider(m: &mut ChildSpawnerCommands, k: Knob) {
-    m.spawn(controls::row()).with_children(|r| {
-        r.spawn(controls::boxed(k.label(), compact(14.0), INK, 138.0));
-        r.spawn((Slider(k), controls::slider_track(96.0)))
-            .with_children(|t| {
-                t.spawn(controls::slider_groove(6.0)).with_children(|g| {
-                    g.spawn((Fill(k), controls::slider_fill()));
-                });
-            });
-        r.spawn(button(22.0, 24.0, "-", 15.0, Ctl::Step(k, -1)));
-        r.spawn(button(22.0, 24.0, "+", 15.0, Ctl::Step(k, 1)));
-        r.spawn((Show::Knob(k), controls::text("", digits(14.0), ACCENT)));
+    m.spawn(row()).with_children(|r| {
+        r.spawn(label(k.label()));
+        r.spawn(button(30.0, 30.0, "-", 16.0, Ctl::Step(k, -1)));
+        r.spawn((
+            Slider(k),
+            Button,
+            RelativeCursorPosition::default(),
+            Node {
+                flex_grow: 1.0,
+                height: px(30),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|t| {
+            t.spawn((
+                Node {
+                    width: percent(100),
+                    height: px(14),
+                    ..default()
+                },
+                BackgroundColor(EDGE),
+                children![(
+                    Fill(k),
+                    Node {
+                        height: percent(100),
+                        ..default()
+                    },
+                    BackgroundColor(ACCENT)
+                )],
+            ));
+        });
+        r.spawn(button(30.0, 30.0, "+", 16.0, Ctl::Step(k, 1)));
+        r.spawn((
+            Node {
+                width: px(84),
+                justify_content: JustifyContent::FlexEnd,
+                ..default()
+            },
+            children![(
+                Show::Knob(k),
+                Text::new(""),
+                digits(16.0),
+                TextColor(ACCENT)
+            )],
+        ));
     });
 }
 
-/// A titled group of buttons, one per option, the current one marked.
+/// A titled row of buttons, one per option, the current one marked.
 fn choices<T: Copy>(
     m: &mut ChildSpawnerCommands,
     title: &str,
@@ -1009,25 +1090,63 @@ fn choices<T: Copy>(
     w: f32,
     ctl: fn(T) -> Ctl,
 ) {
-    m.spawn(controls::text(title.to_uppercase(), compact(14.0), DIM));
+    m.spawn(caption(title, 13.0));
     m.spawn(Node {
         flex_wrap: FlexWrap::Wrap,
         width: percent(100),
-        column_gap: px(6),
-        row_gap: px(6),
-        margin: UiRect::bottom(px(4)),
+        column_gap: px(8),
+        row_gap: px(8),
+        margin: UiRect::bottom(px(6)),
         ..default()
     })
     .with_children(|c| {
-        for &(v, _, label) in opts {
-            c.spawn(button(w, 24.0, label, 12.0, ctl(v)));
+        for &(v, _, text) in opts {
+            c.spawn(button(w, 34.0, text, 14.0, ctl(v)));
+        }
+    });
+}
+
+/// 01: the three presets as big choice buttons, what the chosen one does, and DONE in a match.
+fn preset(m: &mut ChildSpawnerCommands, done: bool) {
+    m.spawn(section(1, "PRESET"));
+    m.spawn(Node {
+        width: percent(100),
+        align_items: AlignItems::Center,
+        column_gap: px(16),
+        ..default()
+    })
+    .with_children(|r| {
+        for p in Preset::ALL {
+            r.spawn((
+                Ctl::Preset(p),
+                flat_cut(236.0, 76.0, Cut::Slant(14)),
+                children![(
+                    Text::new(p.label()),
+                    display(36.0),
+                    TextColor(TEXT),
+                    tracking(0.04, 36.0),
+                    OnFill
+                )],
+            ));
+        }
+        r.spawn((
+            Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
+                padding: UiRect::horizontal(px(20)),
+                ..default()
+            },
+            children![(Show::Preset, Text::new(""), body(16.0), TextColor(DIM))],
+        ));
+        if done {
+            r.spawn(primary(180.0, 64.0, "DONE", 20.0, Ctl::Done));
         }
     });
 }
 
 fn image(m: &mut ChildSpawnerCommands) {
-    m.spawn(heading("IMAGE"));
-    choices(m, "Tonemapping", &TONES, 86.0, Ctl::Tone);
+    m.spawn(section(2, "IMAGE"));
+    choices(m, "Tonemapping", &TONES, 102.0, Ctl::Tone);
     for k in [
         Knob::Exposure,
         Knob::Contrast,
@@ -1036,14 +1155,14 @@ fn image(m: &mut ChildSpawnerCommands) {
     ] {
         slider(m, k);
     }
-    choices(m, "Anti-aliasing", &AAS, 86.0, Ctl::Aa);
+    choices(m, "Anti-aliasing", &AAS, 102.0, Ctl::Aa);
     slider(m, Knob::Sharpen);
-    choices(m, "Anisotropic filtering", &ANISOS, 66.0, Ctl::Aniso);
+    choices(m, "Anisotropic filtering", &ANISOS, 102.0, Ctl::Aniso);
     slider(m, Knob::Fog);
 }
 
 fn effects(m: &mut ChildSpawnerCommands) {
-    m.spawn(heading("SCREEN EFFECTS"));
+    m.spawn(section(3, "SCREEN EFFECTS"));
     for k in [
         Knob::Vignette,
         Knob::Grain,
@@ -1055,83 +1174,48 @@ fn effects(m: &mut ChildSpawnerCommands) {
     ] {
         slider(m, k);
     }
-    m.spawn((
-        Node {
-            width: px(366),
-            margin: UiRect::top(px(8)),
-            ..default()
-        },
-        children![controls::text(
-            "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, light rays, a dash's wider view) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched. The dash trail has its own settings on the PLAYER page.",
-            body(13.0),
-            DIM
-        )],
-    ));
-    m.spawn(heading("WORLD EFFECTS"));
+    help(
+        m,
+        "An effect set to OFF costs nothing. Motion blur follows the camera's turn; speed effects (radial blur, light rays, a dash's wider view) a tumble or a fast fall; low health drains the colour and throbs; a hit flashes red. The HUD is never touched. The dash trail has its own settings on the PLAYER page.",
+    );
+    m.spawn(Node {
+        height: px(8),
+        ..default()
+    });
+    m.spawn(heading("World effects"));
     slider(m, Knob::Explosions);
-    m.spawn((
-        Node {
-            width: px(366),
-            margin: UiRect::top(px(4)),
-            ..default()
-        },
-        children![controls::text(
-            "Fireball, smoke plume, sparks, debris and scorch for rockets, grenades and mines. RETAIL draws only the game's own sprite.",
-            body(13.0),
-            DIM
-        )],
-    ));
+    help(
+        m,
+        "Fireball, smoke plume, sparks, debris and scorch for rockets, grenades and mines. RETAIL draws only the game's own sprite.",
+    );
 }
 
-fn display(m: &mut ChildSpawnerCommands, done: bool) {
-    m.spawn(heading("PRESET"));
-    // A segmented control: the tabs share one hairline border with no gap between them.
-    m.spawn((
-        Node {
-            column_gap: px(0),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(3)),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BorderColor::all(LINE),
-    ))
-    .with_children(|r| {
-        for p in Preset::ALL {
-            r.spawn(button(112.0, 34.0, p.label(), 15.0, Ctl::Preset(p)));
-        }
-    });
-    m.spawn((
-        Node {
-            width: px(366),
-            min_height: px(54),
-            ..default()
-        },
-        children![(Show::Preset, controls::text("", body(13.0), DIM))],
-    ));
-    m.spawn(heading("LIGHTING"));
+fn lighting(m: &mut ChildSpawnerCommands) {
+    m.spawn(section(4, "LIGHTING"));
     for k in [Knob::ActorLight, Knob::DynLight, Knob::Shadow] {
         slider(m, k);
     }
-    m.spawn(heading("DISPLAY"));
+    m.spawn(Node {
+        height: px(8),
+        ..default()
+    });
+    m.spawn(heading("Display"));
     slider(m, Knob::Fov);
     // the browser always presents in step with the display and cannot be limited
     if !cfg!(target_arch = "wasm32") {
-        m.spawn(controls::row()).with_children(|r| {
-            r.spawn(controls::boxed("Vertical sync", compact(14.0), INK, 138.0));
-            r.spawn(button(64.0, 24.0, "", 13.0, Ctl::Vsync));
+        m.spawn(row()).with_children(|r| {
+            r.spawn(label("Vertical sync"));
+            for on in [true, false] {
+                r.spawn(button(
+                    70.0,
+                    34.0,
+                    if on { "ON" } else { "OFF" },
+                    14.0,
+                    Ctl::Vsync(on),
+                ));
+            }
         });
-        choices(m, "Frame limit", &FPS, 44.0, Ctl::Fps);
-    }
-    if done {
-        m.spawn(Node {
-            margin: UiRect::top(Val::Auto),
-            align_self: AlignSelf::FlexEnd,
-            ..default()
-        })
-        .with_children(|f| {
-            f.spawn(primary(130.0, 34.0, "DONE", 18.0, Ctl::Done));
-        });
+        choices(m, "Frame limit", &FPS, 70.0, Ctl::Fps);
     }
 }
 
@@ -1204,7 +1288,7 @@ fn clicks(
             Ctl::Aa(a) => g.aa = a,
             Ctl::Aniso(n) => g.aniso = n,
             Ctl::Fps(n) => g.fps = n,
-            Ctl::Vsync => g.vsync = !g.vsync,
+            Ctl::Vsync(v) => g.vsync = v,
             Ctl::Done => commands.remove_resource::<Overlay>(),
         }
     }
@@ -1248,8 +1332,7 @@ fn refresh(
     profile: Option<Res<Profile>>,
     mut shows: Query<(&Show, &mut Text)>,
     mut fills: Query<(&Fill, &mut Node)>,
-    buttons: Query<(Entity, &Ctl, &Children, Has<Chosen>)>,
-    mut texts: Query<&mut Text, Without<Show>>,
+    buttons: Query<(Entity, &Ctl, Has<Chosen>)>,
     mut commands: Commands,
 ) {
     if fills.is_empty() {
@@ -1277,24 +1360,14 @@ fn refresh(
             n.width = w;
         }
     }
-    for (e, ctl, kids, chosen) in &buttons {
+    for (e, ctl, chosen) in &buttons {
         let on = match *ctl {
             Ctl::Preset(p) => g.which() == Some(p),
             Ctl::Tone(t) => g.tone == t,
             Ctl::Aa(a) => g.aa == a,
             Ctl::Aniso(n) => g.aniso == n,
             Ctl::Fps(n) => g.fps == n,
-            Ctl::Vsync => {
-                if let Some(&kid) = kids.first()
-                    && let Ok(mut t) = texts.get_mut(kid)
-                {
-                    let want = if g.vsync { "ON" } else { "OFF" };
-                    if t.0 != want {
-                        t.0 = want.into();
-                    }
-                }
-                g.vsync
-            }
+            Ctl::Vsync(v) => g.vsync == v,
             _ => continue,
         };
         if on != chosen {

@@ -8,8 +8,9 @@ use crate::{
     phase::MatchApp,
     profile::Profile,
     ui::{
-        ACCENT, DIM, INK, LINE, ON_ACCENT, RAISED, SCRIM, body, button, compact, digits, heading,
-        panel, primary, strong,
+        ACCENT, Chosen, Cut, DIM, EDGE, INK, LINE, MUTE, ON_ACCENT, OnFill, RAISED, SCRIM, Segs,
+        TEXT, body, button, caption, compact, digits, flat_cut, mono, panel, primary, section,
+        segs, shape, strong,
     },
 };
 use bevy::{
@@ -623,6 +624,9 @@ const HINT: &str =
     "Click a binding, then press a key, mouse button or wheel. Esc cancels, Delete clears.";
 /// Speed-curve bars, one per count/ms.
 const BARS: usize = 40;
+/// Height of the tallest speed-curve bar, and the segments of a slider bar.
+const CURVE_H: f32 = 120.0;
+const SEGS: usize = 24;
 
 #[derive(Resource)]
 struct Panel {
@@ -733,9 +737,6 @@ enum Ctl {
 #[derive(Component)]
 struct Slider(Knob);
 
-#[derive(Component)]
-struct Fill(Knob);
-
 #[derive(Component, Clone, Copy)]
 enum Show {
     Knob(Knob),
@@ -749,13 +750,13 @@ struct Bar(usize);
 #[derive(Component)]
 struct OverlayRoot;
 
-pub(crate) fn text(s: impl Into<String>, font: TextFont, color: Color) -> impl Bundle {
+fn text(s: impl Into<String>, font: TextFont, color: Color) -> impl Bundle {
     (Text::new(s.into()), font, TextColor(color))
 }
 
 /// A text in a box of fixed width (a fixed-width text node gets the height of its narrowest
 /// wrapping, so the width goes on a parent).
-pub(crate) fn boxed(s: impl Into<String>, font: TextFont, color: Color, width: f32) -> impl Bundle {
+fn boxed(s: impl Into<String>, font: TextFont, color: Color, width: f32) -> impl Bundle {
     (
         Node {
             width: px(width),
@@ -765,7 +766,7 @@ pub(crate) fn boxed(s: impl Into<String>, font: TextFont, color: Color, width: f
     )
 }
 
-pub(crate) fn row() -> Node {
+fn row() -> Node {
     Node {
         align_items: AlignItems::Center,
         column_gap: px(6),
@@ -773,70 +774,18 @@ pub(crate) fn row() -> Node {
     }
 }
 
-/// The thin ACCENT-filled groove, square thumb and button pair every mouse and graphics slider
-/// shares; the caller's `refresh` system owns the `Fill`-tagged bar's width.
-pub(crate) fn slider_track(w: f32) -> impl Bundle {
-    (
-        Button,
-        RelativeCursorPosition::default(),
-        Node {
-            width: px(w),
-            height: px(24.0),
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-    )
-}
-
-pub(crate) fn slider_groove(h: f32) -> impl Bundle {
-    (
-        Node {
-            height: px(h),
-            border_radius: BorderRadius::all(px(h / 2.0)),
-            ..default()
-        },
-        BackgroundColor(RAISED),
-    )
-}
-
-/// The caller spawns this with a `Fill`-tagged marker and sets its width in `refresh`.
-pub(crate) fn slider_fill() -> impl Bundle {
-    (
-        Node {
-            height: percent(100),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::FlexEnd,
-            ..default()
-        },
-        BackgroundColor(ACCENT),
-        children![slider_thumb()],
-    )
-}
-
-fn slider_thumb() -> impl Bundle {
-    (
-        Node {
-            width: px(10.0),
-            height: px(10.0),
-            ..default()
-        },
-        BackgroundColor(ON_ACCENT),
-    )
-}
-
-/// The panel's contents: mouse settings, then the bindings with the status line, RESET (and
-/// DONE for the pause overlay) under them.
+/// The page: the MOUSE panel and the KEYS AND BUTTONS panel with the status line, RESET (and
+/// DONE for the pause overlay) at its foot.
 pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
     p.spawn(Node {
-        column_gap: px(16),
+        column_gap: px(20),
         align_items: AlignItems::Stretch,
         ..default()
     })
     .with_children(|r| {
-        r.spawn(panel(410.0, AlignItems::FlexStart))
+        r.spawn(panel(640.0, AlignItems::FlexStart))
             .with_children(mouse);
-        r.spawn(panel(800.0, AlignItems::FlexStart))
+        r.spawn(panel(1180.0, AlignItems::FlexStart))
             .with_children(|k| {
                 binds(k);
                 k.spawn(Node {
@@ -853,125 +802,196 @@ pub fn fill(p: &mut ChildSpawnerCommands, done: bool) {
                             flex_basis: px(0),
                             ..default()
                         },
-                        children![(Show::Status, text(HINT, body(14.0), DIM))],
+                        children![(Show::Status, text(HINT, body(15.0), DIM))],
                     ));
-                    f.spawn(button(170.0, 34.0, "RESET DEFAULTS", 15.0, Ctl::Reset));
+                    f.spawn(button(200.0, 44.0, "RESET DEFAULTS", 15.0, Ctl::Reset));
                     if done {
-                        f.spawn(primary(130.0, 34.0, "DONE", 18.0, Ctl::Done));
+                        f.spawn(primary(150.0, 44.0, "DONE", 18.0, Ctl::Done));
                     }
                 });
             });
     });
 }
 
+/// A row on the panel: a [`RAISED`] notched well holding a stepper or a toggle.
+fn well() -> impl Bundle {
+    (
+        Node {
+            width: percent(100),
+            align_items: AlignItems::Center,
+            column_gap: px(8),
+            padding: UiRect::all(px(10)),
+            ..default()
+        },
+        shape(Cut::Notch(10), RAISED),
+    )
+}
+
+/// A stepper well: `‹`, the name and value over a draggable segment track, `›`.
+fn stepper(m: &mut ChildSpawnerCommands, name: &str, k: Knob) {
+    let arrow = |glyph: &'static str, d: i8| {
+        (
+            Ctl::Step(k, d),
+            flat_cut(44.0, 44.0, Cut::Notch(6)),
+            children![(Text::new(glyph), strong(22.0), TextColor(TEXT), OnFill)],
+        )
+    };
+    m.spawn(well()).with_children(|w| {
+        w.spawn(arrow("‹", -1));
+        w.spawn(Node {
+            flex_grow: 1.0,
+            flex_basis: px(0),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4),
+            padding: UiRect::horizontal(px(8)),
+            ..default()
+        })
+        .with_children(|c| {
+            c.spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Baseline,
+                ..default()
+            })
+            .with_children(|h| {
+                h.spawn(caption(name, 13.0));
+                h.spawn((Show::Knob(k), text("", digits(22.0), INK)));
+            });
+            // the whole bar takes clicks and drags (`drag`)
+            c.spawn((
+                Slider(k),
+                Button,
+                RelativeCursorPosition::default(),
+                Node {
+                    height: px(20),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                children![segs(SEGS, 0, 6.0, 3.0)],
+            ));
+        });
+        w.spawn(arrow("›", 1));
+    });
+}
+
+/// A toggle well: the name and an ON/OFF button (accent when on); `value` replaces the button.
+fn toggle(m: &mut ChildSpawnerCommands, name: &str, f: Flag, value: Option<&str>) {
+    m.spawn(well()).with_children(|w| {
+        w.spawn((
+            Node {
+                flex_grow: 1.0,
+                padding: UiRect::left(px(8)),
+                ..default()
+            },
+            children![caption(name, 13.0)],
+        ));
+        match value {
+            Some(v) => w.spawn(text(v, strong(16.0), ACCENT)),
+            None => w.spawn(button(110.0, 44.0, "", 16.0, Ctl::Toggle(f))),
+        };
+    });
+}
+
 fn mouse(m: &mut ChildSpawnerCommands) {
-    m.spawn(heading("MOUSE"));
-    let slider = |m: &mut ChildSpawnerCommands, name: &str, k: Knob| {
-        m.spawn(row()).with_children(|r| {
-            r.spawn(boxed(name, compact(15.0), INK, 112.0));
-            r.spawn((Slider(k), slider_track(120.0)))
-                .with_children(|t| {
-                    t.spawn(slider_groove(6.0)).with_children(|g| {
-                        g.spawn((Fill(k), slider_fill()));
-                    });
-                });
-            r.spawn(button(26.0, 24.0, "-", 16.0, Ctl::Step(k, -1)));
-            r.spawn(button(26.0, 24.0, "+", 16.0, Ctl::Step(k, 1)));
-            r.spawn((Show::Knob(k), text("", digits(15.0), ACCENT)));
-        });
-    };
-    let toggle = |m: &mut ChildSpawnerCommands, name: &str, f: Flag| {
-        m.spawn(row()).with_children(|r| {
-            r.spawn(boxed(name, compact(15.0), INK, 296.0));
-            r.spawn(button(64.0, 24.0, "", 14.0, Ctl::Toggle(f)));
-        });
-    };
-    slider(m, "Sensitivity", Knob::Sens);
+    m.spawn(section(1, "MOUSE"));
+    stepper(m, "Sensitivity", Knob::Sens);
     m.spawn((
         Node {
-            margin: UiRect::left(px(118)),
+            margin: UiRect::left(px(10)),
             ..default()
         },
-        children![(Show::Turn, text("", body(13.0), DIM))],
+        children![(Show::Turn, text("", body(14.0), DIM))],
     ));
-    slider(m, "Vertical", Knob::Vertical);
-    toggle(m, "Invert vertical look", Flag::Invert);
-    slider(m, "Acceleration", Knob::Accel);
-    slider(m, "Accel. limit", Knob::Cap);
+    stepper(m, "Vertical", Knob::Vertical);
+    toggle(m, "Invert vertical look", Flag::Invert, None);
+    stepper(m, "Acceleration", Knob::Accel);
+    stepper(m, "Accel. limit", Knob::Cap);
     if cfg!(target_arch = "wasm32") {
-        toggle(m, "Raw input (no OS accel.)", Flag::Raw);
+        toggle(m, "Raw input", Flag::Raw, None);
     } else {
-        m.spawn(row()).with_children(|r| {
-            r.spawn(boxed("Raw input", compact(15.0), INK, 296.0));
-            r.spawn(text("ALWAYS", strong(14.0), ACCENT));
-        });
+        toggle(m, "Raw input", Flag::Raw, Some("ALWAYS"));
     }
-    m.spawn(heading("SPEED CURVE"));
     m.spawn((
         Node {
-            height: px(60),
-            align_items: AlignItems::FlexEnd,
-            column_gap: px(2),
-            border: UiRect::bottom(px(1)),
+            margin: UiRect::top(px(8)),
             ..default()
         },
-        BorderColor::all(LINE),
+        children![caption("Speed curve", 13.0)],
+    ));
+    m.spawn((
+        Node {
+            width: percent(100),
+            height: px(CURVE_H + 24.0),
+            align_items: AlignItems::FlexEnd,
+            column_gap: px(3),
+            padding: UiRect::all(px(12)),
+            ..default()
+        },
+        shape(Cut::Notch(10), EDGE),
     ))
     .with_children(|g| {
         for i in 0..BARS {
             g.spawn((
                 Bar(i),
                 Node {
-                    width: px(7),
+                    flex_grow: 1.0,
+                    flex_basis: px(0),
                     height: px(6),
                     ..default()
                 },
-                BackgroundColor(DIM),
+                BackgroundColor(ACCENT),
             ));
         }
     });
     m.spawn(boxed(
         "Gain by mouse speed, slow to fast; flat = no acceleration. Move the mouse to see your speed light up.",
-        body(13.0),
+        body(14.0),
         DIM,
-        370.0,
+        596.0,
     ));
 }
 
 fn binds(k: &mut ChildSpawnerCommands) {
-    k.spawn(heading("KEYS AND BUTTONS"));
+    k.spawn(section(2, "KEYS AND BUTTONS"));
     k.spawn(Node {
-        column_gap: px(18),
+        width: percent(100),
+        column_gap: px(36),
         ..default()
     })
     .with_children(|cols| {
         for (title, actions) in GROUPS {
             cols.spawn(Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
                 flex_direction: FlexDirection::Column,
-                row_gap: px(4),
+                row_gap: px(12),
                 ..default()
             })
             .with_children(|col| {
-                col.spawn(text(title.to_uppercase(), compact(14.0), DIM));
+                col.spawn((
+                    Node {
+                        padding: UiRect::bottom(px(8)),
+                        border: UiRect::bottom(px(1)),
+                        ..default()
+                    },
+                    BorderColor::all(LINE),
+                    children![caption(title, 13.0)],
+                ));
                 for &a in actions {
                     col.spawn(row()).with_children(|r| {
-                        r.spawn(boxed(a.label(), compact(13.0), INK, 100.0));
+                        r.spawn((
+                            Node {
+                                flex_grow: 1.0,
+                                flex_basis: px(0),
+                                ..default()
+                            },
+                            children![text(a.label(), compact(17.0), INK)],
+                        ));
                         for slot in 0..2 {
                             r.spawn((
-                                Button,
                                 Ctl::Bind(a, slot),
-                                Node {
-                                    width: px(66),
-                                    height: px(24),
-                                    justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
-                                    border: UiRect::all(px(1)),
-                                    border_radius: BorderRadius::all(px(3)),
-                                    ..default()
-                                },
-                                BackgroundColor(RAISED),
-                                BorderColor::all(LINE),
-                                children![text("", strong(13.0), INK)],
+                                flat_cut(92.0, 44.0, Cut::Notch(8)),
+                                children![text("", mono(14.0), INK)],
                             ));
                         }
                     });
@@ -1014,9 +1034,14 @@ fn capture(
         panel.status = HINT.into();
         return;
     };
-    let got = if keys.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]) {
+    let got = if let Some(k) = [KeyCode::Delete, KeyCode::Backspace]
+        .into_iter()
+        .find(|k| keys.just_pressed(*k))
+    {
+        keys.clear_just_pressed(k);
         Some(None)
     } else if let Some(&k) = KEYS.iter().find(|k| keys.just_pressed(**k)) {
+        keys.clear_just_pressed(k);
         Some(Some(Bind::Key(k)))
     } else if let Some(&(b, _)) = BUTTONS.iter().find(|b| mouse.just_pressed(b.0)) {
         mouse.clear_just_pressed(b);
@@ -1153,22 +1178,18 @@ fn drag(
     }
 }
 
-/// Keeps the panel's texts, slider fills, binding buttons and speed curve in line with the
-/// profile (only writes what changed).
+/// Keeps the panel's texts, slider segments, binding caps, toggles and speed curve in line with
+/// the profile (only writes what changed).
 #[allow(clippy::type_complexity)]
 fn refresh(
     profile: Option<Res<Profile>>,
     panel: Res<Panel>,
+    mut commands: Commands,
     mut shows: Query<(&Show, &mut Text)>,
-    mut fills: Query<(&Fill, &mut Node), Without<Bar>>,
+    sliders: Query<(&Slider, &Children)>,
+    mut segs: Query<&mut Segs>,
     mut bars: Query<(&Bar, &mut Node, &mut BackgroundColor), Without<Ctl>>,
-    mut buttons: Query<(
-        &Ctl,
-        &Interaction,
-        &Children,
-        Option<&mut BackgroundColor>,
-        Option<&mut BorderColor>,
-    )>,
+    buttons: Query<(Entity, &Ctl, &Children, Has<Chosen>)>,
     mut texts: Query<(&mut Text, &mut TextColor), Without<Show>>,
 ) {
     if bars.is_empty() {
@@ -1192,68 +1213,62 @@ fn refresh(
             t.0 = want;
         }
     }
-    for (f, mut n) in &mut fills {
-        let w = percent(f.0.pos(f.0.get(c)).clamp(0.0, 1.0) * 100.0);
-        if n.width != w {
-            n.width = w;
+    for (s, kids) in &sliders {
+        let lit = (s.0.pos(s.0.get(c)).clamp(0.0, 1.0) * SEGS as f32).round() as usize;
+        if let Some(&kid) = kids.first()
+            && let Ok(mut segs) = segs.get_mut(kid)
+            && segs.lit != lit
+        {
+            segs.lit = lit;
         }
     }
-    let lit = (panel.speed.round() as usize).min(BARS - 1);
+    // the curve in the accent, the bar at the mouse's speed in ink
+    let speed = (panel.speed > 0.05).then(|| (panel.speed.round() as usize).min(BARS - 1));
     for (b, mut n, mut bg) in &mut bars {
-        let gain = c.gain(b.0 as f32);
-        let h = px(6.0 + (gain - 1.0) / (CAP.1 - 1.0) * 53.0);
+        let h = px(6.0 + (c.gain(b.0 as f32) - 1.0) / (CAP.1 - 1.0) * (CURVE_H - 6.0));
         if n.height != h {
             n.height = h;
         }
-        let col = if b.0 == lit && panel.speed > 0.05 {
-            ACCENT
+        bg.set_if_neq(BackgroundColor(if speed == Some(b.0) {
+            INK
         } else {
-            DIM
-        };
-        if bg.0 != col {
-            bg.0 = col;
-        }
+            ACCENT
+        }));
     }
-    for (ctl, i, kids, bg, border) in &mut buttons {
+    for (e, ctl, kids, chosen) in &buttons {
         let Some(&kid) = kids.first() else { continue };
         let Ok((mut t, mut tc)) = texts.get_mut(kid) else {
             continue;
         };
-        let (want, color) = match *ctl {
-            Ctl::Bind(a, s) if panel.capture == Some((a, s)) => ("PRESS...".to_owned(), ACCENT),
+        let (want, color, lit) = match *ctl {
+            Ctl::Bind(a, s) if panel.capture == Some((a, s)) => {
+                ("PRESS".to_owned(), ON_ACCENT, true)
+            }
             Ctl::Bind(a, s) => match c.binds[a as usize][s] {
-                Some(b) => (label(b).to_uppercase(), INK),
-                None => ("-".to_owned(), DIM),
+                Some(b) => (label(b).to_uppercase(), INK, false),
+                None => ("-".to_owned(), MUTE, false),
             },
             Ctl::Toggle(f) => {
                 let on = match f {
                     Flag::Invert => c.invert,
                     Flag::Raw => c.raw,
                 };
-                ((if on { "ON" } else { "OFF" }).to_owned(), INK)
+                ((if on { "ON" } else { "OFF" }).to_owned(), tc.0, on)
             }
             _ => continue,
         };
         if t.0 != want {
             t.0 = want;
         }
-        if tc.0 != color {
+        // a toggle's label is `OnFill`: `ui::hover` colours it
+        if !matches!(ctl, Ctl::Toggle(_)) && tc.0 != color {
             tc.0 = color;
         }
-        // binding buttons draw themselves (the retail-textured ones follow `menu::hover`)
-        if let (Ctl::Bind(a, s), Some(mut bg), Some(mut border)) = (*ctl, bg, border) {
-            let capturing = panel.capture == Some((a, s));
-            let fill = match (capturing, *i) {
-                (true, _) => ACCENT.with_alpha(0.18),
-                (false, Interaction::None) => RAISED,
-                _ => LINE,
-            };
-            let edge = BorderColor::all(if capturing { ACCENT } else { LINE });
-            if bg.0 != fill {
-                bg.0 = fill;
-            }
-            if *border != edge {
-                *border = edge;
+        if lit != chosen {
+            if lit {
+                commands.entity(e).insert(Chosen);
+            } else {
+                commands.entity(e).remove::<Chosen>();
             }
         }
     }

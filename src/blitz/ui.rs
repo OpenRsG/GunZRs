@@ -7,9 +7,10 @@
 
 use super::*;
 use crate::map::Map;
+use crate::session::band;
 use crate::ui::{
-    ACCENT, Chosen, DANGER, DIM, Flat, INK, LINE, OK, RAISED, SCRIM, SURFACE, compact, digits,
-    display, heading, panel, shadow, strong,
+    ACCENT, BUTTON, Chosen, Cut, DANGER, DIM, Flat, GOLD, INK, LINE, OK, OnFill, RAISED, SCRIM,
+    TEXT, caption, compact, digits, display, panel, section, shadow, shape, strong, tracking,
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -212,105 +213,87 @@ pub(super) fn select_ui(
                 .and_then(|i| i.name.clone())
                 .unwrap_or_else(|| "-".into())
         };
+        // every text is an OnFill label of the card: the accent fill of the chosen one turns
+        // them all ON_ACCENT
+        let label = |s: String, font: TextFont| (Text::new(s), font, TextColor(TEXT), OnFill);
         commands
             .spawn((SelectRoot, root(camera, 6), BackgroundColor(SCRIM)))
             .with_children(|r| {
+                r.spawn(band());
                 r.spawn((
-                    Text::new("BLITZKRIEG: SELECT YOUR CLASS"),
-                    display(34.0),
-                    TextColor(ACCENT),
-                    shadow(),
-                ));
-                r.spawn((
-                    Countdown,
-                    Text::new(""),
-                    digits(16.0),
+                    Text::new("BLITZKRIEG"),
+                    display(110.0),
                     TextColor(INK),
+                    tracking(0.02, 110.0),
                     shadow(),
                 ));
-                r.spawn((
-                    Node {
-                        column_gap: px(6),
-                        row_gap: px(6),
-                        padding: UiRect::all(px(8)),
-                        max_width: percent(98),
-                        flex_wrap: FlexWrap::Wrap,
-                        justify_content: JustifyContent::Center,
-                        border_radius: BorderRadius::all(px(3)),
-                        ..default()
-                    },
-                    BackgroundColor(SURFACE),
-                ))
-                .with_children(|row| {
-                    for (i, (title, _, book)) in CLASSES.iter().enumerate() {
-                        row.spawn((
-                            Card(i),
-                            Button,
-                            Flat,
-                            Node {
-                                width: px(132),
-                                height: px(332),
-                                padding: UiRect::all(px(10)),
-                                border: UiRect::all(px(2)),
-                                border_radius: BorderRadius::all(px(2)),
-                                flex_direction: FlexDirection::Column,
-                                row_gap: px(8),
-                                ..default()
-                            },
-                            BackgroundColor(RAISED),
-                            BorderColor::all(Color::NONE),
-                        ))
-                        .with_children(|c| {
-                            c.spawn((
-                                Text::new(format!("{} — {}", i + 1, title.to_uppercase())),
-                                strong(16.0),
-                                TextColor(INK),
-                            ));
-                            c.spawn(Node {
-                                column_gap: px(6),
-                                ..default()
-                            })
-                            .with_children(|icons| {
-                                for icon in &blitz.art[i] {
-                                    icons.spawn((
-                                        Node {
-                                            width: px(48),
-                                            height: px(48),
-                                            border: UiRect::all(px(1)),
-                                            ..default()
-                                        },
-                                        BorderColor::all(LINE),
-                                        icon.clone(),
+                r.spawn(panel(1760.0, AlignItems::Stretch))
+                    .with_children(|p| {
+                        p.spawn(section(1, "Select your class")).with_child((
+                            Countdown,
+                            Text::new(""),
+                            digits(20.0),
+                            TextColor(ACCENT),
+                        ));
+                        p.spawn(Node {
+                            column_gap: px(12),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            for (i, (title, _, book)) in CLASSES.iter().enumerate() {
+                                row.spawn((
+                                    Card(i),
+                                    Button,
+                                    Flat,
+                                    UiTransform::default(),
+                                    Node {
+                                        width: px(180),
+                                        height: px(370),
+                                        padding: UiRect::all(px(14)),
+                                        flex_direction: FlexDirection::Column,
+                                        row_gap: px(10),
+                                        ..default()
+                                    },
+                                    shape(Cut::Notch(14), BUTTON),
+                                ))
+                                .with_children(|c| {
+                                    c.spawn(label(format!("{:02}", i + 1), crate::ui::mono(14.0)));
+                                    c.spawn(label(title.to_uppercase(), display(30.0)));
+                                    c.spawn(Node {
+                                        column_gap: px(6),
+                                        ..default()
+                                    })
+                                    .with_children(|icons| {
+                                        for icon in &blitz.art[i] {
+                                            icons.spawn((
+                                                Node {
+                                                    width: px(48),
+                                                    height: px(48),
+                                                    border: UiRect::all(px(1)),
+                                                    ..default()
+                                                },
+                                                BorderColor::all(LINE),
+                                                icon.clone(),
+                                            ));
+                                        }
+                                    });
+                                    c.spawn(label(describe(&blitz.cfg, i), compact(15.0)));
+                                    let kit = blitz.kit[i];
+                                    c.spawn(label(
+                                        format!("{}\n{}", name(kit[0]), name(kit[1])),
+                                        strong(15.0),
                                     ));
-                                }
-                            });
-                            c.spawn((
-                                Text::new(describe(&blitz.cfg, i)),
-                                compact(13.0),
-                                TextColor(DIM),
-                            ));
-                            let kit = blitz.kit[i];
-                            c.spawn((
-                                Text::new(format!("{}\n{}", name(kit[0]), name(kit[1]))),
-                                compact(13.0),
-                                TextColor(INK),
-                            ));
-                            if book.is_none() {
-                                c.spawn((
-                                    Text::new("NO CLASS BOOK"),
-                                    compact(13.0),
-                                    TextColor(DIM),
-                                ));
+                                    if book.is_none() {
+                                        c.spawn(label("NO CLASS BOOK".into(), compact(14.0)));
+                                    }
+                                });
                             }
                         });
-                    }
-                });
-                r.spawn((
-                    Text::new("1-9 / ARROWS / CLICK TO CHOOSE, ENTER OR SPACE TO CONFIRM"),
-                    compact(13.0),
-                    TextColor(DIM),
-                    shadow(),
-                ));
+                        p.spawn(caption(
+                            "1-9 / arrows / click to choose, enter or space to confirm",
+                            14.0,
+                        ));
+                    });
             });
         return;
     }
@@ -333,7 +316,7 @@ pub(super) fn select_ui(
         }
     }
     for mut t in &mut count {
-        let want = format!("SELECT YOUR CLASS — {}S LEFT", left.ceil().max(0.0) as i32);
+        let want = format!("{}S LEFT", left.ceil().max(0.0) as i32);
         if t.0 != want {
             t.0 = want;
         }
@@ -476,56 +459,68 @@ pub(super) fn reward_ui(
     if !open.is_empty() {
         return;
     }
-    let Ok(camera) = camera.single() else { return };
+    let Ok(camera) = camera.single() else {
+        return;
+    };
     let r = &blitz.cfg.reward;
     let share = if p.won { r.mvp_win } else { r.mvp_lose };
-    let mut lines = vec![(
-        format!(
-            "{} — {} MIN",
-            if p.won { "VICTORY" } else { "NO VICTORY" },
-            p.minutes
-        ),
-        strong(16.0),
-        if p.won { OK } else { DIM },
-    )];
-    match &p.none {
-        Some(why) => lines.push((
-            format!("NO REWARD: {}", why.to_uppercase()),
-            compact(14.0),
-            DANGER,
-        )),
-        None => {
-            if p.mvp {
-                lines.push((
-                    format!("MVP BONUS +{:.0}%", share[0] * 100.0),
-                    digits(16.0),
-                    ACCENT,
-                ));
-            }
-            lines.push((format!("+{} XP", p.xp), digits(18.0), INK));
-            lines.push((format!("+{} BOUNTY", p.bounty), digits(18.0), INK));
-            lines.push((format!("+{} MEDALS", p.medals), digits(18.0), INK));
+    let mut rows = vec![];
+    if p.none.is_none() {
+        if p.mvp {
+            rows.push(("MVP bonus", format!("+{:.0}%", share[0] * 100.0), ACCENT));
         }
+        rows.push(("XP", format!("+{}", p.xp), INK));
+        rows.push(("Bounty", format!("+{}", p.bounty), GOLD));
+        rows.push(("Medals", format!("+{}", p.medals), INK));
     }
+    // left of the scoreboard (900 wide, from y = 230, about the centre of the 1920 x 1080 canvas)
     commands
         .spawn((
             RewardRoot,
             UiTargetCamera(camera),
-            GlobalZIndex(5),
+            GlobalZIndex(11),
             Node {
                 position_type: PositionType::Absolute,
-                left: px(12),
-                top: px(110),
+                right: percent(50),
+                top: px(230),
+                margin: UiRect::right(px(474)),
                 ..default()
             },
         ))
         .with_children(|c| {
-            c.spawn(panel(260.0, AlignItems::Start)).with_children(|p| {
-                p.spawn(heading("Reward"));
-                for (s, font, colour) in lines {
-                    p.spawn((Text::new(s), font, TextColor(colour)));
-                }
-            });
+            c.spawn(panel(380.0, AlignItems::Stretch))
+                .with_children(|body| {
+                    body.spawn(section(1, "Reward"));
+                    body.spawn((
+                        Text::new(if p.won { "VICTORY" } else { "NO VICTORY" }),
+                        display(48.0),
+                        TextColor(if p.won { OK } else { DIM }),
+                    ));
+                    body.spawn(caption(&format!("{} min", p.minutes), 16.0));
+                    if let Some(why) = &p.none {
+                        body.spawn((
+                            Text::new(format!("NO REWARD: {}", why.to_uppercase())),
+                            compact(18.0),
+                            TextColor(DANGER),
+                        ));
+                    }
+                    for (label, value, colour) in rows {
+                        body.spawn((
+                            Node {
+                                height: px(48),
+                                padding: UiRect::horizontal(px(14)),
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::SpaceBetween,
+                                ..default()
+                            },
+                            shape(Cut::Notch(10), RAISED),
+                            children![
+                                caption(label, 16.0),
+                                (Text::new(value), digits(26.0), TextColor(colour))
+                            ],
+                        ));
+                    }
+                });
         });
 }
 

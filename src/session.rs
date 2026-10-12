@@ -12,14 +12,13 @@ use crate::{
     phase::{Leave, MatchApp, MatchSystems},
     profile::{OPTS, Profile, opt_mut},
     ui::{
-        ACCENT, Chosen, DANGER, DIM, INK, LINE, RAISED, SCRIM, SURFACE, button, compact, digits,
-        display, hover, primary, strong,
+        ACCENT, Chosen, Cut, DANGER, INK, OnFill, RAISED, SCRIM, TEXT, button, compact, display,
+        flat_cut, hazard, hover, panel, primary, section, shadow, shape, strong, tracking,
     },
     view::Shot,
 };
 use bevy::{
     prelude::*,
-    text::LineBreak,
     ui::{GlobalZIndex, UiTargetCamera},
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
@@ -380,15 +379,11 @@ enum Act {
     Controls,
     /// Opens the GRAPHICS overlay (`gfx.rs`).
     Graphics,
-    /// Toggles `profile::OPTS[i]`.
-    Opt(usize),
+    /// Sets `profile::OPTS[i]` to the value.
+    Set(usize, bool),
     Menu,
     Again,
     Quit,
-}
-
-fn on_off(on: bool) -> &'static str {
-    if on { "ON" } else { "OFF" }
 }
 
 /// Spawns/despawns the pause and end-of-match overlays to follow [`Frozen`] and [`Clock`]; the
@@ -405,8 +400,7 @@ fn panels(
     camera: Query<Entity, With<Camera3d>>,
     pause: Query<Entity, With<PauseUi>>,
     end: Query<Entity, With<EndUi>>,
-    opts: Query<(Entity, &Act, &Children, Has<Chosen>)>,
-    mut texts: Query<(&mut Text, &mut TextColor)>,
+    opts: Query<(Entity, &Act, Has<Chosen>)>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
@@ -428,14 +422,9 @@ fn panels(
     }
     if settings.is_changed() {
         let mut s = settings.clone();
-        for (e, a, kids, chosen) in &opts {
-            if let (Act::Opt(i), Some(&k)) = (a, kids.first()) {
-                let on = *opt_mut(&mut s, *i);
-                if let Ok((mut t, mut c)) = texts.get_mut(k) {
-                    t.0 = on_off(on).into();
-                    c.0 = if on { ACCENT } else { DIM };
-                }
-                match (on, chosen) {
+        for (e, a, chosen) in &opts {
+            if let Act::Set(i, on) = *a {
+                match (*opt_mut(&mut s, i) == on, chosen) {
                     (true, false) => drop(commands.entity(e).insert(Chosen)),
                     (false, true) => drop(commands.entity(e).remove::<Chosen>()),
                     _ => {}
@@ -456,9 +445,39 @@ fn root(camera: Entity) -> impl Bundle {
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
-            row_gap: px(10),
             ..default()
         },
+    )
+}
+
+/// The hazard band along the top edge, as under the menu's header (pause, end, loading and
+/// class-select screens).
+pub fn band() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(0),
+            left: px(0),
+            width: percent(100),
+            height: px(8),
+            ..default()
+        },
+        hazard(),
+    )
+}
+
+/// A secondary action: a [`Cut::Notch`] button.
+fn notch(w: f32, label: &str, act: Act) -> impl Bundle {
+    (
+        act,
+        flat_cut(w, 48.0, Cut::Notch(12)),
+        children![(
+            Text::new(label),
+            strong(20.0),
+            TextColor(TEXT),
+            tracking(0.06, 20.0),
+            OnFill
+        )],
     )
 }
 
@@ -466,129 +485,129 @@ fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
     commands
         .spawn((PauseUi, root(camera), BackgroundColor(SCRIM)))
         .with_children(|r| {
-            // a full-height side panel, so the column never sits over the HUD's vitals
-            r.spawn((
-                Node {
-                    width: px(560),
-                    height: percent(100),
-                    flex_direction: FlexDirection::Column,
-                    justify_content: JustifyContent::Center,
-                    align_self: AlignSelf::FlexStart,
-                    padding: UiRect::horizontal(px(70)),
-                    row_gap: px(8),
-                    ..default()
-                },
-                BackgroundColor(SURFACE),
-            ))
-            .with_children(|p| {
-                p.spawn((Text::new("PAUSED"), display(36.0), TextColor(INK)));
-                p.spawn(primary(420.0, 46.0, "RESUME", 20.0, Act::Resume));
-                for (label, act) in [
-                    ("CONTROLS", Act::Controls),
-                    ("GRAPHICS", Act::Graphics),
-                    ("MAIN MENU", Act::Menu),
-                ] {
-                    p.spawn(button(420.0, 38.0, label, 16.0, act));
-                }
-                // in the browser MAIN MENU is the page itself: nothing else to quit to
-                if !cfg!(target_arch = "wasm32") {
-                    p.spawn(button(420.0, 38.0, "QUIT", 16.0, Act::Quit));
-                }
-                p.spawn((
-                    Text::new("OPTIONS"),
-                    strong(13.0),
-                    TextColor(DIM),
-                    Node {
-                        margin: UiRect::top(px(6)),
-                        ..default()
-                    },
-                ));
-                let mut s = settings.clone();
-                for (i, (_, label)) in OPTS.iter().enumerate() {
-                    let on = *opt_mut(&mut s, i);
-                    p.spawn((
-                        Node {
-                            width: px(420),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::SpaceBetween,
-                            padding: UiRect::vertical(px(3)),
-                            border: UiRect::bottom(px(1)),
+            r.spawn(band());
+            // a side panel on the left, so it never sits over the HUD's vitals
+            r.spawn(Node {
+                width: percent(100),
+                padding: UiRect::left(px(96)),
+                ..default()
+            })
+            .with_children(|w| {
+                w.spawn(panel(560.0, AlignItems::Stretch))
+                    .with_children(|p| {
+                        p.spawn(section(1, "Paused"));
+                        p.spawn(primary(516.0, 64.0, "RESUME", 26.0, Act::Resume));
+                        let web = cfg!(target_arch = "wasm32");
+                        let row = || Node {
+                            column_gap: px(10),
                             ..default()
-                        },
-                        BorderColor::all(LINE),
-                    ))
-                    .with_children(|row| {
-                        row.spawn((
-                            Text::new(*label),
-                            compact(16.0),
-                            TextColor(INK),
-                            TextLayout {
-                                linebreak: LineBreak::NoWrap,
-                                ..default()
-                            },
-                        ));
-                        let mut tag = row.spawn((
-                            Act::Opt(i),
-                            Button,
-                            Node {
-                                width: px(60),
-                                height: px(24),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                border_radius: BorderRadius::all(px(12)),
-                                ..default()
-                            },
-                            BackgroundColor(RAISED),
-                            children![(
-                                Text::new(on_off(on)),
-                                digits(14.0),
-                                TextColor(if on { ACCENT } else { DIM }),
-                            )],
-                        ));
-                        if on {
-                            tag.insert(Chosen);
+                        };
+                        p.spawn(row()).with_children(|b| {
+                            b.spawn(notch(253.0, "CONTROLS", Act::Controls));
+                            b.spawn(notch(253.0, "GRAPHICS", Act::Graphics));
+                        });
+                        p.spawn(row()).with_children(|b| {
+                            // in the browser MAIN MENU is the page itself: nothing else to quit to
+                            b.spawn(notch(
+                                if web { 516.0 } else { 253.0 },
+                                "MAIN MENU",
+                                Act::Menu,
+                            ));
+                            if !web {
+                                b.spawn(notch(253.0, "QUIT", Act::Quit));
+                            }
+                        });
+                        p.spawn(section(2, "Options"));
+                        let mut s = settings.clone();
+                        for (i, (_, label)) in OPTS.iter().enumerate() {
+                            let on = *opt_mut(&mut s, i);
+                            p.spawn((
+                                Node {
+                                    height: px(44),
+                                    padding: UiRect::horizontal(px(14)),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    ..default()
+                                },
+                                shape(Cut::Notch(10), RAISED),
+                            ))
+                            .with_children(|row| {
+                                row.spawn((Text::new(*label), compact(20.0), TextColor(INK)));
+                                row.spawn(Node {
+                                    column_gap: px(4),
+                                    ..default()
+                                })
+                                .with_children(|pair| {
+                                    for value in [false, true] {
+                                        let label = if value { "ON" } else { "OFF" };
+                                        let mut b = pair.spawn(button(
+                                            72.0,
+                                            32.0,
+                                            label,
+                                            15.0,
+                                            Act::Set(i, value),
+                                        ));
+                                        if value == on {
+                                            b.insert(Chosen);
+                                        }
+                                    }
+                                });
+                            });
                         }
                     });
-                }
             });
         });
 }
 
-/// The scoreboard itself is the HUD's (shown while the match is over); this adds the headline
-/// above it and the buttons below it (the board starts 220 px above the centre).
+/// The scoreboard itself is the HUD's (`hud/panels.rs`: 900 wide, hanging from y = 230 while the
+/// match is over); this adds the headline above it and the footer's buttons below it.
 fn spawn_end(commands: &mut Commands, camera: Entity, headline: &str) {
     let color = match headline {
         "VICTORY" => ACCENT,
         "DEFEAT" => DANGER,
         _ => INK,
     };
-    commands.spawn((EndUi, root(camera))).with_children(|r| {
-        r.spawn((
-            Text::new(headline),
-            TextFont::from_font_size(60.0),
-            TextColor(color),
-            TextShadow::default(),
-            Node {
-                height: px(70),
+    commands
+        .spawn((EndUi, root(camera), BackgroundColor(SCRIM)))
+        .with_children(|r| {
+            r.spawn(band());
+            r.spawn(Node {
+                position_type: PositionType::Absolute,
+                top: px(100),
+                height: px(120),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::FlexEnd,
                 ..default()
-            },
-        ));
-        r.spawn(Node {
-            height: px(440),
-            ..default()
+            })
+            .with_children(|h| {
+                h.spawn((
+                    Text::new(headline),
+                    display(104.0),
+                    TextColor(color),
+                    tracking(0.02, 104.0),
+                    shadow(),
+                    Node {
+                        margin: UiRect::top(px(-8)),
+                        ..default()
+                    },
+                ));
+            });
+            r.spawn(Node {
+                position_type: PositionType::Absolute,
+                bottom: px(48),
+                column_gap: px(14),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|b| {
+                b.spawn(primary(260.0, 56.0, "PLAY AGAIN", 26.0, Act::Again));
+                b.spawn(button(180.0, 48.0, "MAIN MENU", 22.0, Act::Menu));
+                if !cfg!(target_arch = "wasm32") {
+                    b.spawn(button(140.0, 48.0, "QUIT", 22.0, Act::Quit));
+                }
+            });
         });
-        r.spawn(Node {
-            column_gap: px(10),
-            ..default()
-        })
-        .with_children(|b| {
-            b.spawn(primary(190.0, 46.0, "PLAY AGAIN", 18.0, Act::Again));
-            b.spawn(button(170.0, 46.0, "MAIN MENU", 17.0, Act::Menu));
-            if !cfg!(target_arch = "wasm32") {
-                b.spawn(button(110.0, 46.0, "QUIT", 17.0, Act::Quit));
-            }
-        });
-    });
 }
 
 fn buttons(
@@ -606,8 +625,7 @@ fn buttons(
         }
         match *a {
             Act::Resume => freeze(&mut commands, &mut vtime, false),
-            Act::Opt(i) => {
-                let on = !*opt_mut(&mut settings, i);
+            Act::Set(i, on) => {
                 *opt_mut(&mut settings, i) = on;
                 if let Some(p) = profile.as_mut() {
                     p.opts[i] = on;

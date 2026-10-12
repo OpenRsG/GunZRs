@@ -1810,16 +1810,15 @@ faces a wall 7 m ahead). Observed lines:
   `tech: flash step`.
 - `2:0.1;wait:0.5;attack:0.1;reload:0.1;3:0.1;attack:0.5` -> `reload: ... (mag 6+24)`, `tech: reload cancel`, `tech: reload shot` 0.1 s later.
 - `wait:0.2;w:0.5;w+jump:0.25;w+guard:0.4;w+guard+jump:0.8` (at the wall) -> `tech: wall hang`, then `runW` climbing
-  (`.local/moves/hang1.png`, `hang2.png`). One hang per time in the air (landing allows the next) and it climbs at most
-  0.5 s (2 m, **port limit**): before, tapping forward + jump while hanging, or kicking off and hanging again, climbed
-  any wall to the top of the map. `w:0.5;w+jump:0.25;w:0.3;w+guard:0.3` then 12 x `w+guard+jump:0.1;w+guard:0.1`:
-  `runW` 12 times before, 5 now (`.local/HangFix/`).
-- Wall hang held and released (`W`, per-frame temporary log of the player's height, sheets `.local/MeleeWall/sheet_hang.png`,
-  `sheet_fall.png`): `w:0.5;w+jump:0.25;w:0.6;guard:8;wait:1.5` -> `tech: wall hang` at 2.85 s, `State::Hang` until 10.83 s with
-  y = 3.646 m in every frame (before: it crept up 0.03 m in 8 s, the capsule pressed into the slightly leaning wall), then
-  `jumpD` and the landing at 11.40 s. The same with a gun first (`2:0.1;wait:0.5;...`): hang 3.45-11.43 s, y = 3.646 m (before:
-  Shift did nothing, the actor slid down). Side wall run in the corridor (`--at 1391,1300,2 --yaw 0`,
-  `d+w:0.2;d+w+jump:0.1;w:0.3;guard:4`): hang at y = 1.055 m for 4 s, katana or gun. Forward released before the guard
+  (`.local/moves/hang1.png`, `hang2.png`). **Port limits** (holding guard kept a player on a wall for good, and climbing
+  while hanging, or kicking off and hanging again, reached the top of any wall): one hang per time in the air (landing
+  allows the next), it holds at most `HANG_SECS` 1.2 s and climbs at most `HANG_CLIMB_SECS` 0.5 s (2 m). The hang logs
+  its height (`tech: wall hang ... y=`, `hang end ... y=`). Measured (`.local/HangFix/v2/`): `w:0.5;w+jump:0.25;w:0.6;
+  guard:8;wait:1.5` -> hang at 2.85 s y = 3.65 m, `hang end (time up)` at 4.07 s y = 3.65 m, then the fall;
+  `w:0.5;w+jump:0.25;w:0.3;w+guard:0.3` then 12 x `w+guard+jump:0.1;w+guard:0.1` -> hang at y = 3.18 m, end at
+  y = 3.96 m (before: it climbed for every tap). Bots' hang climb only tries enemies 2-3.5 m above (a jump plus 2 m).
+  Side wall run in the corridor (`--at 1391,1300,2 --yaw 0`, `d+w:0.2;d+w+jump:0.1;w:0.3;guard:4`): hang at y = 1.055 m,
+  katana or gun. Forward released before the guard
   (`w:0.5;w+jump:0.25;wait:0.3;guard:2`, also with 0.1 s, and `w:0.3;wait:0.3`): hang (before: none unless the wall was touched
   in the last 0.1 s). `...;guard:1.0;guard+jump:0.1` -> `jumpwallF` (3 m/s away from the wall; before: the jump did nothing in
   a hang). An air slash against the wall, then the guard (`w:0.5;w+jump:0.1;attack:0.05;wait:0.06;guard:2`): hang (before: none).

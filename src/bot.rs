@@ -1408,7 +1408,7 @@ fn bot_ai(
         let mut hang = false;
         if let Some((t, n)) = ai.climb {
             let top = target.is_none_or(|e| pos.y >= e.y + 0.1);
-            if top || t > 4.0 || !melee || scripted || blind {
+            if top || t > 2.0 || !melee || scripted || blind {
                 debug!(
                     "bot {name}: hang climb {} after {t:.1} s at y {:.1}",
                     if top { "done" } else { "gave up" },
@@ -1433,7 +1433,8 @@ fn bot_ai(
             && ai.lay.is_none()
             && !blind
             && let Some(e) = seen
-            && (2.0..7.0).contains(&(e.y - pos.y))
+            // a jump (1.6 m) plus the hang's 2 m climb
+            && (2.0..3.5).contains(&(e.y - pos.y))
             && dist < 7.0
         {
             let d = flat(e - pos).normalize_or_zero();

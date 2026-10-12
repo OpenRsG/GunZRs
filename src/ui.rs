@@ -120,6 +120,9 @@ impl Plugin for UiPlugin {
                 }),
             )
             .expect("pattern asset slot");
+        images
+            .insert(METAL.id(), metal_image())
+            .expect("metal asset slot");
         // `hover` runs in each screen's own chain, after the systems that pick `Chosen`
         app.add_systems(Update, paint_segs);
     }
@@ -301,6 +304,54 @@ fn stripes(period: usize, paint: impl Fn(bool) -> Option<[u8; 4]>) -> Image {
         }
     }
     image(period as u32, period as u32, data)
+}
+
+const METAL: Handle<Image> = uuid_handle!("4e7a1b93-2c6d-4f80-b5e1-9a3d0c7f6b28");
+/// The node size (px) [`metal`] is drawn for, and its bottom-right notch.
+pub const METAL_SIZE: (f32, f32, f32) = (380.0, 88.0, 14.0);
+
+/// Brushed metal in the `Notch` shape for the [`METAL_SIZE`] START plate: a white-to-grey
+/// relief (bright rim, a dark horizon just under the middle, brushed rows) that the fill colour
+/// tints, so [`hover`] still paints it.
+pub fn metal() -> ImageNode {
+    ImageNode {
+        image: METAL,
+        color: ACCENT,
+        image_mode: NodeImageMode::Stretch,
+        visual_box: VisualBox::BorderBox,
+        ..default()
+    }
+}
+
+/// [`metal`]'s texture, at twice the node's size.
+fn metal_image() -> Image {
+    let (w, h, c) = (METAL_SIZE.0 * 2.0, METAL_SIZE.1 * 2.0, METAL_SIZE.2 * 2.0);
+    let (wu, hu) = (w as usize, h as usize);
+    let mut data = Vec::with_capacity(wu * hu * 4);
+    for y in 0..hu {
+        let f = (y as f32 + 0.5) / h;
+        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t.clamp(0.0, 1.0);
+        let relief = match f {
+            f if f < 0.05 => 1.0,
+            f if f < 0.5 => lerp(0.97, 0.86, (f - 0.05) / 0.45),
+            f if f < 0.53 => lerp(0.86, 0.66, (f - 0.5) / 0.03),
+            f if f < 0.94 => lerp(0.66, 0.8, (f - 0.53) / 0.41),
+            _ => 0.7,
+        };
+        // brushed: each row a little lighter or darker (a fixed hash, no randomness)
+        let brush = ((y as u32).wrapping_mul(2_654_435_761) >> 28) as f32 / 15.0 - 0.5;
+        let v = ((relief + brush * 0.03).clamp(0.0, 1.0) * 255.0) as u8;
+        for x in 0..wu {
+            let mut n = 0;
+            for s in 0..16 {
+                let px = x as f32 + ((s % 4) as f32 + 0.5) / 4.0;
+                let py = y as f32 + ((s / 4) as f32 + 0.5) / 4.0;
+                n += (px + py <= w + h - c) as u32;
+            }
+            data.extend_from_slice(&[v, v, v, (n * 255 / 16) as u8]);
+        }
+    }
+    image(w as u32, h as u32, data)
 }
 
 fn image(w: u32, h: u32, data: Vec<u8>) -> Image {

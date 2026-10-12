@@ -137,7 +137,7 @@ each input sequence was played headless and its log checked (the juggle's last h
 | Reload shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon |
 | Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |
 | Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump |
-| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift / right mouse) with any weapon that allows wall moves: you cling and float there for as long as you hold it; forward + jump climbs, jump alone kicks off the wall, letting go drops |
+| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift / right mouse) with any weapon that allows wall moves: you cling for up to 1.2 s, once per jump; forward + jump climbs up to 2 m, jump alone kicks off the wall, letting go drops |
 | Butterfly | Slash, then guard before the recovery ends: the guard cancels the recovery (it roots you like any guard); jump or dash out of it |
 | Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block; jump, slash, block, dash, slash, block; or jump, slash, block three times (a jump pressed just before landing is kept) |
 | Block cancel (quadruple BF) | Guard during a slash lands the hit at once and goes straight to the guard; press guard with the next direction for the glitch rhythm |

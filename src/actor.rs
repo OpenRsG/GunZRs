@@ -111,6 +111,9 @@ const HANG_CLIMB: f32 = 4.0;
 /// Seconds a hang may climb (2 m), and only one hang per time in the air: hanging, kicking
 /// off and hanging again on the same wall climbed any wall without end.
 const HANG_CLIMB_SECS: f32 = 0.5;
+/// Seconds a hang holds before the actor lets go and falls (**port limit**: holding guard
+/// kept a player on a wall for good).
+const HANG_SECS: f32 = 1.2;
 /// How far (m) from the capsule's side the wall touched last may be for a guard to still cling to
 /// it: the hang presses into it at 1 m/s, well inside `WALL_LOSE`.
 const HANG_REACH: f32 = 0.1;
@@ -513,6 +516,8 @@ pub struct Actor {
     /// Already hung on a wall since last touching the ground, and seconds that hang climbed.
     hang_spent: bool,
     hang_up: f32,
+    /// When the current hang started.
+    hang_at: f32,
     /// Next hit reaction clip (alternates `damage` / `damage2`).
     hurt: bool,
     /// Seconds spent in the air (landing sound).
@@ -695,6 +700,7 @@ impl ActorSpawner<'_, '_> {
                     wall_spent: false,
                     hang_spent: false,
                     hang_up: 0.0,
+                    hang_at: 0.0,
                     hurt: false,
                     air: 0.0,
                     tech: Tech::default(),
@@ -1770,7 +1776,13 @@ fn drive(
             }
             State::Hang { .. } => {
                 let lost = now - a.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
-                if a.grounded || lost || !intent.guard {
+                let tired = now - a.hang_at > HANG_SECS;
+                if a.grounded || lost || !intent.guard || tired {
+                    debug!(
+                        "t={now:.2} hang end {who} y={:.2}{}",
+                        tf.translation.y,
+                        if tired { " (time up)" } else { "" }
+                    );
                     a.state = State::Free;
                 }
             }
@@ -2033,15 +2045,16 @@ fn drive(
                 .is_none()
         {
             debug!(
-                "t={now:.2} tech: wall hang{} {who}",
+                "t={now:.2} tech: wall hang{} {who} y={:.2}",
                 if matches!(a.state, State::Wall { .. } | State::WallRun { .. }) {
                     " cancel (the hang ends the wall run / kick)"
                 } else {
                     ""
-                }
+                },
+                tf.translation.y
             );
             a.state = State::Hang { n };
-            (a.hang_spent, a.hang_up) = (true, 0.0);
+            (a.hang_spent, a.hang_up, a.hang_at) = (true, 0.0, now);
             a.wall = Some((n, now));
             a.vel = Vec3::ZERO;
             a.restart = true;

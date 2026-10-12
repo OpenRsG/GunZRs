@@ -1048,6 +1048,7 @@ impl Plugin for MenuPlugin {
                     matchpage::art_look,
                     matchpage::hero,
                     chrome::toast,
+                    chrome::shine,
                     preview,
                     demo,
                     orbit,

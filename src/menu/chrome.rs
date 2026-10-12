@@ -4,8 +4,9 @@
 
 use super::*;
 use crate::ui::{
-    self, ACCENT, Chosen, Cut, DIM, GOLD, INK, MUTE, ON_ACCENT, OnFill, Primary, RAISED, SURFACE,
-    TEXT, caption, digits, ease_out, flat_cut, hatch, hazard, key, mono, segs, shape, tracking,
+    self, ACCENT, Chosen, Cut, DIM, Flat, GOLD, INK, METAL_SIZE, MUTE, ON_ACCENT, OnFill, Primary,
+    RAISED, SURFACE, TEXT, caption, digits, ease_out, flat_cut, hatch, hazard, key, metal, mono,
+    segs, shape, tracking,
 };
 
 /// The menu's root node: toasts are spawned under it.
@@ -376,53 +377,117 @@ pub(super) fn footer(
                     ));
                 }
             }
+            let (w, h, notch) = METAL_SIZE;
             r.spawn((
                 Act::Start,
                 Primary,
-                flat_cut(380.0, 88.0, Cut::Notch(14)),
-                children![(
-                    Node {
-                        width: percent(100),
-                        height: percent(100),
-                        padding: UiRect::horizontal(px(32)),
-                        justify_content: JustifyContent::SpaceBetween,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    children![
-                        (
+                Flat,
+                Button,
+                UiTransform::default(),
+                Node {
+                    width: px(w),
+                    height: px(h),
+                    ..default()
+                },
+                metal(),
+                children![
+                    // the shine sweeping across, clipped short of the notch
+                    (
+                        Node {
+                            right: px(notch),
+                            top: px(0),
+                            bottom: px(0),
+                            left: px(0),
+                            overflow: Overflow::clip(),
+                            ..abs()
+                        },
+                        children![(
+                            Shine,
                             Node {
-                                flex_direction: FlexDirection::Column,
-                                ..default()
+                                left: px(-SHINE_W * 2.0),
+                                top: px(-30),
+                                width: px(SHINE_W),
+                                height: px(h + 60.0),
+                                ..abs()
                             },
-                            children![
-                                (
-                                    Text::new("START"),
-                                    ui::display(48.0),
-                                    tracking(0.1, 48.0),
-                                    TextColor(ON_ACCENT)
-                                ),
-                                (Text::new("ENTER"), mono(11.0), TextColor(ON_ACCENT))
-                            ]
-                        ),
-                        (
-                            Node {
-                                column_gap: px(2),
-                                ..default()
-                            },
-                            Children::spawn(SpawnIter([0.35, 0.65, 1.0].into_iter().map(|a| {
-                                (
-                                    Text::new(">"),
-                                    ui::display(44.0),
-                                    TextColor(ON_ACCENT.with_alpha(a)),
-                                )
-                            })))
-                        )
-                    ]
-                )],
+                            UiTransform::from_rotation(Rot2::degrees(20.0)),
+                            BackgroundGradient::from(LinearGradient::to_right(vec![
+                                ColorStop::new(Color::NONE, percent(0)),
+                                ColorStop::new(Color::srgba(1.0, 1.0, 1.0, 0.22), percent(50)),
+                                ColorStop::new(Color::NONE, percent(100)),
+                            ])),
+                        )],
+                    ),
+                    (
+                        Node {
+                            width: percent(100),
+                            height: percent(100),
+                            padding: UiRect::horizontal(px(32)),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        children![
+                            (
+                                Node {
+                                    flex_direction: FlexDirection::Column,
+                                    ..default()
+                                },
+                                children![
+                                    (
+                                        Text::new("START"),
+                                        ui::display(48.0),
+                                        tracking(0.1, 48.0),
+                                        TextColor(ON_ACCENT)
+                                    ),
+                                    (Text::new("ENTER"), mono(11.0), TextColor(ON_ACCENT))
+                                ]
+                            ),
+                            (
+                                Node {
+                                    column_gap: px(2),
+                                    ..default()
+                                },
+                                Children::spawn(SpawnIter([0.35, 0.65, 1.0].into_iter().map(
+                                    |a| {
+                                        (
+                                            Text::new(">"),
+                                            ui::display(44.0),
+                                            TextColor(ON_ACCENT.with_alpha(a)),
+                                        )
+                                    }
+                                )))
+                            )
+                        ]
+                    )
+                ],
             ));
         });
     });
+}
+
+/// The light band [`shine`] sweeps across START.
+#[derive(Component)]
+pub(super) struct Shine;
+
+const SHINE_W: f32 = 70.0;
+/// Seconds between sweeps and of one sweep.
+const SHINE_EVERY: f32 = 3.5;
+const SHINE_SECS: f32 = 0.9;
+
+/// Sweeps START's shine from left to right every [`SHINE_EVERY`] seconds.
+pub(super) fn shine(time: Res<Time>, mut bands: Query<&mut Node, With<Shine>>) {
+    let t = (time.elapsed_secs() % SHINE_EVERY) / SHINE_SECS;
+    let left = if t < 1.0 {
+        -SHINE_W * 2.0 + ui::ease_out(t) * (METAL_SIZE.0 + SHINE_W * 3.0)
+    } else {
+        -SHINE_W * 2.0
+    };
+    for mut n in &mut bands {
+        if n.left != px(left) {
+            n.left = px(left);
+        }
+    }
 }
 
 /// Shows the current page's watermark word only.

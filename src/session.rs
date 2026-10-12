@@ -13,7 +13,8 @@ use crate::{
     profile::{OPTS, Profile, opt_mut},
     ui::{
         ACCENT, Chosen, Cut, DANGER, INK, OnFill, RAISED, SCRIM, TEXT, button, compact, display,
-        flat_cut, hazard, hover, panel, primary, section, shadow, shape, strong, tracking,
+        flat_cut, hazard, hover, metal_primary, panel, primary, section, shadow, shape, strong,
+        tracking,
     },
     view::Shot,
 };
@@ -496,7 +497,7 @@ fn spawn_pause(commands: &mut Commands, camera: Entity, settings: &Settings) {
                 w.spawn(panel(560.0, AlignItems::Stretch))
                     .with_children(|p| {
                         p.spawn(section(1, "Paused"));
-                        p.spawn(primary(516.0, 64.0, "RESUME", 26.0, Act::Resume));
+                        p.spawn(metal_primary(516.0, 64.0, "RESUME", 26.0, Act::Resume));
                         let web = cfg!(target_arch = "wasm32");
                         let row = || Node {
                             column_gap: px(10),

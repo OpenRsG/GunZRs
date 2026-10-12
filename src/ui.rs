@@ -4,9 +4,10 @@
 //! fonts come from here, nowhere else. Rules: `DESIGN.md`.
 
 use bevy::{
-    asset::{RenderAssetUsages, uuid::Uuid, uuid_handle},
+    asset::{RenderAssetUsages, embedded_asset, uuid::Uuid, uuid_handle},
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat},
+    shader::ShaderRef,
     sprite::{BorderRect, SliceScaleMode, TextureSlicer},
     text::{FontFeatureTag, LetterSpacing},
     ui::VisualBox,
@@ -120,11 +121,10 @@ impl Plugin for UiPlugin {
                 }),
             )
             .expect("pattern asset slot");
-        images
-            .insert(METAL.id(), metal_image())
-            .expect("metal asset slot");
+        embedded_asset!(app, "metal.wgsl");
         // `hover` runs in each screen's own chain, after the systems that pick `Chosen`
-        app.add_systems(Update, paint_segs);
+        app.add_plugins(UiMaterialPlugin::<MetalMaterial>::default())
+            .add_systems(Update, (paint_segs, metal_make, metal_look).chain());
     }
 }
 
@@ -306,52 +306,119 @@ fn stripes(period: usize, paint: impl Fn(bool) -> Option<[u8; 4]>) -> Image {
     image(period as u32, period as u32, data)
 }
 
-const METAL: Handle<Image> = uuid_handle!("4e7a1b93-2c6d-4f80-b5e1-9a3d0c7f6b28");
-/// The node size (px) [`metal`] is drawn for, and its bottom-right notch.
-pub const METAL_SIZE: (f32, f32, f32) = (380.0, 88.0, 14.0);
+/// A button plate of brushed orange metal (`metal.wgsl`) in the `Notch(notch)` shape, `w` x `h`
+/// px: [`metal_look`] feeds the shader its sweep, hover and pressed state. Put the label in it.
+pub fn metal(w: f32, h: f32, notch: f32) -> impl Bundle {
+    (
+        Button,
+        UiTransform::default(),
+        Node {
+            width: px(w),
+            height: px(h),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        Metal { w, h, notch },
+    )
+}
 
-/// Brushed metal in the `Notch` shape for the [`METAL_SIZE`] START plate: a white-to-grey
-/// relief (bright rim, a dark horizon just under the middle, brushed rows) that the fill colour
-/// tints, so [`hover`] still paints it.
-pub fn metal() -> ImageNode {
-    ImageNode {
-        image: METAL,
-        color: ACCENT,
-        image_mode: NodeImageMode::Stretch,
-        visual_box: VisualBox::BorderBox,
-        ..default()
+/// [`primary`] on metal: the pause menu's RESUME.
+pub fn metal_primary<A: Component>(w: f32, h: f32, label: &str, size: f32, act: A) -> impl Bundle {
+    (
+        act,
+        metal(w, h, 14.0),
+        children![(
+            Text::new(label.to_uppercase()),
+            display(size * 1.2),
+            TextColor(ON_ACCENT),
+            tracking(0.04, size * 1.2),
+        )],
+    )
+}
+
+/// The size (px) and notch of a [`metal`] plate; [`metal_make`] gives it its material.
+#[derive(Component, Clone, Copy)]
+pub struct Metal {
+    w: f32,
+    h: f32,
+    notch: f32,
+}
+
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+struct MetalMaterial {
+    #[uniform(0)]
+    params: MetalParams,
+}
+
+/// `metal.wgsl`'s `Metal`: tint (linear); width, height, notch, brightness; sweep position
+/// (negative: none).
+#[derive(ShaderType, Clone, Copy)]
+struct MetalParams {
+    color: Vec4,
+    shape: Vec4,
+    anim: Vec4,
+}
+
+impl UiMaterial for MetalMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://gunz/metal.wgsl".into()
     }
 }
 
-/// [`metal`]'s texture, at twice the node's size.
-fn metal_image() -> Image {
-    let (w, h, c) = (METAL_SIZE.0 * 2.0, METAL_SIZE.1 * 2.0, METAL_SIZE.2 * 2.0);
-    let (wu, hu) = (w as usize, h as usize);
-    let mut data = Vec::with_capacity(wu * hu * 4);
-    for y in 0..hu {
-        let f = (y as f32 + 0.5) / h;
-        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t.clamp(0.0, 1.0);
-        let relief = match f {
-            f if f < 0.05 => 1.0,
-            f if f < 0.5 => lerp(0.97, 0.86, (f - 0.05) / 0.45),
-            f if f < 0.53 => lerp(0.86, 0.66, (f - 0.5) / 0.03),
-            f if f < 0.94 => lerp(0.66, 0.8, (f - 0.53) / 0.41),
-            _ => 0.7,
+/// Seconds between the light strip's sweeps and of one sweep.
+const SWEEP_EVERY: f32 = 3.5;
+const SWEEP_SECS: f32 = 0.9;
+/// The shader's brightness: 1.0 is the rest state (`metal.wgsl` tone maps with it).
+const METAL_LIGHT: f32 = 1.0;
+
+fn metal_make(
+    mut commands: Commands,
+    new: Query<(Entity, &Metal), Added<Metal>>,
+    mut materials: ResMut<Assets<MetalMaterial>>,
+) {
+    for (e, m) in &new {
+        let material = MetalMaterial {
+            params: MetalParams {
+                color: ACCENT.to_linear().to_vec4(),
+                shape: Vec4::new(m.w, m.h, m.notch, METAL_LIGHT),
+                anim: Vec4::NEG_ONE,
+            },
         };
-        // brushed: each row a little lighter or darker (a fixed hash, no randomness)
-        let brush = ((y as u32).wrapping_mul(2_654_435_761) >> 28) as f32 / 15.0 - 0.5;
-        let v = ((relief + brush * 0.03).clamp(0.0, 1.0) * 255.0) as u8;
-        for x in 0..wu {
-            let mut n = 0;
-            for s in 0..16 {
-                let px = x as f32 + ((s % 4) as f32 + 0.5) / 4.0;
-                let py = y as f32 + ((s / 4) as f32 + 0.5) / 4.0;
-                n += (px + py <= w + h - c) as u32;
-            }
-            data.extend_from_slice(&[v, v, v, (n * 255 / 16) as u8]);
+        commands
+            .entity(e)
+            .insert(MaterialNode(materials.add(material)));
+    }
+}
+
+/// Hover, pressed and the sweeping strip of every [`Metal`] plate. Real time: the pause menu
+/// stops the game clock.
+fn metal_look(
+    real: Res<Time<Real>>,
+    mut materials: ResMut<Assets<MetalMaterial>>,
+    mut plates: Query<(&MaterialNode<MetalMaterial>, &Interaction, &mut UiTransform), With<Metal>>,
+) {
+    let t = (real.elapsed_secs() % SWEEP_EVERY) / SWEEP_SECS;
+    let sweep = if t < 1.0 { ease_out(t) } else { -1.0 };
+    for (node, i, mut tf) in &mut plates {
+        if let Some(mut m) = materials.get_mut(&node.0) {
+            m.params.anim.x = sweep;
+            m.params.shape.w = METAL_LIGHT
+                * match i {
+                    Interaction::Pressed => 0.8,
+                    Interaction::Hovered => 1.15,
+                    Interaction::None => 1.0,
+                };
+        }
+        let scale = Vec2::splat(if *i == Interaction::Pressed {
+            0.97
+        } else {
+            1.0
+        });
+        if tf.scale != scale {
+            tf.scale = scale;
         }
     }
-    image(w as u32, h as u32, data)
 }
 
 fn image(w: u32, h: u32, data: Vec<u8>) -> Image {

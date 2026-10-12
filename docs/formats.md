@@ -1523,7 +1523,11 @@ No new file format; how the retail character animations are used (**observed** =
   -2500 cm/s^2 down to -12 m/s in 556 samples; was 45 % / 6 m/s, inferred); facing the wall:
   climbs by the `runW` foot profile (3.3 m over 0.6 s, **inferred** from the clip; replays show a
   17 m/s launch with full gravity, +5.7 m in 0.68 s, **not applied**), then
-  `runW_downF` (`runW_downB` when turned away). Jump during a wall run = wall kick.
+  `runW_downF` (`runW_downB` when turned away). A head against a ceiling (rising, blocked to less
+  than half the step, a ray from the capsule top finds a surface within 0.1 m) ends the climb at
+  once; before, the profile kept pushing for the rest of its 0.6 s, the capsule pinned to the
+  ceiling for up to 9 frames while `runW` kept playing (**port rule**, **inferred**; the replays
+  do not say what the original does there). Jump during a wall run = wall kick.
 - Guard (**observed** clips `guard_start`, `guard_idle`, `guard_block1/2`, `guard_cancel`;
   melee motion types with them only): right mouse / script key `guard` on the ground. The actor
   carries `Guarding` while raised and is rooted for as long as any guard clip plays on the ground

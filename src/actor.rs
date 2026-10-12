@@ -2344,6 +2344,15 @@ fn drive(
             a.vel.y = a.vel.y.max(0.0);
         } else if a.vel.y > 0.0 && moved_up < delta.y * 0.5 {
             a.vel.y = 0.0;
+            // a head against a ceiling ends the up-wall run: it would hold the capsule pinned
+            if let State::WallRun { side, left, .. } = &mut a.state
+                && *side == 0.0
+                && col
+                    .raycast(tf.translation + Vec3::Y * (HEIGHT - 0.3), Vec3::Y, 0.4)
+                    .is_some()
+            {
+                *left = 0.0;
+            }
         }
         if mv.grounded {
             // thud of a real fall (not a hop or a step down)

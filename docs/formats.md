@@ -1897,7 +1897,10 @@ pages, FatherPrim's D-style guide, Neoseeker threads); the guides' names are kep
 
 Not done: Walk Charge (needs the chat box: outside the game's rules) and macros; Massive Tap, Ghost Evade and Magic Switch (a
 massive's recoil and a turned hitbox: no such mechanics here); the curved E-lunge's larger hitbox; Fade Shot (gun, tumble,
-shot, reload, dagger, dash) is the same chain as the shimmer and yoyo shots.
+shot, reload, dagger, dash) is the same chain as the shimmer and yoyo shots. Glitches the guides describe by their inputs
+but not their cause, so a rule for them would be invented: the slide dance / moon walk (slash, block at the end of the
+slash, jump, a direction, an emote: the actor slides), the wall-run pause (a massive released on a stair wall run freezes the
+runner for 2-3 s), the elevator (players stacked on each other rise), the dash's invulnerable frames (one 2023 write-up).
 
 Network (`src/net.rs`, protocol `VERSION` 4): the snapshot carries `Intent::dash` (flag bit 6) and `Intent::alt` (bit 7); every
 other state is derived from the `Intent` the host already gets every frame (`walk` taps for the dash, `jump`, `guard`, `slot`

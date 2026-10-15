@@ -221,7 +221,9 @@ D-style (dagger; it has no guard, its alternative fire on the right mouse is the
 | Block tap | A guarded stab recoils you; look all the way up or down while stabbing and it does not |
 | Phantom | A dash or a lunge halves your hitbox for its duration |
 
-Not in: Walk Charge (needs the chat box) and macros, Ghost Evade, Magic Switch, Massive Tap.
+Not in: Walk Charge (needs the chat box) and macros, Ghost Evade, Magic Switch, Massive Tap, and the glitches whose cause the
+guides do not explain: the slide dance (moon walk), the wall-run pause on stairs, the player elevator, the dash's
+invulnerable frames.
 
 Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly (dagger carriers: the dagger
 train), up to the quadruple butterfly and forbidden step (yoyo half) from 0.85; the better the bot, the

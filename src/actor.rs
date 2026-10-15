@@ -63,11 +63,11 @@ pub const JUMP: f32 = 9.0;
 pub const GRAVITY: f32 = 25.0;
 /// Terminal fall speed (**observed**: vertical speed is clamped at exactly -3000 cm/s).
 pub const FALL: f32 = 30.0;
-/// Dash (tumble) burst: horizontal speed at its start, easing to the run speed over `DASH_BURST`
-/// seconds; the rest of the clip runs at run speed. **Inferred**: the replays sample at 10 Hz and
-/// no state holds a dash, but around a melee dash the position steps reach 12-13 m/s against the
-/// 10 m/s run (`.local/py/gzr_dash2.py`). The old 9 m/s decaying tumble was slower than running.
-const DASH: f32 = 16.0;
+/// Seconds of a dash that draw the speed trail. A dash itself moves at the run speed of the
+/// weapon in hand (**observed** in the replays: a melee dash command `10045` is followed by
+/// 999-1000 cm/s, positions 9.9-10.3 m/s over its first 0.3 s, 29 900 ground and 282 000 air
+/// samples; a gun's 900 cm/s), and in the air it zeroes the vertical speed, then normal gravity
+/// pulls (the first sample after an air dash is `-g * dt` within 0.3 m/s, rising or falling).
 pub const DASH_BURST: f32 = 0.3;
 /// A jump pressed this long before landing jumps on landing.
 const JUMP_BUFFER: f32 = 0.15;
@@ -76,54 +76,46 @@ const JUMP_BUFFER: f32 = 0.15;
 /// 1400 cm/s; 2800 kicks).
 pub const WALL_OUT: f32 = 3.0;
 pub const WALL_UP: f32 = 14.0;
-/// Seconds a wall run lasts (along a side wall / up a wall) before the actor starts falling:
-/// the lengths of `runLW`/`runRW` (60 frames) and `runW` (18 frames).
+/// Seconds a wall run lasts (along a side wall / up a wall) before the actor flips off: the
+/// lengths of `runLW`/`runRW` (60 frames) and `runW` (18 frames) (**observed**: the longest side
+/// runs last 2.0 s and end in the jump-off states; runs up a wall last 0.6 s and rise 3-3.5 m).
 pub const WALL_RUN_SIDE: f32 = 2.0;
 pub const WALL_RUN_UP: f32 = 0.6;
 /// Fraction of gravity felt while running along a wall (**observed**: dv/dt -250 cm/s^2 in the
-/// side wall-run states) / after a wall run ended (**observed**: full gravity, no speed limit
-/// below `FALL`).
+/// side wall-run states, and the rising speed stops at 0: long runs hold -2 cm/s).
 pub const RUN_GRAVITY: f32 = 0.1;
-pub const SLIDE_GRAVITY: f32 = 1.0;
+/// Rising speed a side wall run starts with from the ground or out of a fall (**observed**:
+/// 325-346 cm/s in the first sample of 1 597 runs from the ground and 978 out of a fall); out of
+/// a rise (a kick, a jump still going up) it starts at 0 (636 + 704 runs).
+pub const RUN_START_UP: f32 = 3.4;
+/// Jumping off a side wall run (or its end): the run speed turned this far (radians) away from
+/// the wall, and this takeoff speed up on top of the run's own rising speed (**observed**: 2 533
+/// jump-offs leave at 816 cm/s along and 577 out, 35 degrees, with 1 300 cm/s up, 1 550 early in
+/// a run).
+pub const RUN_JUMP_ANGLE: f32 = 0.615;
+pub const RUN_JUMP_UP: f32 = 13.0;
 /// Vertical push (m/s) from which a `Push` launches the actor (uppercut, rocket and grenade
 /// blasts push with `y >= 6` near the centre). **Inferred.**
 const BLAST_PUSH: f32 = 5.0;
 /// Seconds the actor lies after the `blast_drop` clip ended before `blast_stand`. **Inferred.**
 const LIE: f32 = 0.35;
-/// Air control of a launched actor (fraction of `RUN`) while it falls (`blast_airmove`).
-/// **Inferred.**
-const BLAST_STEER: f32 = 0.5;
 /// An emote or taunt can be cancelled by a jump, dash or step after this many seconds.
 /// **Inferred.**
 const TAUNT_CANCEL: f32 = 0.5;
-/// K-style techniques (bug-born movement tech of the original game, kept as features; the
-/// numbers below are **inferred**, no data file or replay holds them).
-/// Seconds an air slash holds the actor's altitude (gravity cancel), once per jump, and the
-/// highest rising speed (m/s) at which it still does (near the top of a jump or falling).
-const GRAV_HOLD: f32 = 0.25;
-const GRAV_CANCEL_VY: f32 = 4.0;
-/// Seconds of falling after which an air dash is always available again (super dash).
+/// Seconds of falling after which an air dash is always available again (super dash; the guides'
+/// "roughly 1.5 seconds").
 const SUPER_FALL: f32 = 1.5;
-/// Seconds after a slash cancelled a wall state during which a jump kicks off the wall again.
-const FLY_WINDOW: f32 = 0.5;
-/// Wall kicks per time in the air (**port limit**: the slash cancel keeps the actor at the wall
-/// and every kick gives a fresh 14 m/s up, so mashing jump + attack climbed any wall or hung
-/// under a roof without end). Three keep the longest chain in the technique scripts (wall
-/// spring, then two advanced wall cancels).
-const KICKS: u8 = 3;
-/// Climb speed (m/s) of a wall hang with forward + jump held.
-const HANG_CLIMB: f32 = 4.0;
-/// Seconds a hang may climb (2 m), and only one hang per time in the air: hanging, kicking
-/// off and hanging again on the same wall climbed any wall without end.
-const HANG_CLIMB_SECS: f32 = 0.5;
-/// Seconds a hang holds before the actor lets go and falls (**port limit**: holding guard
-/// kept a player on a wall for good).
-const HANG_SECS: f32 = 1.2;
+/// Seconds the guard must be up in the air before the actor clings to the wall it touches
+/// (**observed**: the hang's zero velocity comes 0.40-0.41 s after the first air-guard sample in
+/// 196 of 196 hangs; until then the guard falls).
+const HANG_DELAY: f32 = 0.4;
 /// How far (m) from the capsule's side the wall touched last may be for a guard to still cling to
-/// it: the hang presses into it at 1 m/s, well inside `WALL_LOSE`.
-const HANG_REACH: f32 = 0.1;
-/// Gravity felt during a dash in the air.
-const AIR_TUMBLE_GRAVITY: f32 = 0.25;
+/// it (the hang then presses into it at 1 m/s, well inside `WALL_LOSE`): a jump straight up off a
+/// hang drifts about 0.3 m away before the next hang catches (**observed**: 11 cm in one second).
+const HANG_REACH: f32 = 0.4;
+/// A wall counts as touched for a jump when it is within this distance (m) of the capsule's
+/// side at chest height.
+pub const TOUCH_REACH: f32 = 0.1;
 /// A reload started within this many seconds of a shot is a reload shot.
 const RS_WINDOW: f32 = 0.5;
 /// A shot this soon after a switch cancel is the technique's shot (slash shot, reload shot).
@@ -148,34 +140,38 @@ const CLICK_BUFFER: f32 = 0.12;
 const LAND_AIR: f32 = 0.35;
 /// Seconds without wall contact after which a wall run ends.
 pub const WALL_LOSE: f32 = 0.15;
-/// A wall run needs at least this much air under the feet (a step against a leaning stair
-/// riser also lifts the capsule for a few frames).
+/// A hang needs at least this much air under the feet.
 pub const WALL_MIN_HEIGHT: f32 = 0.5;
-/// A wall run starts only this soon after a jump press, up a wall / along one: the guides start
-/// one with the jump itself ("dash towards wall at angle → jump"), so a wall met later in a flight
-/// is bumped into, not run on. Up a wall the wall must be close (about 2 m at run speed); along
-/// one the contact may come while the jump still rises (the apex is 0.36 s up). **Inferred.**
-pub const RUN_UP_WINDOW: f32 = 0.2;
-pub const RUN_SIDE_WINDOW: f32 = 0.4;
 
-/// Whether touching a wall (outward normal `n`) `since` seconds after a jump press starts a wall
-/// run for an actor facing `face` (forward held): `Some(true)` along it (a side run, facing it at
-/// a glancing angle), `Some(false)` up it (facing it); `None` when the jump was too long ago or
-/// the actor faces away from the wall.
-pub fn wall_run(face: Vec3, n: Vec3, since: f32) -> Option<bool> {
-    let d = face.dot(n);
-    let along = d >= -0.7;
-    let window = if along {
-        RUN_SIDE_WINDOW
+/// What a jump pressed while touching a wall (outward normal `n`) with forward held does for an
+/// actor facing `face`: `Some(false)` run up it (facing it within 25 degrees), `Some(true)` run
+/// along it (meeting it at 15-50 degrees), `None` neither (a plain jump on the ground, a kick in
+/// the air). **Observed** at the replays' wall-run starts on Town and Mansion (wall distance and
+/// normal from the map's collision): up-wall runs face the wall at cos 0.99-1.0 (142 of 151 at
+/// >= 0.9), side runs move and face into it at cos 0.4-0.6 (1 300 of 1 381 within 0.25-0.8).
+pub fn wall_run(face: Vec3, n: Vec3) -> Option<bool> {
+    let into = -face.dot(n);
+    if into >= 0.9 {
+        Some(false)
     } else {
-        RUN_UP_WINDOW
-    };
-    (since < window && d < 0.1).then_some(along)
+        (0.25..=0.8).contains(&into).then_some(true)
+    }
+}
+
+/// A jump straight up off a run up a wall or a hang (forward held) drifts away from the wall at
+/// this speed (**observed**: 25-41 cm/s away, 1 400 cm/s up, 180 jumps).
+pub const WALL_CLIMB_OUT: f32 = 0.35;
+
+/// Velocity of a jump off a side wall run going `along` the wall with outward normal `n` at
+/// `speed`, the run rising at `vy`.
+pub fn run_jump(along: Vec3, n: Vec3, speed: f32, vy: f32) -> Vec3 {
+    (along * RUN_JUMP_ANGLE.cos() + n * RUN_JUMP_ANGLE.sin()) * speed
+        + Vec3::Y * (RUN_JUMP_UP + vy.max(0.0))
 }
 
 /// Seconds within which a second tap of a direction is a tumble.
 const DOUBLE_TAP: f32 = 0.3;
-/// Seconds after touching a wall in the air during which a jump is a wall kick.
+/// Seconds after touching a wall during which a jump counts as against it.
 pub const WALL_GRACE: f32 = 0.15;
 const CAM_DIST: f32 = 3.0;
 /// Radius of the sphere the camera sweeps, so it stays clear of walls.
@@ -406,14 +402,14 @@ enum State {
         n: Vec3,
     },
     /// Running along the wall behind normal `n` (`side` -1 wall on the left, +1 right) or up
-    /// it (`side` 0, facing it). While `left > 0` the running clip plays, then its `_down` one.
+    /// it (`side` 0, facing it) for `left` more seconds; then the actor jumps off it.
     WallRun {
         n: Vec3,
         side: f32,
         left: f32,
     },
-    /// Clinging to the wall behind normal `n` (guard held in the air, any weapon that allows wall
-    /// moves) for as long as the guard is held.
+    /// Clinging to the wall behind normal `n` (guard held in the air for `HANG_DELAY`, any weapon
+    /// that allows wall moves) for as long as the guard is held.
     Hang {
         n: Vec3,
     },
@@ -445,13 +441,10 @@ enum State {
 struct Tech {
     /// The air dash of this jump is spent.
     dashed: bool,
-    /// Seconds of gravity cancel left, and whether this jump used it.
-    hold: f32,
-    hold_spent: bool,
     /// Seconds of continuous falling.
     fall: f32,
-    /// Wall kicks since touching the ground (after the first a wall run is a multi wall run).
-    kicks: u8,
+    /// Kicked off a wall since touching the ground (a further wall run is a multi wall run).
+    kicked: bool,
     /// The running reload began right after a shot.
     rs: bool,
     /// Last shot's time and slot (`usize::MAX` = none).
@@ -464,11 +457,11 @@ struct Tech {
     ik_at: f32,
     /// The next tumble clip starts without its dash sound (a dash right after a slash).
     silent: bool,
-    /// Dash held last frame; when jump was last pressed (a jump buffered before landing) and
-    /// when a jump last left the ground or was pressed in the air (a wall run follows only that).
+    /// Dash held last frame; when jump was last pressed (a jump buffered before landing); when
+    /// the guard went up (`f32::MAX` while it is down).
     prev_dash: bool,
     jump_at: f32,
-    leap: f32,
+    guard_at: f32,
     /// The capsule is the small phantom one (tumble, lunge).
     small: bool,
     /// Extended lunge: the velocity the lunge slides at until its hit frame.
@@ -479,10 +472,8 @@ impl Default for Tech {
     fn default() -> Self {
         Self {
             dashed: false,
-            hold: 0.0,
-            hold_spent: false,
             fall: 0.0,
-            kicks: 0,
+            kicked: false,
             rs: false,
             shot_at: f32::MIN,
             last_shot: usize::MAX,
@@ -492,7 +483,7 @@ impl Default for Tech {
             silent: false,
             prev_dash: false,
             jump_at: f32::MIN,
-            leap: f32::MIN,
+            guard_at: f32::MAX,
             small: false,
             slide: None,
         }
@@ -549,13 +540,6 @@ pub struct Actor {
     /// Smoothed aim pitch put on the spine.
     pitch: f32,
     die: &'static str,
-    /// Already wall-ran since last touching the ground.
-    wall_spent: bool,
-    /// Already hung on a wall since last touching the ground, and seconds that hang climbed.
-    hang_spent: bool,
-    hang_up: f32,
-    /// When the current hang started.
-    hang_at: f32,
     /// Next hit reaction clip (alternates `damage` / `damage2`).
     hurt: bool,
     /// Seconds spent in the air (landing sound).
@@ -760,10 +744,6 @@ impl ActorSpawner<'_, '_> {
                     twist: 0.0,
                     pitch: 0.0,
                     die: "die",
-                    wall_spent: false,
-                    hang_spent: false,
-                    hang_up: 0.0,
-                    hang_at: 0.0,
                     hurt: false,
                     air: 0.0,
                     tech: Tech::default(),
@@ -1422,6 +1402,31 @@ pub fn climb(t: f32) -> f32 {
     v0 + (v1 - v0) * ((t - t0) / (t1 - t0)).clamp(0.0, 1.0)
 }
 
+/// Starts a wall run along (`along`) or up the wall behind normal `n`.
+fn start_run(a: &mut Actor, n: Vec3, along: bool, right: Vec3) {
+    let side = if !along {
+        0.0
+    } else if right.dot(n) > 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    a.state = State::WallRun {
+        n,
+        side,
+        left: if along { WALL_RUN_SIDE } else { WALL_RUN_UP },
+    };
+    a.restart = true;
+    a.grounded = false;
+    a.vel.y = if !along {
+        climb(0.0)
+    } else if a.vel.y > 0.0 {
+        0.0
+    } else {
+        RUN_START_UP
+    };
+}
+
 fn begin_reload(
     a: &mut Actor,
     e: Entity,
@@ -1739,7 +1744,12 @@ fn drive(
         let jump_edge = intent.jump && !a.prev_jump;
         a.prev_jump = intent.jump;
         if jump_edge {
-            (a.tech.jump_at, a.tech.leap) = (now, now);
+            a.tech.jump_at = now;
+        }
+        if !intent.guard {
+            a.tech.guard_at = f32::MAX;
+        } else if a.tech.guard_at == f32::MAX {
+            a.tech.guard_at = now;
         }
         let emote = if intent.taunt {
             Some("taunt")
@@ -1768,7 +1778,7 @@ fn drive(
                     State::Tumble { .. } => Some(Vec3::new(a.vel.x, 0.0, a.vel.z)),
                     _ => a
                         .dash_wanted(now, &intent)
-                        .map(|d| [fwd, -fwd, -right, right][d] * DASH),
+                        .map(|d| [fwd, -fwd, -right, right][d] * RUN * g.speed),
                 };
                 if let Some(v) = a.tech.slide {
                     debug!(
@@ -1779,33 +1789,21 @@ fn drive(
                 }
             }
             if blow_clip(r.clip) {
+                // a slash resets the air state: the air dash is there again (the guides: slashing
+                // "reset counters like the one checking the cooldown time between dashes")
+                a.tech.dashed = false;
                 match a.state {
                     State::Tumble { .. } => {
-                        a.tech.dashed = false;
-                        // the slash ends the burst: the body goes on at run speed at most
-                        let h = Vec3::new(a.vel.x, 0.0, a.vel.z).clamp_length_max(RUN * g.speed);
-                        (a.vel.x, a.vel.z) = (h.x, h.z);
                         debug!(
                             "t={now:.2} tech: dash cancel {who} (slash out of a dash, dash again)"
                         );
                     }
-                    State::Wall { n, .. } | State::WallRun { n, .. } | State::Hang { n } => {
-                        // stay at the wall: a jump kicks off it again (flying / wall climbing)
-                        a.wall = Some((n, now + FLY_WINDOW - WALL_GRACE));
-                        a.vel.x = -n.x * 0.5;
-                        a.vel.z = -n.z * 0.5;
+                    // the body keeps its momentum: off a kick it flies on, off a wall run or hang
+                    // it drops ("slash to drop off the wall"); only a dash brings it back
+                    State::Wall { .. } | State::WallRun { .. } | State::Hang { .. } => {
                         debug!("t={now:.2} tech: wall slash cancel {who}");
                     }
                     _ => {}
-                }
-                // (an air slash, not the air massive's throw)
-                if !a.grounded
-                    && !a.tech.hold_spent
-                    && a.vel.y <= GRAV_CANCEL_VY
-                    && r.clip != "jump_slash1"
-                {
-                    (a.tech.hold, a.tech.hold_spent, a.vel.y) = (GRAV_HOLD, true, 0.0);
-                    debug!("t={now:.2} tech: gravity cancel {who} (air slash holds altitude)");
                 }
             }
             a.state = State::Action {
@@ -1870,19 +1868,19 @@ fn drive(
             State::WallRun { left, .. } => {
                 *left -= dt;
                 let lost = now - a.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
-                if a.grounded || lost || (*left > 0.0 && walk.y < 0.2) {
+                // (a run whose jump off cannot happen, the wall gone below the chest, just ends)
+                if a.grounded || lost || walk.y < 0.2 || *left < -0.05 {
                     a.state = State::Free;
+                } else if *left <= 0.0 {
+                    // run out: the actor jumps off the wall by itself ("you will run a certain
+                    // amount of time before flipping off of it")
+                    a.tech.jump_at = now;
                 }
             }
             State::Hang { .. } => {
                 let lost = now - a.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
-                let tired = now - a.hang_at > HANG_SECS;
-                if a.grounded || lost || !intent.guard || tired {
-                    debug!(
-                        "t={now:.2} hang end {who} y={:.2}{}",
-                        tf.translation.y,
-                        if tired { " (time up)" } else { "" }
-                    );
+                if a.grounded || lost || !intent.guard {
+                    debug!("t={now:.2} hang end {who} y={:.2}", tf.translation.y);
                     a.state = State::Free;
                 }
             }
@@ -1973,10 +1971,9 @@ fn drive(
             want = Some(dash_dir(walk));
         }
         a.tech.prev_dash = intent.dash;
-        // one air dash per jump (a slash out of a dash gives it back); super dash: always after
-        // falling for a while
+        // one air dash per jump (a slash gives it back); super dash: always after falling for a
+        // while
         let air_ok = a.grounded || !a.tech.dashed || a.tech.fall >= SUPER_FALL;
-        let mut new_dash = false;
         if let Some(d) = want
             && alive
             && air_ok
@@ -1999,7 +1996,7 @@ fn drive(
                     }
                 );
                 a.tech.dashed = true;
-                a.vel.y = a.vel.y.max(0.0);
+                a.vel.y = 0.0;
             }
             if !g.dagger
                 && matches!(
@@ -2033,18 +2030,38 @@ fn drive(
                 left: secs,
                 total: secs,
             };
-            new_dash = true;
             a.restart = true;
         }
 
-        // Jump and wall kick. A jump cancels a ground dash (K-style: its cooldown).
+        // A jump pressed against a wall (touched within `WALL_GRACE`, there at chest height unless
+        // the actor already runs on it or hangs) with forward held runs up or along it when the
+        // angle fits (`wall_run`; a side run needs at least half the run speed along the wall), on
+        // the ground and in the air.
+        let on_wall = matches!(a.state, State::WallRun { .. } | State::Hang { .. });
+        let touch = a
+            .wall
+            .filter(|&(n, t)| {
+                g.wall
+                    && now - t < WALL_GRACE
+                    && (on_wall
+                        || col
+                            .raycast(tf.translation + Vec3::Y * 1.2, -n, RADIUS + TOUCH_REACH)
+                            .is_some())
+            })
+            .map(|w| w.0);
+        let hspeed = Vec3::new(a.vel.x, 0.0, a.vel.z).length();
+        let run = touch
+            .filter(|_| walk.y > 0.5)
+            .and_then(|n| wall_run(fwd, n).map(|along| (n, along)))
+            .filter(|&(_, along)| !along || hspeed >= 0.5 * RUN * g.speed);
+
+        // Jump. A jump cancels a ground dash (K-style: its cooldown).
         if alive
             && now - a.tech.jump_at < JUMP_BUFFER
             && (cancelable || matches!(a.state, State::Reload { .. } | State::Tumble { .. }))
             && a.grounded
         {
-            (a.tech.jump_at, a.tech.leap) = (f32::MIN, now);
-            a.vel.y = JUMP;
+            a.tech.jump_at = f32::MIN;
             a.grounded = false;
             if matches!(a.state, State::Tumble { .. }) {
                 debug!("t={now:.2} tech: jump cancel {who} (dash cooldown cancelled)");
@@ -2059,105 +2076,156 @@ fn drive(
                     if g.dagger { "stab" } else { "slash" }
                 );
             }
-            if matches!(a.state, State::Action { .. } | State::Tumble { .. }) {
-                a.state = State::Free;
+            if let Some((n, along)) = run {
+                start_run(a, n, along, right);
+                sound.write(ActorSound {
+                    actor: e,
+                    cue: Cue::Anim("hangonwall".into()),
+                });
+            } else {
+                a.vel.y = JUMP;
+                if matches!(a.state, State::Action { .. } | State::Tumble { .. }) {
+                    a.state = State::Free;
+                }
             }
         } else if alive
-            // buffered like the ground jump, so a press a moment early still kicks
+            // buffered like the ground jump, so a press a moment early still counts
             && now - a.tech.jump_at < JUMP_BUFFER
             && (cancelable
                 || matches!(
                     a.state,
-                    State::WallRun { .. } | State::Tumble { .. } | State::Wall { .. }
+                    State::WallRun { .. }
+                        | State::Tumble { .. }
+                        | State::Wall { .. }
+                        | State::Hang { .. }
                 )
-                // an air slash is left for a kick at once (wall cancel / flying: "once you begin
-                // the slash, press jump"); the air massive stays locked
+                // an air slash is left for a jump at once (wall cancel: "once you begin the
+                // slash, press jump"); the air massive stays locked
                 || matches!(
                     a.state,
                     State::Action {
                         clip: "attack_Jump" | "attackS",
                         ..
                     }
-                )
-                // a hang with forward held climbs instead
-                || matches!(a.state, State::Hang { .. }) && walk.y <= 0.5)
+                ))
             && !a.grounded
-            && let Some((n, t)) = a.wall
-            && g.wall
-            && now - t < WALL_GRACE
-            && a.tech.kicks < KICKS
-            // out of a kick only off another wall (multi wall run: jump twice)
+            && let Some(n) = touch
+            // out of a kick only off another wall (multi wall jump)
             && !matches!(a.state, State::Wall { n: from, .. } if from.dot(n) > 0.5)
         {
-            let facing = fwd.dot(n);
-            let anim = if facing < -0.6 {
-                "jumpwallF"
-            } else if facing > 0.6 {
-                "jumpwallB"
-            } else if right.dot(n) > 0.0 {
-                "jumpwallL"
-            } else {
-                "jumpwallR"
-            };
-            let secs = data.clip(woman, g.motion, anim).map_or(0.6, |c| c.secs);
-            if matches!(a.state, State::Action { .. }) {
-                debug!(
-                    "t={now:.2} tech: wall flying {who} (jump off the wall after a slash cancel)"
-                );
-            } else if matches!(a.state, State::Wall { .. }) {
-                debug!("t={now:.2} tech: multi wall jump {who} (a kick off a second wall)");
-            } else if matches!(a.state, State::WallRun { .. }) {
-                debug!("t={now:.2} tech: wall spring {who} (a jump out of the wall run)");
-            } else if matches!(a.state, State::Tumble { .. }) {
-                debug!("t={now:.2} tech: wall cancel {who} (a dash back to the wall, kick again)");
-            } else if now - a.tech.ss_at < TECH_SHOT {
-                debug!("t={now:.2} tech: flash climb {who} (wall jump after a switch cancel)");
-            }
-            debug!(
-                "t={now:.2} wall kick {}/{KICKS} {who} y={:.2}",
-                a.tech.kicks + 1,
-                tf.translation.y
-            );
-            a.state = State::Wall {
-                anim,
-                left: secs,
-                n,
-            };
-            a.restart = true;
-            a.vel = n * WALL_OUT + Vec3::Y * WALL_UP;
-            a.wall = None;
             a.tech.jump_at = f32::MIN;
-            // every kick is a fresh jump: another wall run, air dash and gravity cancel
-            a.wall_spent = false;
-            (a.tech.dashed, a.tech.hold_spent) = (false, false);
-            a.tech.kicks += 1;
-            // a puff of dust off the wall where the feet pushed (the ring's plane on the wall)
-            vfx.write(Vfx::Elu {
-                name: "ef_dust_1m",
-                at: Transform::from_translation(tf.translation - n * RADIUS + Vec3::Y * 0.6)
-                    .with_rotation(Quat::from_rotation_arc(Vec3::Y, n)),
-            });
+            if let Some((n, true)) = run
+                && !matches!(a.state, State::WallRun { .. } | State::Hang { .. })
+            {
+                // aerial wall run: a jump against a wall met at a run's angle runs along it
+                if a.tech.kicked {
+                    debug!("t={now:.2} tech: multi wall run {who}");
+                }
+                start_run(a, n, true, right);
+            } else {
+                let facing = fwd.dot(n);
+                let anim = if facing < -0.6 {
+                    "jumpwallF"
+                } else if facing > 0.6 {
+                    "jumpwallB"
+                } else if right.dot(n) > 0.0 {
+                    "jumpwallL"
+                } else {
+                    "jumpwallR"
+                };
+                let secs = data.clip(woman, g.motion, anim).map_or(0.6, |c| c.secs);
+                let hv = Vec3::new(a.vel.x, 0.0, a.vel.z);
+                a.vel = match a.state {
+                    // off a side run: at run speed, turned `RUN_JUMP_ANGLE` away from the wall
+                    State::WallRun { side, .. } if side != 0.0 => {
+                        debug!("t={now:.2} tech: wall spring {who} (a jump out of the wall run)");
+                        let along = (hv - n * hv.dot(n)).normalize_or_zero();
+                        run_jump(along, n, RUN * g.speed, a.vel.y)
+                    }
+                    // off a run up the wall or a hang: straight up with forward held (climbing
+                    // on), else flipping back off it (**observed**: both leave at 1 400 cm/s up,
+                    // 0.3 m/s / 3 m/s out)
+                    State::WallRun { .. } | State::Hang { .. } => {
+                        debug!(
+                            "t={now:.2} tech: {} {who}",
+                            if walk.y > 0.5 {
+                                "wall climb (a jump up the wall)"
+                            } else {
+                                "wall flip (a jump back off the wall)"
+                            }
+                        );
+                        if a.tech.guard_at != f32::MAX {
+                            // the next hang waits for the guard again
+                            a.tech.guard_at = now;
+                        }
+                        if walk.y > 0.5 {
+                            n * WALL_CLIMB_OUT + Vec3::Y * WALL_UP
+                        } else {
+                            n * WALL_OUT + Vec3::Y * WALL_UP
+                        }
+                    }
+                    // a kick keeps the speed along the wall (**observed**: the horizontal speed
+                    // after a kick is the one along the wall before it plus 3 m/s out)
+                    _ => {
+                        if matches!(a.state, State::Action { .. }) {
+                            debug!(
+                                "t={now:.2} tech: wall flying {who} (jump off the wall after a slash cancel)"
+                            );
+                        } else if matches!(a.state, State::Wall { .. }) {
+                            debug!(
+                                "t={now:.2} tech: multi wall jump {who} (a kick off a second wall)"
+                            );
+                        } else if matches!(a.state, State::Tumble { .. }) {
+                            debug!(
+                                "t={now:.2} tech: wall cancel {who} (a dash back to the wall, kick again)"
+                            );
+                        } else if now - a.tech.ss_at < TECH_SHOT {
+                            debug!(
+                                "t={now:.2} tech: flash climb {who} (wall jump after a switch cancel)"
+                            );
+                        }
+                        hv - n * hv.dot(n) + n * WALL_OUT + Vec3::Y * WALL_UP
+                    }
+                };
+                debug!("t={now:.2} wall kick {who} y={:.2}", tf.translation.y);
+                a.state = State::Wall {
+                    anim,
+                    left: secs,
+                    n,
+                };
+                a.restart = true;
+                a.wall = None;
+                a.tech.kicked = true;
+                // a puff of dust off the wall where the feet pushed (the ring's plane on the wall)
+                vfx.write(Vfx::Elu {
+                    name: "ef_dust_1m",
+                    at: Transform::from_translation(tf.translation - n * RADIUS + Vec3::Y * 0.6)
+                        .with_rotation(Quat::from_rotation_arc(Vec3::Y, n)),
+                });
+            }
             sound.write(ActorSound {
                 actor: e,
                 cue: Cue::Anim("hangonwall".into()),
             });
         }
 
-        // Wall hang: guard held in the air against a wall, with any weapon that allows wall moves
-        // (also ends a wall run or the flight of a kick). Forward + jump held while hanging climbs;
-        // jump alone kicks off.
+        // Wall hang: the guard up for `HANG_DELAY` in the air against a wall, with any weapon
+        // that allows wall moves (also out of a wall run or the flight of a kick). Jump off it.
         if alive
             && g.wall
-            && intent.guard
+            && now - a.tech.guard_at >= HANG_DELAY
             && !a.grounded
-            && !a.hang_spent
             && (cancelable
                 || matches!(
                     a.state,
                     State::Wall { .. } | State::WallRun { .. } | State::Tumble { .. }
                 ))
-            && let Some((n, t)) = a.wall
-            // touched within 0.1 s, or still right there (forward released since)
+            // the wall touched last, or the one a jump left (a jump up off a hang drifts away)
+            && let Some((n, t)) = a.wall.or(match a.state {
+                State::Wall { n, .. } => Some((n, f32::MIN)),
+                _ => None,
+            })
+            // touched within 0.1 s, or still near (forward released since, or drifted off)
             && (now - t < 0.1
                 || col
                     .raycast(tf.translation + Vec3::Y * 0.9, -n, RADIUS + HANG_REACH)
@@ -2180,63 +2248,9 @@ fn drive(
                 tf.translation.y
             );
             a.state = State::Hang { n };
-            (a.hang_spent, a.hang_up, a.hang_at) = (true, 0.0, now);
             a.wall = Some((n, now));
             a.vel = Vec3::ZERO;
             a.restart = true;
-        }
-
-        // Wall run: in the air right after a jump press, forward held, touching a wall (once per
-        // jump).
-        if alive
-            && (cancelable || matches!(a.state, State::Tumble { .. }))
-            && !a.grounded
-            && !a.wall_spent
-            && g.wall
-            && walk.y > 0.5
-            && !jump_edge
-            && !new_dash
-            && let Some((n, t)) = a.wall
-            && now - t < 0.1
-            && let Some(along) = wall_run(fwd, n, now - a.tech.leap)
-            && col
-                .raycast(
-                    tf.translation + Vec3::Y * 0.05,
-                    Vec3::NEG_Y,
-                    WALL_MIN_HEIGHT,
-                )
-                .is_none()
-        {
-            let side = if !along {
-                0.0
-            } else if right.dot(n) > 0.0 {
-                -1.0
-            } else {
-                1.0
-            };
-            a.state = State::WallRun {
-                n,
-                side,
-                left: if side == 0.0 {
-                    WALL_RUN_UP
-                } else {
-                    WALL_RUN_SIDE
-                },
-            };
-            if a.tech.kicks > 0 {
-                debug!("t={now:.2} tech: multi wall run {who}");
-            }
-            a.wall_spent = true;
-            a.restart = true;
-            a.vel.y = if side == 0.0 {
-                a.vel.y.max(climb(0.0))
-            } else {
-                a.vel.y.min(2.0)
-            };
-            sound.write(ActorSound {
-                actor: e,
-                cue: Cue::Anim("hangonwall".into()),
-            });
         }
 
         // Taunt and emotes: the weapon's clip of that name, standing.
@@ -2387,40 +2401,24 @@ fn drive(
         let wish = (right * walk.x + fwd * walk.y) * speed;
         let mut hv = Vec3::new(a.vel.x, 0.0, a.vel.z);
         match a.state {
-            State::Tumble {
-                dir, left, total, ..
-            } => {
-                let run = RUN * g.speed;
-                hv = dir * (run + (DASH - run) * (1.0 - (total - left) / DASH_BURST).max(0.0));
-            }
+            State::Tumble { dir, .. } => hv = dir * RUN * g.speed,
             State::Wall { .. } => {}
-            State::WallRun { n, side, left } => {
+            State::WallRun { n, side, .. } => {
                 let along = (fwd - n * fwd.dot(n)).normalize_or_zero();
-                let speed = if left > 0.0 { RUN } else { RUN * 0.5 };
-                hv = if side == 0.0 {
-                    Vec3::ZERO
-                } else {
-                    along * speed
-                } - n * 1.5;
+                hv = if side == 0.0 { Vec3::ZERO } else { along * RUN } - n * 1.5;
             }
             State::Hang { n } => hv = -n,
             State::Dead => hv = approach(hv, Vec3::ZERO, 20.0 * dt),
-            State::Blast {
-                stage: Blasted::Fall,
-                ..
-            } if walk != Vec2::ZERO => {
-                let steer = (right * walk.x + fwd * walk.y) * RUN * BLAST_STEER;
-                hv = approach(hv, steer, 8.0 * dt);
-            }
             State::Blast {
                 stage: Blasted::Drop | Blasted::Stand,
                 ..
             } => hv = approach(hv, Vec3::ZERO, 18.0 * dt),
             State::Blast { .. } => {}
             // instant start and stop on the ground (**observed**: the first replay sample after
-            // idle is already at run speed, the first after running is 0)
+            // idle is already at run speed, the first after running is 0); no air control
+            // (**observed**: 95 % of 68 000 falling sample pairs keep their horizontal velocity
+            // exactly, standing jumps stay at 0)
             _ if a.grounded => hv = wish,
-            _ if wish != Vec3::ZERO => hv = approach(hv, wish, 10.0 * dt),
             _ => {}
         }
         // extended lunge: the lunge goes on at the dash's velocity until its hit frame
@@ -2451,25 +2449,19 @@ fn drive(
             }
             commands.entity(e).remove::<Push>();
         }
-        a.tech.hold = (a.tech.hold - dt).max(0.0);
         let (gravity, fall) = match a.state {
-            State::WallRun { side, left, .. } if left > 0.0 && side == 0.0 => {
+            State::WallRun { side, left, .. } if side == 0.0 => {
                 a.vel.y = climb(WALL_RUN_UP - left);
                 (0.0, FALL)
             }
-            State::WallRun { side, left, .. } if left > 0.0 && side != 0.0 => (RUN_GRAVITY, FALL),
-            State::WallRun { .. } => (SLIDE_GRAVITY, FALL),
-            State::Hang { .. } => {
-                a.vel.y = if walk.y > 0.5 && intent.jump && a.hang_up < HANG_CLIMB_SECS {
-                    a.hang_up += dt;
-                    HANG_CLIMB
-                } else {
-                    0.0
-                };
+            State::WallRun { .. } => {
+                a.vel.y = (a.vel.y - GRAVITY * RUN_GRAVITY * dt).max(0.0);
                 (0.0, FALL)
             }
-            State::Tumble { .. } if !a.grounded => (AIR_TUMBLE_GRAVITY, FALL),
-            _ if a.tech.hold > 0.0 => (0.0, FALL),
+            State::Hang { .. } => {
+                a.vel.y = 0.0;
+                (0.0, FALL)
+            }
             _ => (1.0, FALL),
         };
         a.vel.y = (a.vel.y - GRAVITY * gravity * dt).max(-fall);
@@ -2503,9 +2495,8 @@ fn drive(
         if let Some(n) = mv.wall {
             let n = Vec3::new(n.x, 0.0, n.z).normalize_or_zero();
             hv -= n * hv.dot(n).min(0.0);
-            if !mv.grounded {
-                a.wall = Some((n, now));
-            }
+            // on the ground too: a jump against a wall runs on it
+            a.wall = Some((n, now));
         }
         let impact = -a.vel.y;
         a.vel = Vec3::new(hv.x, a.vel.y, hv.z);
@@ -2547,9 +2538,7 @@ fn drive(
                 }
             }
             a.air = 0.0;
-            a.wall_spent = false;
-            a.hang_spent = false;
-            (a.tech.dashed, a.tech.hold_spent, a.tech.kicks, a.tech.fall) = (false, false, 0, 0.0);
+            (a.tech.dashed, a.tech.kicked, a.tech.fall) = (false, false, 0.0);
         } else {
             a.air += dt;
             let fall = if a.vel.y < 0.0 { a.tech.fall + dt } else { 0.0 };
@@ -2617,9 +2606,6 @@ fn drive(
                 _ if fwd.dot(n) > 0.3 => "runW_downB",
                 _ => "runW_downF",
             },
-            State::Hang { .. } if walk.y > 0.5 && intent.jump && a.hang_up < HANG_CLIMB_SECS => {
-                "runW"
-            }
             State::Hang { .. } => "runW_downF",
             _ if !a.grounded => {
                 if a.vel.y > 0.0 {

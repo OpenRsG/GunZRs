@@ -1602,12 +1602,14 @@ No new file format; how the retail character animations are used (**observed** =
 - ELU characters face +Z; actors face -Z at yaw 0, so the model child is turned by half a turn.
 - Constants (**observed** in public replays, "Replays" below; `npc2.xml` NPC `speed` is 400..840
   cm/s): run 10 m/s with a melee weapon and 9 m/s with a gun in every direction (no slower
-  backwards run), jump 9 m/s up, gravity 25 m/s^2, terminal speed 30 m/s, wall kick 3 m/s away
-  plus 14 m/s up (jump within 0.15 s of touching a wall in the air, **inferred** window);
-  dash 16 m/s easing to the run speed over 0.3 s (double-tap of a direction within 0.3 s or the Dash
-  action, **inferred**: no replay state identified, see "K-style and D-style techniques"), instant start and stop
-  on the ground (**observed**),
-  capsule radius 0.35 m / height 1.75 m (**inferred**).
+  backwards run), jump 9 m/s up, gravity 25 m/s^2, terminal speed 30 m/s, instant start and stop
+  on the ground, no air control (the horizontal velocity of a jump, fall or kick holds until a
+  dash, kick or landing sets another); wall kick: the speed along the wall is kept, plus 3 m/s
+  out and 14 m/s up (a jump pressed within `WALL_GRACE` 0.15 s of touching a wall that is there
+  at chest height, **inferred** window); dash: the run speed of the weapon in hand in the dash's
+  direction for the length of the tumble clip, and in the air it zeroes the vertical speed, then
+  normal gravity pulls (a double-tap of a direction within 0.3 s or the Dash action); capsule
+  radius 0.35 m / height 1.75 m (**inferred**).
 - Steps (**observed** with a probe over Dungeon, Castle, Catacomb, Mansion, Prison: scan col
   geometry for risers, walk 1 m into each at 60/144/240 fps with the controller's then 60 m/s^2
   acceleration): retail risers are mostly 0.29-0.31 m (Mansion, Catacomb), 0.40-0.45 m
@@ -1619,24 +1621,25 @@ No new file format; how the retail character animations are used (**observed** =
   step probes at least 0.1 m ahead, and an edge contact stands when the triangle is a floor and
   `normal.y` >= 0.3. Result: Catacomb 46/52, Mansion 0.30 m 304/332, Castle 0.40-0.45 m
   ~120/125, frame-rate independent; 0.9 m+ ledges stay blocked.
-- Wall run (**inferred** from the clip names `runLW/RW/W` + `_down`, `runW_downF/B`): in the air
-  with forward held, touching a wall and at least 0.5 m above the floor, once per jump, and only
-  within `RUN_UP_WINDOW` 0.2 s (up a wall) / `RUN_SIDE_WINDOW` 0.4 s (along one, the rising part of a jump) of a jump press (the takeoff, or a press in the air; `actor::wall_run`,
-  shared with the nav simulations): the guides start a wall run with the jump itself ("dash
-  towards wall at angle → jump"), and a wall met later in a flight is bumped into, not run on (a
-  player report: jumping next to a wall ran on it; a forward jump 2.6 m from a Mansion wall now bumps
-  it instead of running up it). Facing the wall (`fwd·n < -0.7`) runs up it,
-  a glancing angle (`< 0.1`) along it, facing away does not run (was `< 0.3` at any time). Side
-  wall: runs 2 s at `RUN` along it with 10 % gravity (**observed** in replays: dv/dt -250 cm/s^2,
-  a run lasts 0.4-2.1 s), then `*_down` with full gravity and no 6 m/s limit (**observed**: dv/dt
-  -2500 cm/s^2 down to -12 m/s in 556 samples; was 45 % / 6 m/s, inferred); facing the wall:
-  climbs by the `runW` foot profile (3.3 m over 0.6 s, **inferred** from the clip; replays show a
-  17 m/s launch with full gravity, +5.7 m in 0.68 s, **not applied**), then
-  `runW_downF` (`runW_downB` when turned away). A head against a ceiling (rising, blocked to less
-  than half the step, a ray from the capsule top finds a surface within 0.1 m) ends the climb at
-  once; before, the profile kept pushing for the rest of its 0.6 s, the capsule pinned to the
-  ceiling for up to 9 frames while `runW` kept playing (**port rule**, **inferred**; the replays
-  do not say what the original does there). Jump during a wall run = wall kick.
+- Wall run (clip names `runLW/RW/W` + `_down`, `runW_downF/B`; the rules **observed** in the
+  replays, "Wall moves" below): a jump pressed while touching a wall (contact within
+  `WALL_GRACE` 0.15 s, the wall at chest height within `TOUCH_REACH` 0.1 m) with forward held
+  runs on it, on the ground and in the air (`actor::wall_run`, shared with the nav simulations):
+  facing it within 25 degrees (`-fwd·n >= 0.9`) runs up it (on the ground; in the air that press
+  is a kick), meeting it at 15-50 degrees (0.25-0.8) with at least half the run speed along it runs
+  along it. A jump near a wall that does not touch it, or a touch without a jump press, does
+  nothing (a player report: jumping next to a wall ran on it). Side wall: `RUN` along it (steered
+  by the facing), starting at `RUN_START_UP` 3.4 m/s up from the ground or a fall and at 0 out of
+  a rise, 10 % gravity, the rising speed stops at 0; after `WALL_RUN_SIDE` 2 s, or on a jump
+  press, the actor jumps off it: the run speed turned `RUN_JUMP_ANGLE` 35 degrees away from the
+  wall and `RUN_JUMP_UP` 13 m/s up on top of the run's rising speed (`actor::run_jump`). Up a
+  wall: the `runW` foot profile (3.3 m over 0.6 s), then the jump off it (also on a press):
+  straight up at 14 m/s drifting `WALL_CLIMB_OUT` 0.35 m/s away with forward held, a flip back (3
+  m/s out, 14 m/s up) without. A run whose wall is gone below the chest when it ends just ends.
+  A head against a ceiling (rising, blocked to less than half the step, a ray from the capsule top
+  finds a surface within 0.1 m) ends the climb at once; before, the profile kept pushing for the
+  rest of its 0.6 s, the capsule pinned to the ceiling for up to 9 frames while `runW` kept playing
+  (**port rule**, **inferred**; the replays do not say what the original does there).
 - Guard (**observed** clips `guard_start`, `guard_idle`, `guard_block1/2`, `guard_cancel`;
   melee motion types with them only): left Shift (retail DEFENCE 42) / script key `guard` on the ground. The actor
   carries `Guarding` while raised and is rooted for as long as any guard clip plays on the ground
@@ -1781,17 +1784,26 @@ is **inferred**, not proven.
   the player table), `u32 n`, then `n` bytes = one command: `u16 n` (same value), `u16 id`, `u8 serial`,
   parameter blob.
   The chain of records ends exactly at the end of the inflated data in every decoded file.
-- Command ids seen (counts in a 118 KB duel): 10012 (1 735; per-player state, below), 10014, 10022 (4-byte
-  int 7..11 = the slot being drawn), 10033/10034 (gun shot), 10035 (special shot: grenade, rocket),
-  10036/10037 (melee slash), 10045, 1226 (chat), 402, 1101, ...
+- Command ids seen (counts in a 118 KB duel): 10012 (1 735; per-player state, below), 10014 (two floats, the
+  sender's health and armour), 10022 (4-byte int 7..11 = the slot being drawn), 10033/10034 (gun shot), 10035
+  (special shot: grenade, rocket), 10036 (special melee: `u32` type 1 = uppercut, 2 = massive), 10037 (melee
+  slash), 10045 (a dash with a melee weapon in hand: `u32 13`, `i16 pos[3]`, `i16 dir[3]`, `u8 7`; 113 838 in
+  all files; a gun's dash sends none), 1226 (chat), 402, 1101, ...
 - **Command 10012 (state, about 10 per second per player)**, parameter blob `u32 25` + 25 bytes:
   `f32 time`, `i16 pos[3]` (cm, map units: x, y, z-up), `i16 vel[3]` (cm/s), `i16 dir[3]` (aim direction
   x 32000: `|dir|` = 31 992), `u8 upper`, `u8 lower` (1 idle, 5/6 walk 450 cm/s, 22 forward, 23 backward,
-  24/25 strafe, 9 rising, 10 falling, 15/20 side wall run, 16/21 wall run exit, 27-30 wall kick F/B/L/R,
-  40 other air, 48 up-wall run, 52 fall after it), `u8 slot` (7 = melee, 8/9 = range, 10/11 = custom;
-  matches the commands sent: 10036/10037 only from 7, 10034 only from 8/9, grenades from 10/11).
+  24/25 strafe, 9 rising, 10 falling, 15/20 side wall run, 16/21 jump off it, 17 run up a wall (its
+  position rises while `vel` reads 0), 18/19 jump up off it / flip back off it, 26 guard in the air (a
+  hang once stopped at a wall), 27-30 wall kick F/B/L/R, 40 other air, 48 launched by an uppercut (the
+  victim of a 10036 type 1, 128 of 129 starts 0.19-0.27 s after one), 52 falling after it, 57 knocked
+  back by a massive (a 10036 type 2)), `u8 slot` (7 = melee, 8/9 = range, 10/11 = custom; matches the
+  commands sent: 10036/10037 only from 7, 10034 only from 8/9, grenades from 10/11).
   **Observed** consistency: `pos[n+1] - pos[n] = vel * dt` to the centimetre while the state is
   unchanged (e.g. `vel` -985 cm/s: -98 cm per 0.100 s), `vz` falls exactly by `g * dt` in free fall.
+- The stage name is the NUL-padded string at 0x10 of the inflated data (Town 35, Mansion 7, Garden 5, Hall
+  4, Port 3, Dungeon, Castle, Prison II 2 each, Battle Arena 1); for wall geometry the Town and Mansion
+  samples were probed against the Steam maps' collision (`.local/geo`: 72 horizontal rays from 1 m
+  above the feet, replay cm to Bevy metres; a grounded sample has floor 0.00-0.04 m below it).
 - Not decoded: the player table fields, items, the other commands' parameters.
 
 ### Measured (all 59 files, 10 Hz samples; script `.local/py/gzr_*.py`)
@@ -1808,15 +1820,27 @@ is **inferred**, not proven.
 | wall kick | 4.5 out + 6.5 up | 3.0 out + 14.0 up | states 27-30: takeoff solved from two samples 1400-1402 cm/s (2 793 kicks); horizontal speed after the kick 296-312 cm/s |
 | side wall run gravity | x0.12 | x0.10 | states 15/20: dvz/dt -245..-252 cm/s^2 in 50-75 % of the 20 482 pairs and 0 in the rest (long runs hold `vz` at -2 cm/s) |
 | after a wall run | x0.45, <= 6 m/s | x1.0, <= 30 m/s | state 52 (556 pairs): dvz/dt -2500, `vz` down to -12 m/s |
-| ground start / stop | 60 m/s^2 | instant | idle (1) to a run state (22-25): the first sample is already at run speed (1000 melee / 900 gun) in 331 of 351 changes, 0 in the rest; run to idle: 0 in all 222 (`.local/py/gzr_accel.py`). The nav `Pawn` follows (`FORMAT` 2 nav files) |
+| ground start / stop | 60 m/s^2 | instant | idle (1) to a run state (22-25): the first sample is already at run speed (1000 melee / 900 gun) in 331 of 351 changes, 0 in the rest; run to idle: 0 in all 222 (`.local/py/gzr_accel.py`). The nav `Pawn` follows |
+| air control | 10 m/s^2 | none | the horizontal velocity of 95 % of the 68 117 falling pairs (state 10 to 10) does not change at all, a standing jump stays at 0 (862 of 917); a kick's horizontal velocity holds until a dash (timelines) |
+| dash | 16 m/s easing to 10 over 0.3 s, gravity x0.25 in the air, rising speed kept | run speed, the vertical speed zeroed in the air, normal gravity | after a 10045: position speed over the first 0.3 s 9.9-10.3 m/s (deciles 8.3-11.3, 29 927 ground and 282 568 air samples), the sampled `vel` 999-1000; a gun's dash (a velocity turn with the vertical speed reset) 900 cm/s; the first air sample after the dash is `-g * dt` within 0.3 m/s whether the dash came rising (41 158), at the top (16 083) or falling (34 846) |
+| ground dash spacing | - | the tumble clip | consecutive ground dashes with nothing between: never closer than 0.32 s, mode 0.37 s (2 566 pairs): a dash waits for the last one's clip |
+| air dashes | one per jump, a slash, kick or shot gives it back | one per jump, a slash or shot gives it back | clean jumps from the ground with no slash, shot or switch: 0 dashes 5 186, 1 dash 2 632, 2 dashes 43 (each a dash on the landing frame or just before the jump); a kick does not give it back: kick, dash, kick off the same wall 1 time, kick, slash, dash, kick 122 |
+| air slash | holds the altitude 0.25 s (gravity cancel) | no effect on the vertical speed | 3 692 slashes while rising and 979 at the top of a jump without a dash around: the next three samples follow the ballistic `vz` within 0.2 m/s |
+| wall kick, along the wall | 0 | kept | at the kick the horizontal velocity loses its part into the wall and gains 3 m/s out (1 666 kicks: after it `-v·n` -0.31..-0.85 at 3.4-9.3 m/s) |
+| repeated kicks | 3 per time in the air (port limit) | no limit; a kick off the same wall needs a dash back to it | airtimes with 2..11 kicks (242 / 39 / 10 / 5 / 3 / 1 / 1); of 129 second kicks off the same wall 121 had a 10045 dash between, the rest a gun dash (a velocity turn back at 900 cm/s); the actor flies off at 3 m/s and a slash does not hold it at the wall (a kick's velocity is unchanged across the slash) |
+| wall run start | contact within 0.2 / 0.4 s of a jump press | a jump pressed while touching the wall | the sample before a side run's first one is already at the wall (centre 0.25-0.6 m from it) at run speed meeting it at cos 0.43-0.61 (aim the same), from the ground (1 381) or the air (1 534, long after the takeoff); before a run up a wall (state 17) the actor stands or runs against the wall facing it at cos 0.99-1.0 (142 of 151 at >= 0.9) from the ground (206 of 234) |
+| side run start speed up | min(vz, 2) | 3.4 m/s, 0 out of a rise | first sample 3.25-3.46 m/s from the ground (1 597 of 1 671) and out of a fall (978), 0 out of a rise (636) or a kick (704); holds at 0 once there |
+| jump off a side run | a kick (3 out, 14 up) | run speed 35 degrees off the wall, 13 m/s up | states 16/21 (2 533): 816 cm/s along, 577 out (also at a run's automatic end after 2 s, 52 of 53), takeoff 1 300 cm/s solved, 1 550 early in a run (on top of its rising speed) |
+| run up a wall | foot profile 3.3 m / 0.6 s, then a slide | the same, then a jump off | state 17 (234): rises 3.0-3.5 m in 0.6 s; it ends in 18 (jump straight up: 1 400 cm/s solved, 25-41 cm/s away from the wall, 121) or 19 (flip back: 1 400 up, 3 m/s out, 58), never in a slide |
+| wall hang | at once, 1.2 s at most, one per jump, climb 4 m/s with forward + jump | 0.4 s after the guard goes up, as long as it is held, again after each jump | state 26 floating at a wall (centre 0.29-0.34 m from it): the zero velocity comes 0.40-0.41 s after the first state-26 sample in 196 of 196; held up to 6.6 s; hang, jump straight up (18), guard again, hang 1.4 m higher, repeated |
+| uppercut launch | 7 m/s up, 3 m/s back | 17 m/s up, 3 m/s back | state 48 (124 launches): solved 1 700 cm/s, 299 cm/s across, rises 5.8 m, normal gravity |
+| juggle | 5.5 m/s up, 3 per landing | a slash: about 1 m/s up; an uppercut: 17 m/s | a launched body (48/52) hit by a 10037 resets to about 1.1 m/s up (10 hits), by a 10036 to 15.9-17.6 (9); no limit seen |
 
-Not applied: the up-wall run (state 48, 126 launches) starts at about 17 m/s (1700-1711 cm/s solved) with
-horizontal speed 2.99 m/s and normal gravity: +5.7 m in 0.68 s, against the port's 3.3 m `runW` foot
-profile. Air control: the horizontal velocity of 95 % of the 68 117 falling pairs (state 10 to 10) does not change
-at all and a standing jump stays at 0 (862 of 917), so the original has none; the port keeps its 10 m/s^2 (the nav
-jump links are searched with it). The dash was not identified among the states; around melee state 41 the position
-steps reach 12-13 m/s against sampled speeds of at most 10 m/s (`.local/py/gzr_dash.py`, `gzr_dash2.py`), the hint
-behind the inferred 16 m/s burst.
+Air control, the dash, the wall kick and the wall moves follow the table since the "1:1 movement" pass: the old
+inferred dash burst, gravity cancel, kick cap, wall-run windows, hang limits and hang climb are gone. The 16 m/s
+burst came from the position steps of 12-13 m/s around melee state 41 (`.local/py/gzr_dash.py`, `gzr_dash2.py`);
+with the dash command found, those are the upper decile of a 10 m/s dash. The 17 m/s "up-wall run" of state 48
+was the uppercut's victim.
 Skipped: `r009`, `r022` (replay version 2: another layout, the stage name is there but the record chain
 of this section does not continue past the header). The jump apex was not checked against map geometry.
 Cross-check with the clips (`.local/py/rootmo.py`, **observed**): `runLW` 2.0 s and `runW` 0.6 s match the longest
@@ -1826,29 +1850,32 @@ down); `jumpU` 0.33 s is only the take-off pose (a jump lasts 0.72 s), so clips 
 ## K-style and D-style techniques (`src/actor.rs`, `src/melee.rs`, `src/bot.rs`; **inferred**)
 
 The original's bug-born movement tech (public player guides, gameplay descriptions only; no client code) as ordinary
-rules of the actor controller, always on, for the player and the bots. No timing is documented anywhere: **every
-number below is inferred** (constants at the top of `actor.rs` / `melee.rs`); the guides' technique names are kept in
-the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=debug`).
+rules of the actor controller, always on, for the player and the bots. The movement each one rides on (dash, air
+dash, kick, wall runs, hang, launches) is **observed** in the replays (the table above); the windows and cancels the
+guides only name stay **inferred** (constants at the top of `actor.rs` / `melee.rs`). A technique is one of the
+guides' (`local` research notes: Kistrael's 2007 ijji guide, StrategyWiki's K-style page, the gunz.fandom K/D-style
+pages, FatherPrim's D-style guide, Neoseeker threads); the guides' names are kept in the `tech:` log lines
+(`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=debug`).
 
 | Technique (guide name) | Rule in the port | Log line |
 |---|---|---|
-| Dash | A double tap of a direction, or the Dash action (`Intent::dash`, acted on the press: the held direction with the larger part, forward if none; no emulated taps), starts a tumble: 16 m/s (`DASH`) easing to the run speed over `DASH_BURST` 0.3 s, then run speed until the clip ends (katana 0.33 s: about 4 m against the old 9 m/s decaying tumble's 2 m, slower than running). The retail `dash_effect` (`sfx/ef_dash.elu`, speed lines and a blue puff, 0.86 m radius around the chest) rides on the actor (`Vfx::On`), turned to the dash direction | `clip tumbleF` |
-| Air dash, jump dash | The same in the air (gravity x 0.25, vertical speed held at >= 0); one per jump (`Tech::dashed`, reset on landing and on a wall kick) | `tech: air dash` |
+| Dash | A double tap of a direction, or the Dash action (`Intent::dash`, acted on the press: the held direction with the larger part, forward if none; no emulated taps), starts a tumble at the run speed of the weapon in hand (10 m/s melee, 9 m/s gun; **observed**) until the clip ends (katana 0.33 s). The speed trail is drawn for its first `DASH_BURST` 0.3 s. The retail `dash_effect` (`sfx/ef_dash.elu`, speed lines and a blue puff, 0.86 m radius around the chest) rides on the actor (`Vfx::On`), turned to the dash direction | `clip tumbleF` |
+| Air dash, jump dash | The same in the air: the vertical speed is zeroed and normal gravity pulls (**observed**), the horizontal velocity holds after the clip (no air control); one per jump (`Tech::dashed`, reset on landing; a slash, a stab or a shot gives it back, a kick does not) | `tech: air dash` |
 | Jump cancel (dash cooldown) | A jump from a ground tumble ends it (jump no longer waits for the tumble); the air dash is still unspent | `tech: jump cancel` |
 | Jump buffer | A jump pressed up to `JUMP_BUFFER` 0.15 s before landing jumps on landing (triple butterfly: jump, slash, block three times) | - |
-| Dash cancel (slash) | A slash out of a tumble gives the air dash back and ends the burst (horizontal speed down to the run speed at most); `melee.rs` starts slashes from a tumble after `DASH_SLASH` 0.05 s | `tech: dash cancel` |
+| Dash cancel (slash) | A slash out of a tumble ends it; every slash or stab gives the air dash back (the guides: slashing "reset counters like the one checking the cooldown time between dashes"); `melee.rs` starts slashes from a tumble after `DASH_SLASH` 0.05 s | `tech: dash cancel` |
 | Dash shot (half step, yoyo step) | A gun shot during a tumble fires and the tumble goes on (the half step "allows a player to move while shooting"; a player report: the shot used to cut the dash); it gives the air dash back like a slash does, and a reload may start out of the tumble (the yoyo half and quarter shoot, reload and dash again) | `tech: dash shot` |
 | Super dash | The air dash is always available after `SUPER_FALL` 1.5 s of falling | `tech: super dash` |
-| Wall slash cancel, flying | A slash during a wall kick, wall run or hang cancels it (full control, switch, guard); the actor stays at the wall (0.5 m/s into it) and a jump within `FLY_WINDOW` 0.5 s kicks off it again, at any point of the air slash ("once you begin the slash, press jump"; it waited for the hit frame before, which made the move a matter of mashing jump + attack), and an air jump is buffered `JUMP_BUFFER` 0.15 s like a ground one; a kick restores wall run, air dash and gravity cancel. At most `KICKS` 3 kicks (of any kind: wall spring, flying, wall cancel, multi wall jump) per time in the air (**port limit**: with the actor held at the wall and every kick a fresh 14 m/s up, mashing jump + attack climbed any wall, or stayed under a roof, without end: 13 kicks in a row in 4 s at `W`; three keep the longest scripted chain, the advanced wall cancel twice after a wall spring). Each kick logs `wall kick N/3 ... y=`; mashing `w+attack:0.05;w+jump:0.05` at `W` now kicks at y = 1.5, 3.2, 3.4 m, falls, lands and starts again from y = 0.5 m | `tech: wall slash cancel`, `tech: wall flying` |
-| Wall cancel, advanced wall cancel | A kick may also start from a tumble: wall jump, slash, dash back to the wall, kick again (with a switch to a gun and back between slash and dash: the advanced one). The wall run that a dash into a wall with forward held would start waits a frame after the dash | `tech: wall cancel` |
-| Multi wall jump | During a kick's flight a jump kicks off another wall (normals more than 60 degrees apart): multi wall run, wall run, slash, dash to another wall, jump twice | `tech: multi wall jump` |
+| Wall slash cancel, flying / wall climbing | A slash during a wall kick, wall run or hang cancels its lock (full control, switch, guard); the actor keeps its momentum (off a kick it flies on at 3 m/s from the wall, off a run or hang it drops: **observed**, the guides' "slash to drop off the wall"). A slash right with the kick ("slashing and jumping must be done near simultaneously") ends the flip at once, so the dash back to the wall (next row) can come at once. Mashing jump + attack does not climb: after the first kick the actor is off the wall and nothing brings it back but a dash | `tech: wall slash cancel` |
+| Wall cancel, advanced wall cancel (wallslashing) | Kick, slash, dash back to the wall, kick again (with a switch to a gun and back between slash and dash: the advanced one): the slash gives the dash back, the dash carries the actor back to the wall at 10 m/s, and the kick keeps what of that runs along the wall. It repeats without limit, about 3 m up per cycle (**observed**: chains of up to 11 kicks in one jump) | `tech: wall cancel` |
+| Multi wall jump | During a kick's flight a jump against another wall (normals more than 60 degrees apart) kicks off it; a jump off a side run flies at 35 degrees from that wall, into the next one in a corridor | `tech: multi wall jump` |
 | Flash climb | After a switch cancel (below) a wall jump inside `TECH_SHOT` 1.5 s | `tech: flash climb` |
 | Switch cancel (slash shot, quick slash / flash step) | While an air slash plays, a weapon switch is accepted and cancels the slash; the gun drawn so has no draw delay (slash shot, half step, forbidden step). Switching back to the blade within `FLASH_WINDOW` 1.5 s has no draw delay and no blade delay. A switch is also accepted during a tumble (the tumble goes on) | `tech: switch cancel`, `tech: slash shot`, `tech: flash step` |
 | Reload shot, shimmer shot | A reload started within `RS_WINDOW` 0.5 s of a shot, cancelled by a switch, skips the `SWITCH_DELAY` 0.3 s of the next weapon, a blade included (`Actor::quick_draw`; the magazine stays as it was): reload shot, shimmer shot (gun, shot, reload, dagger, dash), jump shot dash, yoyo half and quarter (stab right after the reload cancel) | `tech: reload cancel`, `tech: reload shot` |
 | Swapshot | Every loadout slot has its own fire delay (`Actor::ready`); a shot from another gun within 0.6 s of the last shot | `tech: swapshot` |
-| Gravity cancel | An air slash (`attack_Jump`, a dagger's `attackS`; not the air massive) started at a rising speed <= 4 m/s (near the top of a jump, or falling) zeroes the vertical speed and the gravity for 0.25 s, once per jump | `tech: gravity cancel` |
-| Wall hang, wall hang cancel | Guard held (Shift) in the air with any weapon that allows wall moves (a gun's guard has no other use; rocket launchers and machine guns block wall moves), a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, height pinned, pressed into the wall, faces it; plays `runW_downF`). It lasts as long as the guard is held, at most `HANG_SECS` 1.2 s, with no slide-off (the capsule pressed into a leaning wall would creep up or down it, so its height is held). Forward + jump held climbs at 4 m/s (plays `runW`); a jump without forward kicks off the wall (`jumpwall*`, as from a wall run); releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel` |
-| Multi wall run, aerial wall run | A wall run may start from a tumble or a cancelled action within its window of a jump press, and a kick restores the once-per-jump wall run (`wall_spent`) | `tech: multi wall run` |
+| Gravity cancel | No rule of its own: an air slash leaves the vertical speed alone (**observed**), and it gives the air dash back, whose dash zeroes the vertical speed: slash, dash at the top of a jump or near the landing hangs on (the guides' "late dash" / "blind dash") | `tech: air dash` |
+| Wall hang, wall hang cancel | Guard held (Shift) in the air for `HANG_DELAY` 0.4 s (**observed**; until then the guard falls) with any weapon that allows wall moves (a gun's guard has no other use; rocket launchers and machine guns block wall moves), a wall touched within 0.1 s or within `HANG_REACH` 0.4 m, 0.5 m of air below: `State::Hang` (no gravity, height pinned, pressed into the wall, faces it; plays `runW_downF`). It lasts as long as the guard is held (**observed** up to 6.6 s), with no slide-off. A jump off it goes straight up with forward held (14 m/s, the guides' "hold forward + jump to climb") and flips back without; the next hang needs the guard up for 0.4 s again, so hang, jump, hang climbs about 1.4 m a cycle (**observed**). Releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel`, `tech: wall climb` |
+| Multi wall run, aerial wall run | A jump against a wall met at a run's angle runs along it in the air too, out of a kick's flight or a tumble (dash towards the wall at an angle, jump) | `tech: multi wall run` |
 | Block cancel (quadruple butterfly) | A guard pressed `BLOCK_CANCEL` 0.05 s or more into a slash (combo, finisher or air slash; not the uppercut or a massive), before its hit frame, lands the slash at once and goes on as the butterfly guard; the dash pressed with it (a double tap whose second tap comes with the guard, or Dash + guard) leaves the guard at once. The item `delay` (katana 329 ms) still spaces the slashes. A guard held from before the slash is not a press | `tech: block cancel` |
 | Extended flip | A dash out of the uppercut once its blade has landed | `tech: extended flip` |
 | Butterfly | The guard that cancels a blow's recovery (`melee.rs`, from `Phase::Blow` after the hit frame or `Phase::Recover`) is an ordinary rooted guard (`ActionMove::Locked`): holding it on the ground does not move the actor (it was a movable `Control(1.0)` "slide" guard that kept running in the guard pose, a user-reported glitch after mashing attack and guard); dash and jump leave it as before (the guard action is cancellable at once) | `tech: butterfly`, `tech: recovery cancel` |
@@ -1856,13 +1883,13 @@ the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=d
 | Quick launch | The same guard cancel after an uppercut | `tech: quick launch` |
 | Insta-kill | After the hit frame of an uppercut (`Acting::cancel_from`) a weapon switch is accepted on the ground as well and cancels the launch recovery (the gun still has the 0.3 s draw delay: the launched actor is airborne for about 0.5 s) | `tech: insta-kill`, `tech: insta-kill shot` |
 | Light step / silent jump | A dash that comes out of a slash (the actor is in a blow action) starts its tumble clip without the clip's `fx_dash` cue (`Tech::silent`) | `tech: light step` |
-| Juggle | A hit on a launched actor that is still in the air lifts it again (`JUGGLE_UP` 5.5 m/s; an uppercut `UPPERCUT_UP` 7 and `UPPERCUT_BACK` 3 m/s away, was 1: a target 1 m away could not be reached by jump, dash, slash without passing it), at most `MAX_JUGGLE` 3 times per landing; a lying actor is left alone. A jump or dash on the hit frame itself still lands the blow | `tech: juggle` |
-| Wall spring | A jump out of a wall run (up or along a wall) is a plain kick off the wall (not in the wiki text: the name is the task's; **inferred** as that) | `tech: wall spring` |
-| Dagger stab (air) | The dagger has only `attackS` (no `attack_Jump`): the click stabs on the ground and in the air (it used to dive with `jump_slash1`, 1.3 s). Every slash rule applies to it: a stab out of a dash gives the air dash back (dagger train, hop, flash), gravity cancel, wall slash cancel (wall cancel, wall raid), switch cancel | `tech: dash cancel`, `tech: gravity cancel`, `tech: wall slash cancel` |
+| Juggle | A slash on a launched actor still in the air resets its vertical speed to `JUGGLE_UP` 1 m/s and an uppercut throws it up at `UPPERCUT_UP` 17 m/s again (**observed**, no limit: "this can be continued infinitely"); a lying actor is left alone. A jump or dash on the hit frame itself still lands the blow | `tech: juggle` |
+| Wall spring / propel | A jump off a side wall run: the run speed turned 35 degrees off the wall and 13 m/s up on top of the run's rising speed (**observed**); a run up a wall ends in the jump straight up (forward held) or the flip back | `tech: wall spring`, `tech: wall climb`, `tech: wall flip` |
+| Dagger stab (air) | The dagger has only `attackS` (no `attack_Jump`): the click stabs on the ground and in the air (it used to dive with `jump_slash1`, 1.3 s). Every slash rule applies to it: a stab gives the air dash back (dagger train, hop, flash), wall slash cancel (wall cancel, wall raid), switch cancel | `tech: dash cancel`, `tech: wall slash cancel` |
 | Dagger train, hop, flash, float step, gear tap, triple stab | Dash + stab on the ground (the stab roots the actor: `ActionMove::Root`); jump + dash + stab; a second dash to the other side + stab in the same jump (two or three dashes per jump through the dash cancel); dash, stab, jump out of the stab (float step; the jump takes over once the blade has landed); dash, jump (gear tap: jump cancel); float step plus two more dash + stab | `tech: dash cancel`, `tech: float step`, `tech: jump cancel` |
-| Hells climb, wall raid | Wall hang (guard), forward + jump climbs, a stab out of the hang or the wall run is a wall slash cancel and a jump within `FLY_WINDOW` kicks off again (`wall flying`). The port limits (one hang per jump, 1.2 s, 2 m of climbing) stay, so the climb cannot repeat forever | `tech: wall hang cancel`, `tech: wall slash cancel`, `tech: wall flying` |
+| Hells climb, wall raid | Hells climb: hang, jump up (forward held), hang again, repeated (a stab between drops the hang). Wall raid: on a side run, stab (the run drops), jump at once while still touching the wall: a new side run, as often as wanted ("you'll stick to the wall and keep running") | `tech: wall hang cancel`, `tech: wall climb`, `tech: wall slash cancel` |
 | Lunge | A dagger has no guard (no `guard_idle`): its alternative fire (`alt`, right mouse: `Melee::alt_until`, remembered `BUFFER` 0.4 s like a click) starts, on the ground, the `uppercut` clip (1.5 s, hit at frame 10) as `LUNGE`: it launches (`blast_dagger`) like the flip. The clip's root motion comes after its hit frame: the blade lands where the actor stood (reach 1.9 m + 0.35 m capsule = 2.25 m), then the body travels 5.1 m | `melee ...: lunge strikes at ... at (x, z)`, `idle at (x, z)` |
-| Extended lunge (E-lunge) | A lunge that starts in a dash (tumble running), or on the press that starts one (a direction's second tap, or Dash, with the alternative fire the same frame: `Actor::dash_wanted`), is `E_LUNGE`: it slides on at the dash's horizontal velocity and direction, not the facing (`Tech::slide`: the tumble's current speed, or `DASH` 16 m/s for the same-press case), until its hit frame, and its reach doubles (`reach` 2.0: 3.8 m + 0.35 m). Both numbers are **inferred** from the guides' "about 2x range, about 4x distance"; the slide direction is the dash's, so a lunge forward, sideways or backwards each travels 5 m before it strikes (a wall stops it; turning the camera meanwhile aims the blade and the clip's root motion elsewhere, which is the curved E-lunge's extra manoeuvrability; its larger hitbox is not modelled) | `tech: extended lunge ... slides at`, `melee: extended lunge strikes` |
+| Extended lunge (E-lunge) | A lunge that starts in a dash (tumble running), or on the press that starts one (a direction's second tap, or Dash, with the alternative fire the same frame: `Actor::dash_wanted`), is `E_LUNGE`: it slides on at the dash's horizontal velocity and direction, not the facing (`Tech::slide`: the tumble's speed, or the run speed for the same-press case: 10 m/s, **observed** dash speed), until its hit frame, and its reach doubles (`reach` 2.0: 3.8 m + 0.35 m, **inferred** from the guides' "about 2x range"). The slide direction is the dash's, so a lunge forward, sideways or backwards each travels 3.2 m before it strikes (a wall stops it; turning the camera meanwhile aims the blade and the clip's root motion elsewhere, which is the curved E-lunge's extra manoeuvrability; its larger hitbox is not modelled) | `tech: extended lunge ... slides at`, `melee: extended lunge strikes` |
 | Dagger machine | A stab flinches its victim for the `damage` clip (0.33 s) and the plain dagger's `delay` is 0.326 s (0.356 s for the 38-damage ones), so a stab every 0.326 s lands inside the last flinch: the victim stays locked, as the guide says (the 0.356 s daggers leave a 0.02 s gap: "the delay times decide") | `melee: tech: dagger machine` |
 | Dagger juggle | The lunge launches and a stab that hits the airborne victim lifts it again (the juggle rule above) | `melee: tech: juggle` |
 | Block recoil, block tap | A blow that hits a guard recoils a dagger stabber (its `damage` clip and a push back), unless it looks up or down by at least `TAP_PITCH` 1.2 rad (69 degrees): the block tap (the guides' second way, stab and dash, is not modelled: the recoil lands on the hit frame). Blades have no recoil (**inferred**; the guides only describe it for daggers) | `melee: Player recoils off the block`, `melee: tech: block tap` |
@@ -1886,9 +1913,9 @@ after an air slash lands: switch to a gun with ammo, click), *insta-kill* (the s
 while the enemy is in the air), *reload shot* and *swapshot* (the same odds, with two guns at 3-30 m: reload shots
 above skill 0.5), *launch* (5 % + 60 % x rank while next to a standing enemy: a 0.1 s press of the alternative fire)
 and *juggle* (70 % x rank, at most every 0.6 s, once the enemy has been in the air for `react_time`: the same press;
-quick launch through the butterfly roll that also covers `uppercut`), and *hang climb* (skill >= 0.3, an enemy 2-7 m
-above within 7 m and no walkable way, a wall within 1.4 m towards it: jump, guard in the air, forward + jump until the
-feet pass the enemy's; gives up after 4 s). Wall kick scripts of the route stay untouched (a bot in a kick script
+quick launch through the butterfly roll that also covers `uppercut`), and *wall climb* (skill >= 0.3, an enemy 2-3.5 m
+above within 7 m and no walkable way, a wall within 1.4 m towards it: face it, run into it, jump against it, and the run
+up the wall carries the bot over the ledge; gives up after 2 s). Wall kick scripts of the route stay untouched (a bot in a kick script
 never slashes). Measured against the old odds (`.local/bots/`, Mansion 1v1, 40 runs per skill): at NORMAL juggles 71
 -> 0, launches 7 -> 2, butterflies 49 -> 29, guard decisions 76 -> 38, gun damage on an idle player 12+ m away in
 8 x 60 s 133 -> 60; at skill 1 about as strong as before.
@@ -1912,28 +1939,30 @@ gunman --bots 8 --skill 1 --script wait:60 --time 60` (`bot X: move NAME`): floa
 dagger machine 1, extended lunge 1 (plus the sword moves of the sword carriers), no panics.
 
 The guides' list, each run headless with the player (`.local/tech/all.sh`; Mansion, `W` = `--at 1391,1460,2 --yaw 270`,
-`T` = `--bots 1 --bots-ahead 1.8 --skill 0`, corridor = `--at 1391,1300,2 --yaw 0`) and the observed `tech:` lines:
+`T` = `--bots 1 --bots-ahead 1.8 --skill 0`, corridor = `--at 1391,1300,2 --yaw -30`, the right-hand wall met at 30
+degrees) and the observed `tech:` lines. With the dash zeroing the vertical speed, the air dashes of a sequence come
+near the top of the jump (`wait:0.15` to `0.25` after it) or it lands before the rest:
 
 | Technique | Script | Observed |
 |---|---|---|
-| Butterfly | `wait:0.3;jump:0.1;w+dash:0.12;w+attack:0.05;wait:0.15;guard:0.4` | air dash, dash cancel, air butterfly |
+| Butterfly | `wait:0.3;jump:0.1;wait:0.15;w+dash:0.08;w+attack:0.05;wait:0.15;guard:0.4` | air dash, dash cancel, air butterfly |
 | Double butterfly | `wait:0.3;jump:0.1;attack:0.05;wait:0.15;guard:0.1;w+dash:0.12;w+attack:0.05;wait:0.15;guard:0.4` | air butterfly, air dash, dash cancel, block cancel, air butterfly |
 | Triple butterfly | `wait:0.3;` then `jump:0.05;attack:0.05;guard:0.6` three times | block cancel + air butterfly at 1.92, 2.62, 3.30 s (the jump buffer catches each landing) |
 | Quadruple butterfly | `T`, `attack:0.03;guard+w:0.03;guard:0.03;guard+w:0.1;wait:0.17` with `w`, `d`, `a` (or `attack:0.05;guard+dash:0.06;wait:0.22`) | block cancel + butterfly at 1.85, 2.23, 2.58 s, the first slash hits; the item delay spaces them |
 | Juggle | `T`, `wait:0.2;guard:0.2;guard+attack:0.05;wait:0.25;guard:0.1;jump:0.15;w+dash:0.03;w+attack:0.05;wait:0.12;guard:0.4` | uppercut hits, quick launch, air dash, dash cancel, block cancel, air butterfly; the scripted dash passes beside the launched target (the bots, which aim, log `tech: juggle`) |
-| Slashshot | `wait:0.3;jump:0.1;w+dash:0.12;w+attack:0.1;2:0.05;attack:0.1` | switch cancel, slash shot in the same frame |
-| Half step | `...;w+attack:0.05;wait:0.1;2:0.05;w+dash:0.12;attack:0.1` | switch cancel, air dash, dash shot + slash shot |
+| Slashshot | `wait:0.3;jump:0.1;wait:0.15;w+dash:0.08;w+attack:0.1;2:0.05;attack:0.1` | switch cancel, slash shot in the same frame |
+| Half step | `...;w+attack:0.05;wait:0.08;2:0.05;w+dash:0.1;attack:0.1` | switch cancel, air dash, dash shot + slash shot |
 | Half half step | `wait:0.3;jump:0.1;attack:0.05;wait:0.1;2:0.05;w+dash:0.12;attack:0.1` | switch cancel, air dash, dash shot + slash shot (no dash before the slash) |
 | Reload half step | the same, then `wait:0.2;reload:0.1` | dash shot, slash shot, `reload: ... (mag 7+24)` |
 | Flash step | `wait:0.3;jump:0.1;attack:0.05;wait:0.1;2:0.05;1:0.05;w+dash:0.15` twice | switch cancel, flash step, air dash, dash cancel, again |
 | Advanced flash step (double) | the flash step twice with `w+attack:0.05` after the second dash | switch cancel, flash step, air dash, dash cancel, twice |
 | Forbidden step | `wait:0.3;jump:0.1;attack:0.05;wait:0.1;2:0.05;attack:0.05;1:0.05;w+dash:0.12;w+attack:0.05;wait:0.1;3:0.05;w+dash:0.12;attack:0.1` | switch cancel, slash shot, flash step, air dash, dash cancel, switch cancel, air dash, dash shot + slash shot |
 | Extended flip | `T`, `w:0.3;guard+w:0.1;guard+w+attack:0.1;w:0.15;w+dash:0.15` | extended flip |
-| Wall cancel | `W`, `w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;dash:0.15;jump:0.1` | wall slash cancel, air dash, wall cancel |
-| Advanced wall cancel | `W`, kick, `attack:0.05;wait:0.1;2:0.05;1:0.05;w+dash:0.15;w+jump:0.1`, twice | wall slash cancel, switch cancel, flash step, air dash, flash climb, twice |
-| Multi wall run | corridor, `d+w:0.2;d+w+jump:0.1;w:0.3;attack:0.05;wait:0.15;a+dash:0.1;a:0.15;jump:0.05`, then `wait:0.05;jump:0.05` repeated | `runRW`, wall slash cancel, air dash, wall cancel (`jumpwallL` off the pillars), multi wall jump (`jumpwallR` off the wall across, 0.9 s later) |
-| Wall hang cancel | `W`, `w:0.5;w+jump:0.25;w:0.6;guard:0.5;w+guard+jump:0.4` | wall hang cancel |
-| Wall spring | corridor, `d+w:0.2;d+w+jump:0.1;d+w:0.3;d+w+jump:0.1` | `runRW`, wall spring (`jumpwallR` out of the wall run) |
+| Wall cancel | `W`, `w:0.5;w+jump:0.25;w:0.1;jump:0.1;wait:0.1;attack:0.05;wait:0.1;w+dash:0.15;jump:0.1` | `runW`, the flip back off it, wall slash cancel, air dash, wall cancel |
+| Advanced wall cancel | `W`, the run and the flip, `attack:0.05;wait:0.1;2:0.05;1:0.05;w+dash:0.15;jump:0.1`, twice | wall slash cancel, switch cancel, flash step, air dash, wall cancel, twice |
+| Multi wall run | corridor, `w:0.6;w+jump:0.1;w:0.3`, then `w:0.05;w+jump:0.05` repeated | `runRW`, wall spring, multi wall jump (`jumpwallL` off the pillars across), `runRW` again, wall spring |
+| Wall hang cancel | `W`, `w:0.5;w+jump:0.1;w+guard:0.5;guard:0.6;w+guard+jump:0.1;guard:0.8` | `runW`, wall hang cancel (0.4 s of guard), wall climb, wall hang cancel again |
+| Wall spring | corridor, `w:0.6;w+jump:0.1;w:0.3;w+jump:0.1` | `runRW`, wall spring (`jumpwallR` out of the wall run) |
 
 D-style, a dagger in slot 1 (`D` = `--loadout 2000000,2050000,2100001`: dagger, revolver, rifle; `T` as above):
 
@@ -1941,22 +1970,22 @@ D-style, a dagger in slot 1 (`D` = `--loadout 2000000,2050000,2100001`: dagger, 
 |---|---|---|
 | Dagger train | `D`, `wait:0.3;w+dash:0.1;w+attack:0.05;wait:0.2` three times (the last with `s`) | dash cancel + `attackS` each time, light step from the second |
 | Dagger hop | `wait:0.3;jump:0.1;w+dash:0.12;w+attack:0.05` | air dash, dash cancel, `attackS` in the air (no dive) |
-| Dagger flash | `...;w+attack:0.05;wait:0.1;d+dash:0.12;d+attack:0.05` | air dash, dash cancel, air dash (`tumbleR`, light step), dash cancel, gravity cancel: 2 dashes in 1 jump |
+| Dagger flash | `wait:0.3;jump:0.1;wait:0.15;w+dash:0.08;w+attack:0.05;wait:0.08;d+dash:0.1;d+attack:0.05` | air dash, dash cancel, air dash (`tumbleR`, light step), dash cancel: 2 dashes in 1 jump |
 | Float step | `wait:0.3;w+dash:0.12;w+attack:0.05;wait:0.1;jump:0.1` | dash cancel, `attackS`, float step |
 | Gear tap | `wait:0.3;w+dash:0.12;jump:0.1` | jump cancel |
-| Triple stab | float step, then `d+dash:0.12;d+attack:0.05;wait:0.1;a+dash:0.12;a+attack:0.05` | float step, air dash, dash cancel, air dash, dash cancel, gravity cancel |
-| Wall cancel (dagger) | `W`, `D`, `w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;dash:0.15;jump:0.1` | wall spring, wall slash cancel (`attackS`), air dash, light step, wall cancel (`jumpwallF` again); stab, then dash + stab at the wall (`w+attack:0.05` instead of the jump) logs dash cancel |
-| Hells climb | `W`, kick, `w:0.6;guard:0.3;w+guard+jump:0.3;attack:0.05;wait:0.1;w+jump:0.1` | wall hang cancel (climbs), wall slash cancel, wall flying |
-| Wall raid | corridor, `d+w:0.2;d+w+jump:0.1;d+w:0.5;d+w+attack:0.05;d+w:0.1;d+w+jump:0.05;d+w:1.4` | `runRW`, wall slash cancel, gravity cancel, wall flying (`jumpwallR`); the kick restores the wall run, but the 3 m/s away from the wall does not carry back to it in this corridor |
+| Triple stab | float step, `wait:0.15;d+dash:0.08;d+attack:0.05;wait:0.08;a+dash:0.08;a+attack:0.05` | float step, air dash, dash cancel, air dash, dash cancel |
+| Wall cancel (dagger) | `W`, `D`, `w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;dash:0.15;jump:0.1` | `runW`, wall climb, wall slash cancel (`attackS`), air dash, light step, wall cancel (`jumpwallF`) |
+| Hells climb | `W`, `D`, `w:0.5;w+jump:0.1;w+guard:0.5;guard:0.6`, then `w+guard+jump:0.1;guard:0.6` twice, `attack:0.05` | wall hang cancel, wall climb, hang, wall climb, hang (higher each time), wall slash cancel |
+| Wall raid | corridor, `D`, `w:0.6;w+jump:0.1;w:0.4;w+attack:0.05;w:0.05;w+jump:0.05;w:1.4` | `runRW`, wall slash cancel (the stab), `runRW` again |
 | SHS (shimmer shot) | `2:0.1;wait:0.3;attack:0.05;reload:0.1;1:0.05;dash:0.15` | shot, reload, reload cancel, `tumbleF` |
 | JSD | `wait:0.3;jump:0.1;2:0.05;wait:0.3;attack:0.05;reload:0.1;1:0.05;w+dash:0.15` | shot, reload, reload cancel, air dash |
 | YS (yoyo step) | `wait:0.3;jump+2:0.1;wait:0.1;w+dash:0.1;attack:0.05;reload:0.1` | air dash, dash shot, shot, reload |
-| YS half | the yoyo, then `1:0.05;d+dash:0.1;d+attack:0.05;wait:0.1;a+dash:0.1` | air dash, dash shot, reload cancel, air dash (`tumbleR`), dash cancel, air dash (`tumbleL`): 3 dashes in 1 jump |
+| YS half | `wait:0.3;jump+2:0.1;wait:0.25;w+dash:0.06;attack:0.03;reload:0.05;1:0.03;d+dash:0.06;d+attack:0.03;wait:0.1;a+dash:0.1` | air dash, dash shot, reload cancel, air dash (`tumbleR`), dash cancel, air dash (`tumbleL`): 3 dashes in 1 jump |
 | YS quarter | the same, then `a+attack:0.05` | air dash x3, dash shot, reload cancel, dash cancel twice (both stabs) |
 | BS (blink step) | `2:0.4;wait:0.2;jump+1:0.1;wait:0.2;w+dash:0.1;2:0.05;wait:0.3;attack:0.05;reload:0.1` | air dash, switch to the gun in the tumble, shot 0.3 s later (the draw delay), reload |
 | YS phantom | the yoyo, `wait:0.2;1:0.05` | air dash, `phantom` (the tumble's small capsule), dash shot, reload cancel |
-| Lunge, E-lunge | `C` (`--at 1391,1300,2 --yaw 0`), `D`; plain `wait:0.3;guard:0.05`; E-lunge `w:0.1;wait:0.05;w+guard:0.1` (also `w+dash:0.1;w+guard:0.1`; `d:0.1;wait:0.05;d+guard:0.1` and `wait:0.3;s+dash+guard:0.1` from `W`) | plain: starts and strikes at z = 13.00, idle at z = 7.89 (5.11 m of root motion after the hit); E-lunge: starts at z = 12.00, strikes at z = 6.93 (5.07 m slid in 0.35 s at 16 m/s), idle at z = 1.82 (10.2 m); out of a dash (14.3 m/s) 4.54 m to the strike; sideways 5.07 m (z 15.60 to 20.67, the body faces +/- 90 degrees off its slide), backwards 5.06 m (x 13.91 to 8.85; in the corridor a wall stops the sideways one after 0.68 m) |
-| E-lunge reach | `C`, `D`, `--bots 1 --bots-ahead 8.0 --skill 0`, `wait:0.5;w+dash+guard:0.1` | the lunge starts at z = 13.00 and slides to z = 7.93; the target is 2.96 m from there (`candidate Pyon: 2.96 m (reach 4.15)`): `extended lunge hits Pyon for 32` (launch) at 8.0 m from the start. The plain lunge at the same 8.0 m (`lungefar`): `reach 2.25`, strikes at the start, no hit; at 2.95 m (`lungenear`, an E-lunge's hit distance after the slide): `candidate Pyon: 2.97 m (reach 2.25)`, no hit. Reach 2.25 m plain, 9.2 m (5.07 slide + 4.15) extended: 4.1x |
+| Lunge, E-lunge | `C` (`--at 1391,1300,2 --yaw 0`), `D`; plain `wait:0.3;alt:0.05`; E-lunge `w:0.1;wait:0.05;w+alt:0.1` (also `w+dash+alt:0.1`; `d:0.1;wait:0.05;d+alt:0.1` and `wait:0.3;s+dash+alt:0.1` from `W`) | plain: starts and strikes at z = 13.00, idle at z = 7.89 (5.11 m of root motion after the hit); E-lunge: starts at z = 12.00, slides at 10.0 m/s, strikes at z = 8.83 (3.17 m in 0.35 s), idle at z = 3.72 (8.3 m) |
+| E-lunge reach | `C`, `D`, `--bots 1 --bots-ahead 8.0 --skill 0`, `wait:0.5;w+dash+alt:0.1` | the lunge starts at z = 13.00 and slides to z = 9.83; the target is 4.85 m from there (`candidate Pyon: 4.85 m (reach 4.15)`): no hit at 8 m (it was hit with the old 16 m/s slide); an E-lunge reaches 3.2 + 4.15 = 7.3 m, a plain lunge 2.25 m |
 | Dagger machine | `D T`, `wait:0.3;` then six times `attack:0.05;wait:0.28` | stabs hit at 2.80, 3.12, 3.45 s, `dagger machine` on the second and third |
 | Dagger juggle | `D T`, `wait:0.3;guard:0.05;wait:0.3;w:0.1;attack:0.05;wait:0.3` | lunge hits (launch), stab hits the airborne target: `tech: juggle x2` |
 | Block recoil | `D`, `--bots 1 --bots-ahead 1.8 --skill 1`, `wait:0.3;attack:0.05;wait:0.5` | the bot guards: blocked, `recoils off the block` |
@@ -1971,31 +2000,27 @@ larger ring; a plain jump lands at 9 m/s, no dust). Where the original shows the
 Verification (headless, `gunz-play Mansion --bots 0 --script S`, `GUNZ_PROFILE` a throwaway; `--at 1391,1460,2 --yaw 270`
 faces a wall 7 m ahead). Observed lines:
 - `wait:0.3;jump:0.15;w+dash:0.15;w+attack:0.05;wait:0.3;w+dash:0.3` -> `t=2.00 tech: air dash`, `t=2.12 melee: air slash ... from a dash`,
-  `tech: dash cancel`, `tech: gravity cancel`, `t=2.50 tech: air dash` (two air dashes in one jump).
+  `tech: dash cancel`, `t=2.50 tech: air dash` (two air dashes in one jump).
 - `...;w+dash:0.15;w+attack:0.05;wait:0.1;2:0.1;wait:0.3;attack:0.1;wait:0.2;1:0.1` -> `tech: switch cancel`, `tech: slash shot`,
   `tech: flash step`.
 - `2:0.1;wait:0.5;attack:0.1;reload:0.1;3:0.1;attack:0.5` -> `reload: ... (mag 6+24)`, `tech: reload cancel`, `tech: reload shot` 0.1 s later.
-- `wait:0.2;w:0.5;w+jump:0.25;w+guard:0.4;w+guard+jump:0.8` (at the wall) -> `tech: wall hang`, then `runW` climbing
-  (`.local/moves/hang1.png`, `hang2.png`). **Port limits** (holding guard kept a player on a wall for good, and climbing
-  while hanging, or kicking off and hanging again, reached the top of any wall): one hang per time in the air (landing
-  allows the next), it holds at most `HANG_SECS` 1.2 s and climbs at most `HANG_CLIMB_SECS` 0.5 s (2 m). The hang logs
-  its height (`tech: wall hang ... y=`, `hang end ... y=`). Measured (`.local/HangFix/v2/`): `w:0.5;w+jump:0.25;w:0.6;
-  guard:8;wait:1.5` -> hang at 2.85 s y = 3.65 m, `hang end (time up)` at 4.07 s y = 3.65 m, then the fall;
-  `w:0.5;w+jump:0.25;w:0.3;w+guard:0.3` then 12 x `w+guard+jump:0.1;w+guard:0.1` -> hang at y = 3.18 m, end at
-  y = 3.96 m (before: it climbed for every tap). Bots' hang climb only tries enemies 2-3.5 m above (a jump plus 2 m).
-  Side wall run in the corridor (`--at 1391,1300,2 --yaw 0`, `d+w:0.2;d+w+jump:0.1;w:0.3;guard:4`): hang at y = 1.055 m,
-  katana or gun. Forward released before the guard
-  (`w:0.5;w+jump:0.25;wait:0.3;guard:2`, also with 0.1 s, and `w:0.3;wait:0.3`): hang (before: none unless the wall was touched
-  in the last 0.1 s). `...;guard:1.0;guard+jump:0.1` -> `jumpwallF` (3 m/s away from the wall; before: the jump did nothing in
-  a hang). An air slash against the wall, then the guard (`w:0.5;w+jump:0.1;attack:0.05;wait:0.06;guard:2`): hang (before: none).
-- `wait:0.2;w:0.5;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.1;wait:0.25;jump:0.1` -> `jumpwallF`, `tech: wall slash cancel`,
-  `tech: wall flying` (a second kick off the same wall).
+- Mashing (the player report: jump + attack spammed at a wall stuck to it and climbed without end): `w:0.5;w+jump:0.25;
+  w:0.1;w+jump:0.1` then 60 x `w+attack:0.05;w+jump:0.05` at the wall -> `runW`, the jump straight up off it at y = 1.56,
+  `wall slash cancel`, then the fall and the landing; every later round starts from the floor (y = 0.10-0.14): no climb.
+- Hang (`.local/tech/all.sh hangcancel`, `hellsclimb`): `w:0.5;w+jump:0.1;w+guard:0.5;guard:0.6;w+guard+jump:0.1;guard:0.6`
+  -> `runW`, `wall hang cancel` 0.52 s into the run (the guard up 0.4 s), `wall climb` (the jump up off the hang), `wall
+  hang cancel` again 0.4 s later, higher up; repeated in `hellsclimb`.
+- Side run (the corridor, `--at 1391,1300,2 --yaw -30`, also `-20`): `w:0.6;w+jump:0.1;w:2.2` -> `runRW` for 2.0 s, then
+  `wall spring` by itself at y = 2.30 (3.4 m/s up at the start, 10 % gravity, held at 0 once there); `--yaw 20` faces the
+  wall ahead: `runW`, then `wall climb` at y = 3.37.
+- Wall cancel: `w:0.5;w+jump:0.25;w:0.1;jump:0.1;wait:0.1;attack:0.05;wait:0.1;w+dash:0.15;jump:0.1` -> `runW`, `jumpwallF`
+  (the flip back), `wall slash cancel`, `air dash`, `light step`, `wall cancel` (`jumpwallF` again).
 - `--at 1391,1460,6000` (60 m up) with `w+dash:0.15` taps -> `tech: air dash` at 1.62 s, `tech: super dash` at 2.08 s.
 - `wait:0.3;jump:0.15;w+dash:0.15;w+attack:0.05;wait:0.2;guard:0.35` -> `tech: air dash`, `tech: dash cancel`, then
   `melee: tech: air butterfly (guard cancels the recovery)`, `guard Hold` in the air, `guard Release`.
 - `wait:0.3;jump:0.1;attack:0.05;wait:0.2;guard:0.1;w+dash:0.12;w+attack:0.05;wait:0.2;guard:0.1;w+dash:0.12;
   w+attack:0.05;wait:0.2;guard:0.3` (jump slash, block, dash, slash, block, dash, slash, block) -> `air butterfly` at 2.15 s,
-  `air dash` + `dash cancel` + `gravity cancel`, `light step` (a dash right after a slash), `air butterfly` again at 3.22 s.
+  `air dash` + `dash cancel`, `light step` (a dash right after a slash), `air butterfly` again at 3.22 s.
 - `wait:0.2;guard:0.2;guard+attack:0.05;wait:0.4;2:0.1;wait:0.2;attack:0.3` with `--bots 1 --bots-ahead 1.8 --skill 0` ->
   `uppercut hits Pyon` at 2.18 s, `t=2.37 tech: insta-kill`, `t=2.67 tech: insta-kill shot` (the target is still in the air).
 - `attack:0.05;wait:0.2;guard+w:0.5;guard+w+wave:0.6` -> `tech: butterfly`, the actor stays put (rooted guard) and the emote key is
@@ -2144,20 +2169,16 @@ the executable is packed).
   at 1/30 s, run speed, gravity, jump speed and the wall-run table `actor::climb` from `actor.rs`):
   walk 8 directions (steps up to `col::STEP` only), run off a ledge (`Drop`, <= 20 m fall, <= 6.5 m away;
   **inferred** acceptable because the port has no fall damage; 8 m before), jump (`Jump`, ledges and gaps where
-  walking failed and nothing is at 1.4 m height) or **wall climb** (`Jump` whose takeoff is the point
-  where the run-up first sees a wall within 2 m, on the 4 axis directions: jump so that the jump peaks
-  at the wall, the controller's wall run (`runW`, 3.3 m in 0.6 s, `WALL_MIN_HEIGHT` of air under the
-  feet) takes over and the wall-run's push into the wall carries the capsule over a ledge up to about
-  4.5 m; this is how the 4.5 m balconies of Skirmish Hall and the 9 m levels above them link, 66 -> 100
-  of 104 spawn routes) or **side wall run** (`Jump` with a `turn` heading: at a ledge with a wall within
-  4 m at the side, the jump turns 0.35 or 0.6 rad into the wall and the controller's *side* wall run
-  (`fwd.dot(n) >= -0.7`: `RUN` speed along the wall for `WALL_RUN_SIDE` = 2 s at `RUN_GRAVITY` = 0.12 g,
-  entry `vy.min(2)`, **observed** in `actor.rs`) carries it up to 14 m along the wall; this is what
-  crosses Mansion's 10.5 m pit in the corridor floor to each wing, which the 8 m `DROP` search could
-  not pass; in the air the sim steers with the controller's `approach(hv, wish, 10 m/s^2)`).
-  A link a bot is stuck on twice is marked broken and replanned. Jump steps carry the simulated
-  takeoff point (and, for a side run, the heading and the seconds to hold it); the bot runs to it,
-  jumps, keeps that heading in the air and then walks on to the landing node.
+  walking failed and nothing is at 1.4 m height) or **wall climb** (`Jump` with a nonzero `turn`: on the 4 axis
+  directions, run until the capsule touches a wall facing it, jump against it and the controller's run up
+  it (`runW`, 3.3 m in 0.6 s) pushes the capsule over a ledge up to about 3.3 m) or **side wall run** (`Jump`
+  with a `turn`: at a pit with a wall within 2 m at the side, run into that wall at 0.35 or 0.6 rad, jump on
+  touching it and the controller's side run (`RUN` along it for up to 2 s, starting 3.4 m/s up at 10 %
+  gravity, then the jump off it at 35 degrees) carries it along the wall; there is no air control, so the
+  heading is set before the jump). A link a bot is stuck on twice is marked broken and replanned. Jump
+  steps carry the simulated takeoff point (and, for a wall run, the heading and the seconds to hold it); the
+  bot runs to it, a wall run's heading for the last 1.5 m, jumps (a wall run's on touching the wall, a
+  raycast at chest height) and walks on to the landing node.
 - **Nav file** (`<map>.rs.navcache`, ours, not a retail format; `Nav::save` / `Nav::load`): the browser
   build is single-threaded and `Nav::new` takes seconds there (Mansion 4.2 s on one native core), so
   `gunz-pack` builds each map's graph natively and puts the file into that map's pack;
@@ -2302,6 +2323,19 @@ Verification (headless, `.local/shots/bots/`, all `gunz-play GAME MAP ... --time
     started below y 9 were seen above y 12: the rest are slow routes from the pits or still on
     their way); with 12 bots, six scripts in 80 s, one start shared without a failure. `GUNZ_SEED`
     changes nothing about bots (their rng and spawns are by index).
+  - *The 1:1 movement pass* (no air control, a wall run only for a jump pressed against the wall, the
+    jumps off it as in the replays): a kick script now runs into the wall, jumps 3 ticks after first
+    touching it (`TOUCH_TICKS`, pressed into it, so a frame early or late still finds it), runs up it
+    (3.3 m at most) and kicks with forward released (`Kick::inputs`: forward held except on the kick's
+    tick). `kick_replay` also replays 8 runs of 60 Hz frames off by up to 1 ms. **Mansion's y=13 link is
+    gone**: from a kick at most 3.3 m above the gallery the flight tops out 7.2 m up, under the balcony's
+    floor; the original's way up there is wallslashing (kick, slash, dash back, kick), which the nav does
+    not search. Kick links now: castle 1, high haven 1, town 2 (`kick_links` checks Castle and Town at 30,
+    60, 144, 240 Hz and under jitter: 40 of 40 each). Routing (`routing_pairs`), before -> after:
+    battle arena 134 -> 130, blitzkrieg 64 -> 68, classic town 136 -> 134, factory 88 -> 86, halloween
+    town 144 -> 142, high haven 62 -> 60, lost shrine 76 -> 80, skirmish hall 76 -> 77, snow town 144 ->
+    142, stairway 64 -> 56, station 100 -> 92, town 136 -> 134, weapon shop 64 -> 60, mansion 135 -> 124,
+    the rest unchanged; total 2635 -> 2597 of 2794 (94.3 % -> 92.9 %). Nav files are `FORMAT` 3.
   - **`MapCollision::slide_move` zero movement** (the goblin that stood 2 m from the player on
     Mansion's y=6 floor, see "Goblin stuck on Mansion"): `col::tests::open_floor_snag` (`GUNZ_GAME`,
     `--ignored`) scans the floor within 3 m of `(-31.9, 6.0, -30.0)` at 5 cm with three capsules

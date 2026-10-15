@@ -10,8 +10,9 @@
 
 use crate::{
     actor::{
-        FALL, GRAVITY, HEIGHT, JUMP, RADIUS, RUN, RUN_GRAVITY, SLIDE_GRAVITY, WALL_GRACE,
-        WALL_LOSE, WALL_MIN_HEIGHT, WALL_OUT, WALL_RUN_SIDE, WALL_RUN_UP, WALL_UP, climb, wall_run,
+        FALL, GRAVITY, HEIGHT, JUMP, RADIUS, RUN, RUN_GRAVITY, RUN_START_UP, TOUCH_REACH,
+        WALL_CLIMB_OUT, WALL_GRACE, WALL_LOSE, WALL_OUT, WALL_RUN_SIDE, WALL_RUN_UP, WALL_UP,
+        climb, run_jump, wall_run,
     },
     col::{MapCollision, STEP, WALKABLE},
     combat::yaw_of,
@@ -38,16 +39,13 @@ const DT: f32 = 1.0 / 30.0;
 /// covers the deepest map (Stairway: 8 more routes than 8 m).
 const REACH: f32 = 6.5;
 const DROP: f32 = 20.0;
-/// A wall climb jumps when the wall is this close (metres): the wall run up it must begin within
-/// `RUN_UP_WINDOW` of the jump.
-const CLIMB_LEAD: f32 = 2.0;
-/// A side wall run needs a wall within this distance (metres) at the side of the run-up (the jump
-/// must meet it within `RUN_SIDE_WINDOW`), the jump turns into it by one of these angles (radians;
-/// glancing, so the controller's wall run is a side one, `fwd.dot(n) >= -0.7`) and may carry this
-/// far (`WALL_RUN_SIDE` x `RUN` = 12.6 m). *Inferred* values.
+/// A side wall run needs a wall within this distance (metres) at the side of the run-up; the
+/// run-up turns into it by one of these angles (radians, so it meets the wall at a run's angle:
+/// [`wall_run`]), jumps on touching it and may carry this far (`WALL_RUN_SIDE` x `RUN` = 20 m
+/// and the jump off its end). *Inferred* values.
 const SIDE_WALL: f32 = 2.0;
 const SIDE_ANGLES: [f32; 2] = [0.35, 0.6];
-const SIDE_REACH: f32 = 14.0;
+const SIDE_REACH: f32 = 26.0;
 /// A node is taken for a landing spot within this horizontal distance and height difference.
 const SNAP_XZ: f32 = 0.8;
 const SNAP_Y: f32 = 0.6;
@@ -62,7 +60,7 @@ pub const PDT: f32 = 1.0 / 60.0;
 /// values.
 const KICK_RISE: f32 = 3.0;
 const KICK_WALL: f32 = 6.0;
-const KICK_JUMP: u32 = 30;
+const KICK_JUMP: u32 = 45;
 const KICK_AIR: u32 = 70;
 const KICK_TOL: f32 = 0.025;
 const KICK_COST: f32 = 10.0;
@@ -93,9 +91,10 @@ pub struct Search {
 }
 
 /// A wall kick climb script ([`Kind::Kick`]): from a standstill at the takeoff with forward held,
-/// face `run` until tick `jump` (the jump press), face `wall` from then on and press jump again
-/// at tick `kick` (the wall kick). The nav search finds it by simulating the controller
-/// ([`Pawn`]); the bot replays it tick by tick ([`Kick::input`]).
+/// face `run` until tick `jump` (the jump press against the wall: a run up it), face `wall` from
+/// then on and press jump again at tick `kick` with forward released (the kick back off it). The
+/// nav search finds it by simulating the controller ([`Pawn`]); the bot replays it tick by tick
+/// ([`Kick::input`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Kick {
     pub run: f32,
@@ -103,6 +102,23 @@ pub struct Kick {
     pub jump: u32,
     pub kick: u32,
 }
+
+/// The buttons of a [`Kick`] script's ticks: forward held, jump pressed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Press {
+    pub fwd: bool,
+    pub jump: bool,
+}
+
+/// Forward held; forward held with a jump press.
+const PRESS_FWD: Press = Press {
+    fwd: true,
+    jump: false,
+};
+const PRESS_JUMP: Press = Press {
+    fwd: true,
+    jump: true,
+};
 
 /// Where a wall kick leaves a wall ([`Nav::perches`]): the wall's outward normal and the
 /// pawn's position at the kick.
@@ -112,12 +128,19 @@ struct Perch {
 }
 
 impl Kick {
-    /// Facing (yaw) and jump press of tick `n`.
-    pub fn input(&self, n: u32) -> (f32, bool) {
-        (
-            if n <= self.jump { self.run } else { self.wall },
-            n == self.jump || n == self.kick,
-        )
+    /// Facing (yaw) of tick `n`.
+    pub fn yaw(&self, n: u32) -> f32 {
+        if n <= self.jump { self.run } else { self.wall }
+    }
+
+    /// The buttons of ticks `a..=b` (several ticks may fall into one frame): forward held unless
+    /// the kick's tick is among them, jump pressed if its or the run's tick is.
+    pub fn inputs(&self, a: u32, b: u32) -> Press {
+        let has = |n| (a..=b).contains(&n);
+        Press {
+            fwd: !has(self.kick),
+            jump: has(self.jump) || has(self.kick),
+        }
     }
 }
 
@@ -140,8 +163,8 @@ struct Link {
     cost: f32,
     /// Where a [`Kind::Jump`] leaves the ground (the ledge or wall the run-up reaches).
     takeoff: Vec3,
-    /// Heading to face after the jump for `hold` seconds (a side wall run; zero: steer to the
-    /// next node).
+    /// A wall run (up or along a wall): the heading to run in on, jump with on touching the
+    /// wall and hold for `hold` seconds after (zero: a plain jump, steer to the next node).
     turn: Vec3,
     hold: f32,
     kick: Option<Kick>,
@@ -154,7 +177,7 @@ pub struct Step {
     pub kind: Kind,
     /// For [`Kind::Jump`]: the feet position to jump from (on the previous node's floor).
     pub takeoff: Vec3,
-    /// For a side wall run: the heading to hold for `hold` seconds after the jump.
+    /// For a wall run: the heading to run in on and hold for `hold` seconds after the jump.
     pub turn: Vec3,
     pub hold: f32,
     /// For [`Kind::Kick`]: the script to run from a standstill at `takeoff`.
@@ -217,90 +240,102 @@ struct Sim {
 }
 
 /// Runs the controller from `from` along the unit horizontal `dir` at full speed until it stands
-/// on a floor `want` metres away. With `jump` it first runs up to the ledge or wall (at most 1 m)
-/// and jumps from there; with a `lead` it instead runs until a wall stands within `lead` metres
-/// and jumps then, so that the jump peaks at the wall and the wall run (`actor.rs`) climbs on from
-/// there. A non-zero `turn` is the heading the actor faces after the jump (it keeps its speed and
-/// steers with the air control): into a side wall at a glancing angle it wall-runs along it for
-/// `WALL_RUN_SIDE` seconds. `None` when it is blocked, falls too far or goes farther than `reach`.
-#[allow(clippy::too_many_arguments)]
+/// on a floor `want` metres away. With `jump` it first runs up to the ledge (at most 5 ticks) and
+/// jumps from there; with `wall` it instead runs (at most 24 ticks) until it touches a wall and
+/// jumps against it, which must start a wall run of that kind (`Some(true)` along the wall,
+/// `Some(false)` up it: [`wall_run`]); the run ends in the jump off it (`actor.rs`). There is no
+/// air control: the heading stays `dir`. `None` when it is blocked, falls too far or goes farther
+/// than `reach`.
 fn simulate(
     col: &MapCollision,
     from: Vec3,
     dir: Vec3,
     jump: bool,
-    lead: f32,
+    wall: Option<bool>,
     want: f32,
-    turn: Vec3,
     reach: f32,
 ) -> Option<Sim> {
     let mut takeoff = from;
-    if jump {
-        let (steps, chest) = if lead > 0.0 {
-            (16, Vec3::Y)
-        } else {
-            (5, Vec3::ZERO)
-        };
-        for _ in 0..steps {
-            if lead > 0.0 && col.raycast(takeoff + chest, dir, lead).is_some() {
-                break;
-            }
+    // The wall run begun at the takeoff: wall normal, seconds left, along the wall.
+    let mut run = None::<(Vec3, f32, bool)>;
+    if jump || wall.is_some() {
+        for _ in 0..if wall.is_some() { 24 } else { 5 } {
             let m = col.slide_move(
                 takeoff,
                 Vec3::new(dir.x * RUN * DT, -0.05, dir.z * RUN * DT),
                 RADIUS,
                 HEIGHT,
             );
+            if !m.grounded {
+                if wall.is_some() {
+                    return None;
+                }
+                break;
+            }
+            if let Some(kind) = wall
+                && let Some(w) = m.wall
+            {
+                let n = Vec3::new(w.x, 0.0, w.z).normalize_or_zero();
+                col.raycast(m.pos + Vec3::Y * 1.2, -n, RADIUS + TOUCH_REACH)?;
+                (wall_run(dir, n) == Some(kind)).then_some(())?;
+                takeoff = m.pos;
+                run = Some((n, if kind { WALL_RUN_SIDE } else { WALL_RUN_UP }, kind));
+                break;
+            }
             let moved = Vec2::new(m.pos.x - takeoff.x, m.pos.z - takeoff.z).length();
-            if !m.grounded || moved < RUN * DT * 0.3 {
-                if lead > 0.0 {
+            if moved < RUN * DT * 0.3 {
+                if wall.is_some() {
                     return None;
                 }
                 break;
             }
             takeoff = m.pos;
         }
+        if wall.is_some() && run.is_none() {
+            return None;
+        }
     }
-    let face = if turn == Vec3::ZERO || !jump {
-        dir
-    } else {
-        turn
-    };
-    let wish = face * RUN;
     let mut hv = dir * RUN;
-    let (mut pos, mut vy, mut grounded, mut air) =
-        (takeoff, if jump { JUMP } else { 0.0 }, !jump, false);
-    // Wall contact (normal, time) and the wall run in progress (normal, seconds left, along the
-    // wall), as the controller keeps them.
-    let (mut wall, mut run, mut spent) = (None::<(Vec3, f32)>, None::<(Vec3, f32, bool)>, false);
-    let mut side = false;
-    for step in 0..90 {
+    let mut vy = match run {
+        Some((_, _, true)) => RUN_START_UP,
+        Some(_) => climb(0.0),
+        None if jump => JUMP,
+        None => 0.0,
+    };
+    let (mut pos, mut grounded, mut air) = (takeoff, run.is_none() && !jump, false);
+    let (side, mut touched) = (run.is_some_and(|r| r.2), 0.0);
+    for step in 0..120 {
         let t = step as f32 * DT;
         let mut gravity = 1.0;
-        let mut fall = FALL;
         if let Some((n, left, along)) = run {
-            let speed = if left > 0.0 { RUN } else { RUN * 0.5 };
-            hv = if along {
-                (face - n * face.dot(n)).normalize_or_zero() * speed
-            } else {
-                Vec3::ZERO
-            } - n * 1.5;
+            let on = (dir - n * dir.dot(n)).normalize_or_zero();
             if left <= 0.0 {
-                (gravity, fall) = (SLIDE_GRAVITY, FALL);
-            } else if along {
-                gravity = RUN_GRAVITY;
+                // run out: the jump off the wall (forward held: straight up off an up run), if
+                // the wall is still touched
+                run = None;
+                if t - touched < WALL_GRACE {
+                    (hv, vy) = if along {
+                        let v = run_jump(on, n, RUN, vy);
+                        (Vec3::new(v.x, 0.0, v.z), v.y)
+                    } else {
+                        (n * WALL_CLIMB_OUT, WALL_UP)
+                    };
+                }
             } else {
-                vy = climb(WALL_RUN_UP - left);
                 gravity = 0.0;
+                if along {
+                    hv = on * RUN - n * 1.5;
+                    vy = (vy - GRAVITY * RUN_GRAVITY * DT).max(0.0);
+                } else {
+                    hv = -n * 1.5;
+                    vy = climb(WALL_RUN_UP - left);
+                }
+                run = Some((n, left - DT, along));
             }
-            run = Some((n, left - DT, along));
         } else if grounded {
-            hv = wish;
-        } else {
-            // air control
-            hv += (wish - hv).clamp_length_max(10.0 * DT);
+            hv = dir * RUN;
         }
-        vy = (vy - GRAVITY * gravity * DT).max(-fall);
+        vy = (vy - GRAVITY * gravity * DT).max(-FALL);
         let mut d = Vec3::new(hv.x, vy, hv.z) * DT;
         if grounded && vy <= 0.0 {
             d.y = d.y.min(-0.05);
@@ -317,38 +352,15 @@ fn simulate(
             return None;
         }
         (pos, grounded) = (m.pos, m.grounded);
-        air |= !grounded && !jump;
-        if grounded {
-            (run, wall, spent) = (None, None, false);
-        } else if let Some(w) = m.wall {
+        air |= !grounded && !jump && wall.is_none();
+        if let Some(w) = m.wall {
             let n = Vec3::new(w.x, 0.0, w.z).normalize_or_zero();
             hv -= n * hv.dot(n).min(0.0);
-            wall = Some((n, t));
+            touched = t;
         }
-        if jump && !grounded {
-            // A wall run ends when the wall is lost; one starts facing a wall (up) or at a
-            // glancing angle (along) with air below.
-            if wall.is_none_or(|w| t - w.1 > 0.15) {
-                run = None;
-            } else if run.is_none()
-                && !spent
-                && let Some((n, _)) = wall
-                && let Some(along) = wall_run(face, n, t)
-                && col
-                    .raycast(pos + Vec3::Y * 0.05, Vec3::NEG_Y, WALL_MIN_HEIGHT)
-                    .is_none()
-            {
-                (run, spent, side) = (
-                    Some((n, if along { WALL_RUN_SIDE } else { WALL_RUN_UP }, along)),
-                    true,
-                    side | along,
-                );
-                vy = if along {
-                    vy.min(2.0)
-                } else {
-                    vy.max(climb(0.0))
-                };
-            }
+        // A wall run ends on the ground or when the wall is lost.
+        if grounded || t - touched > WALL_LOSE {
+            run = None;
         }
         let far = Vec2::new(pos.x - from.x, pos.z - from.z).length();
         // Pressing against a ledge while rising is fine; only a grounded stall means blocked.
@@ -375,23 +387,21 @@ enum Air {
     Free,
     /// Wall run: wall normal, along the wall (side run) or up it, seconds left.
     Run(Vec3, bool, f32),
-    /// Wall kick animation (no control, no new kick): seconds left.
-    Kick(f32),
+    /// Wall kick animation (no control, no new kick off the same wall): seconds left, the normal.
+    Kick(f32, Vec3),
 }
 
-/// The actor controller's movement (`actor.rs`: jump, wall kick, wall run, air control, gravity)
-/// with forward held, as a plain value so a search can try inputs on it. One [`Pawn::step`] is
-/// one `dt` (a `PDT`).
+/// The actor controller's movement (`actor.rs`: jump, wall run, wall kick and the jumps off a
+/// wall run, gravity; no air control) as a plain value so a search can try inputs on it. One
+/// [`Pawn::step`] is one `dt` (a `PDT`).
 #[derive(Clone, Copy, Debug)]
 struct Pawn {
     pos: Vec3,
     hv: Vec3,
     vy: f32,
     grounded: bool,
-    /// Last wall touched in the air: outward normal and time; when jump was last pressed.
+    /// Last wall touched: outward normal and time.
     wall: Option<(Vec3, f32)>,
-    leap: f32,
-    spent: bool,
     air: Air,
     t: f32,
     /// Seconds per step ([`PDT`] unless a test tries another frame time).
@@ -407,24 +417,20 @@ impl Pawn {
             vy: 0.0,
             grounded: true,
             wall: None,
-            leap: f32::MIN,
-            spent: false,
             air: Air::Free,
             t: 0.0,
             dt: PDT,
         }
     }
 
-    /// One tick facing `yaw` with forward held and a jump press or not.
-    fn step(&mut self, col: &MapCollision, yaw: f32, jump: bool) {
+    /// One tick facing `yaw` with the buttons `p`.
+    fn step(&mut self, col: &MapCollision, yaw: f32, p: Press) {
         let face = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+        let (fwd, mut jump) = (p.fwd, p.jump);
         let now = self.t;
-        if jump {
-            self.leap = now;
-        }
         let lost = now - self.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
         match &mut self.air {
-            Air::Kick(left) => {
+            Air::Kick(left, _) => {
                 *left -= self.dt;
                 if *left <= 0.0 || (self.grounded && now > self.wall.map_or(0.0, |w| w.1) + 0.1) {
                     self.air = Air::Free;
@@ -432,73 +438,90 @@ impl Pawn {
             }
             Air::Run(_, _, left) => {
                 *left -= self.dt;
-                if self.grounded || lost {
+                if self.grounded || lost || !fwd || *left < -0.05 {
                     self.air = Air::Free;
+                } else if *left <= 0.0 {
+                    jump = true;
                 }
             }
             Air::Free => {}
         }
-        let free = self.air == Air::Free;
-        if jump && free && self.grounded {
-            self.vy = JUMP;
-            self.grounded = false;
-        } else if jump
-            && (free || matches!(self.air, Air::Run(..)))
-            && !self.grounded
-            && let Some((n, t)) = self.wall
-            && now - t < WALL_GRACE
-        {
-            // `jump_wallF` (facing the wall) is 30 frames long, the others 40, at 30 fps.
-            self.air = Air::Kick(if face.dot(n) < -0.6 { 1.0 } else { 4.0 / 3.0 });
-            self.hv = n * WALL_OUT;
-            self.vy = WALL_UP;
-            self.wall = None;
-        }
-        if self.air == Air::Free
-            && !self.grounded
-            && !self.spent
-            && !jump
-            && let Some((n, t)) = self.wall
-            && now - t < 0.1
-            && let Some(along) = wall_run(face, n, now - self.leap)
-            && col
-                .raycast(self.pos + Vec3::Y * 0.05, Vec3::NEG_Y, WALL_MIN_HEIGHT)
-                .is_none()
-        {
-            self.air = Air::Run(n, along, if along { WALL_RUN_SIDE } else { WALL_RUN_UP });
-            self.spent = true;
-            self.vy = if along {
-                self.vy.min(2.0)
+        let on_wall = matches!(self.air, Air::Run(..));
+        let touch = self
+            .wall
+            .filter(|&(n, t)| {
+                now - t < WALL_GRACE
+                    && (on_wall
+                        || col
+                            .raycast(self.pos + Vec3::Y * 1.2, -n, RADIUS + TOUCH_REACH)
+                            .is_some())
+            })
+            .map(|w| w.0);
+        let run = touch
+            .filter(|_| fwd)
+            .and_then(|n| wall_run(face, n).map(|along| (n, along)))
+            .filter(|&(_, along)| !along || self.hv.length() >= 0.5 * RUN);
+        let start = |p: &mut Self, (n, along): (Vec3, bool)| {
+            p.air = Air::Run(n, along, if along { WALL_RUN_SIDE } else { WALL_RUN_UP });
+            p.grounded = false;
+            p.vy = if !along {
+                climb(0.0)
+            } else if p.vy > 0.0 {
+                0.0
             } else {
-                self.vy.max(climb(0.0))
+                RUN_START_UP
             };
-        }
-        let wish = face * RUN;
-        let (mut gravity, mut fall) = (1.0, FALL);
-        match self.air {
-            Air::Run(n, along, left) => {
-                let speed = if left > 0.0 { RUN } else { RUN * 0.5 };
-                self.hv = if along {
-                    (face - n * face.dot(n)).normalize_or_zero() * speed
-                } else {
-                    Vec3::ZERO
-                } - n * 1.5;
-                if left <= 0.0 {
-                    (gravity, fall) = (SLIDE_GRAVITY, FALL);
-                } else if along {
-                    gravity = RUN_GRAVITY;
-                } else {
-                    self.vy = climb(WALL_RUN_UP - left);
-                    gravity = 0.0;
+        };
+        if jump && self.air == Air::Free && self.grounded {
+            match run {
+                Some(r) => start(self, r),
+                None => {
+                    self.vy = JUMP;
+                    self.grounded = false;
                 }
             }
-            Air::Kick(_) => {}
-            Air::Free if self.grounded => self.hv = wish,
-            Air::Free => {
-                self.hv += (wish - self.hv).clamp_length_max(10.0 * self.dt);
+        } else if jump
+            && !self.grounded
+            && let Some(n) = touch
+            && !matches!(self.air, Air::Kick(_, from) if from.dot(n) > 0.5)
+        {
+            if let Some(r @ (_, true)) = run
+                && !matches!(self.air, Air::Run(..))
+            {
+                start(self, r);
+            } else {
+                let hv = self.hv;
+                (self.hv, self.vy) = match self.air {
+                    Air::Run(_, true, _) => {
+                        let v = run_jump((hv - n * hv.dot(n)).normalize_or_zero(), n, RUN, self.vy);
+                        (Vec3::new(v.x, 0.0, v.z), v.y)
+                    }
+                    Air::Run(..) if fwd => (n * WALL_CLIMB_OUT, WALL_UP),
+                    Air::Run(..) => (n * WALL_OUT, WALL_UP),
+                    _ => (hv - n * hv.dot(n) + n * WALL_OUT, WALL_UP),
+                };
+                // `jump_wallF` (facing the wall) is 30 frames long, the others 40, at 30 fps.
+                self.air = Air::Kick(if face.dot(n) < -0.6 { 1.0 } else { 4.0 / 3.0 }, n);
+                self.wall = None;
             }
         }
-        self.vy = (self.vy - GRAVITY * gravity * self.dt).max(-fall);
+        let mut gravity = 1.0;
+        match self.air {
+            Air::Run(n, along, left) => {
+                gravity = 0.0;
+                if along {
+                    self.hv = (face - n * face.dot(n)).normalize_or_zero() * RUN - n * 1.5;
+                    self.vy = (self.vy - GRAVITY * RUN_GRAVITY * self.dt).max(0.0);
+                } else {
+                    self.hv = -n * 1.5;
+                    self.vy = climb(WALL_RUN_UP - left);
+                }
+            }
+            Air::Kick(..) => {}
+            Air::Free if self.grounded => self.hv = if fwd { face * RUN } else { Vec3::ZERO },
+            Air::Free => {}
+        }
+        self.vy = (self.vy - GRAVITY * gravity * self.dt).max(-FALL);
         let mut d = Vec3::new(self.hv.x, self.vy, self.hv.z) * self.dt;
         if self.grounded && self.vy <= 0.0 {
             d.y = d.y.min(-0.05);
@@ -509,13 +532,10 @@ impl Pawn {
         if let Some(w) = m.wall {
             let n = Vec3::new(w.x, 0.0, w.z).normalize_or_zero();
             self.hv -= n * self.hv.dot(n).min(0.0);
-            if !m.grounded {
-                self.wall = Some((n, now));
-            }
+            self.wall = Some((n, now));
         }
         if m.grounded {
             self.vy = self.vy.max(0.0);
-            self.spent = false;
         } else if self.vy > 0.0 && moved_up < d.y * 0.5 {
             self.vy = 0.0;
         }
@@ -797,8 +817,8 @@ impl Nav {
     }
 
     /// Up to `KICK_STARTS` main floors to run at `perch` from: `KICK_NEAR` to `KICK_RUN` metres
-    /// in front of it (within 37 degrees of its normal) and 0.8..4.8 m below its height (a jump
-    /// and a wall run climb that much).
+    /// in front of it (within 25 degrees of its normal: a run up a wall) and 0.3..3.3 m below its
+    /// height (the run up the wall climbs that much).
     fn perch_starts(&self, perch: &Perch, island: &[bool]) -> Vec<u32> {
         let (cx, cz) = self.cell(perch.at);
         let r = (KICK_RUN / CELL) as i32;
@@ -812,9 +832,9 @@ impl Nav {
                 let to = Vec3::new(to.x, 0.0, to.z);
                 let along = -to.dot(perch.n);
                 (!island[i as usize]
-                    && (0.8..=4.8).contains(&rise)
+                    && (0.3..=3.3).contains(&rise)
                     && (KICK_NEAR..=KICK_RUN).contains(&along)
-                    && along >= 0.8 * to.length())
+                    && along >= 0.92 * to.length())
                 .then_some(((along - 3.0).abs(), i))
             })
             .collect();
@@ -822,11 +842,11 @@ impl Nav {
         v.into_iter().take(KICK_STARTS).map(|(_, i)| i).collect()
     }
 
-    /// A [`Kick`] from a standstill at `p`, running at the perch: jump at the ticks that leave
-    /// 0.5..1.8 m to the wall (so the wall run starts well inside `RUN_UP_WINDOW` at any frame rate),
-    /// face the run heading or 0.4 rad to either side in the air, wall-run
-    /// up the wall and kick off it ([`Nav::kick_wall`]). The first script that lands on an island
-    /// floor and keeps doing so from every start `KICK_TOL` metres off is taken.
+    /// A [`Kick`] from a standstill at `p`, running at the perch: jump against the wall
+    /// `TOUCH_TICKS` ticks after first touching it (pressed into it, so a frame early or late
+    /// still finds it there; a run up it), then kick off it ([`Nav::kick_wall`]). The first
+    /// script that lands on an island floor and keeps doing so from every start `KICK_TOL` metres
+    /// off is taken.
     fn kick_run(
         &self,
         col: &MapCollision,
@@ -835,35 +855,38 @@ impl Nav {
         perch: &Perch,
         j: u32,
     ) -> Option<(Kick, u32)> {
+        const TOUCH_TICKS: u32 = 3;
         let run = yaw_of(perch.at - p);
         let mut pw = Pawn::new(p);
+        let mut touched = 0;
         for jump in 0..KICK_JUMP {
-            let rest = (pw.pos - perch.at).dot(perch.n);
-            if (0.5..=1.8).contains(&rest) && jump % 2 == 0 {
-                let mut q = pw;
-                q.step(col, run, true);
-                for b in [0.0, 0.4, -0.4] {
-                    let k = Kick {
-                        run,
-                        wall: run + b,
-                        jump,
-                        kick: 0,
-                    };
-                    if let Some(found) = self.kick_wall(col, island, &[j], p, q, k) {
-                        return Some(found);
-                    }
-                }
+            if pw
+                .wall
+                .is_some_and(|(n, t)| pw.t - t < WALL_GRACE && n.dot(perch.n) > 0.9)
+            {
+                touched += 1;
             }
-            pw.step(col, run, false);
-            if !pw.grounded || rest < 0.0 {
+            if touched > TOUCH_TICKS {
+                let mut q = pw;
+                q.step(col, run, PRESS_JUMP);
+                let k = Kick {
+                    run,
+                    wall: run,
+                    jump,
+                    kick: 0,
+                };
+                return self.kick_wall(col, island, &[j], p, q, k);
+            }
+            pw.step(col, run, PRESS_FWD);
+            if !pw.grounded {
                 break;
             }
         }
         None
     }
 
-    /// `q` is the pawn just after the jump of `k`: it flies facing `k.wall` until a wall run up
-    /// a wall begins, then each following tick is tried as the kick tick.
+    /// `q` is the pawn just after the jump of `k`, running up the wall: each following tick is
+    /// tried as the kick tick.
     fn kick_wall(
         &self,
         col: &MapCollision,
@@ -874,28 +897,29 @@ impl Nav {
         mut k: Kick,
     ) -> Option<(Kick, u32)> {
         let mut n = k.jump;
-        while !matches!(q.air, Air::Run(_, false, _)) {
-            if q.grounded || matches!(q.air, Air::Run(..)) || n >= k.jump + KICK_AIR {
-                return None;
-            }
+        while matches!(q.air, Air::Run(_, false, _)) {
             n += 1;
-            q.step(col, k.wall, false);
-        }
-        loop {
-            n += 1;
-            if q.grounded || n >= k.jump + KICK_AIR {
+            if n >= k.jump + KICK_AIR {
                 return None;
             }
             let mut r = q;
-            r.step(col, k.wall, true);
-            if matches!(r.air, Air::Kick(_)) && self.reaches(&r, goals) {
+            r.step(
+                col,
+                k.wall,
+                Press {
+                    fwd: false,
+                    jump: true,
+                },
+            );
+            if matches!(r.air, Air::Kick(..)) && self.reaches(&r, goals) {
                 k.kick = n;
                 if let Some(to) = self.kick_replay(col, island, from, &k) {
                     return Some((k, to));
                 }
             }
-            q.step(col, k.wall, false);
+            q.step(col, k.wall, PRESS_FWD);
         }
+        None
     }
 
     /// Whether the kicked pawn `r`, flying free (walls and ceilings ignored: [`Nav::lands`]
@@ -911,8 +935,9 @@ impl Nav {
     }
 
     /// The island floor node a standstill at `from` and `k` lands on, also from every start
-    /// `KICK_TOL` metres to either side and at 30, 144 and 240 Hz (the wall run must begin inside
-    /// `RUN_UP_WINDOW` of the jump, so a script proved at one frame time alone can miss at another).
+    /// `KICK_TOL` metres to either side, at 30, 144 and 240 Hz and in 8 runs of 60 Hz frames off
+    /// by up to 1 ms (the jump must come on a frame against the wall and the kick on one of the
+    /// run, so a script proved at one frame time alone can miss at another).
     fn kick_replay(
         &self,
         col: &MapCollision,
@@ -921,6 +946,11 @@ impl Nav {
         k: &Kick,
     ) -> Option<u32> {
         let to = self.kick_lands(col, island, from, k, &mut || PDT)?;
+        let mut rng = 12345u32;
+        let mut jitter = move || {
+            rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+            PDT + ((rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.002
+        };
         ([30.0, 144.0, 240.0].iter().all(|hz| {
             self.kick_lands(col, island, from, k, &mut || 1.0 / hz)
                 .is_some()
@@ -929,7 +959,7 @@ impl Nav {
             let off = Vec3::new(a.cos(), 0.0, a.sin()) * KICK_TOL;
             self.kick_lands(col, island, from + off, k, &mut || PDT)
                 .is_some()
-        }))
+        }) && (0..8).all(|_| self.kick_lands(col, island, from, k, &mut jitter).is_some()))
         .then_some(to)
     }
 
@@ -948,9 +978,9 @@ impl Nav {
         let (mut t, mut next) = (0.0f32, 0u32);
         loop {
             let tick = (t / PDT + 1e-3) as u32;
-            let jump = (next..=tick).any(|n| k.input(n).1);
+            let p = k.inputs(next, tick);
             q.dt = dt();
-            q.step(col, k.input(tick).0, jump);
+            q.step(col, k.yaw(tick), p);
             (t, next) = (t + q.dt, tick + 1);
             if tick >= k.kick {
                 return self.lands(col, island, from, q, k.wall);
@@ -973,7 +1003,14 @@ impl Nav {
             if q.grounded {
                 break;
             }
-            q.step(col, yaw, false);
+            q.step(
+                col,
+                yaw,
+                Press {
+                    fwd: false,
+                    jump: false,
+                },
+            );
             if q.pos.y < from.y {
                 return None;
             }
@@ -985,7 +1022,7 @@ impl Nav {
         }
         for _ in 0..60 {
             let d = Vec3::new(goal.x - q.pos.x, 0.0, goal.z - q.pos.z);
-            q.step(col, yaw_of(d), false);
+            q.step(col, yaw_of(d), PRESS_FWD);
         }
         let d = Vec2::new(goal.x - q.pos.x, goal.z - q.pos.z).length();
         (q.grounded && d < SNAP_XZ && (q.pos.y - goal.y).abs() < SNAP_Y).then_some(j)
@@ -1059,7 +1096,7 @@ impl Nav {
                     1.0
                 };
             let mut walked = false;
-            if let Some(sim) = simulate(col, p, dir, false, 0.0, want, Vec3::ZERO, REACH)
+            if let Some(sim) = simulate(col, p, dir, false, None, want, REACH)
                 && let Some(j) = self.snap(sim.land).filter(|&j| j != i)
             {
                 let d = p.distance(self.nodes[j as usize]);
@@ -1083,29 +1120,28 @@ impl Nav {
                 walked = !sim.air;
             }
             // A ledge or gap: jump unless something is in the way at head height; failing that,
-            // a wall on an axis direction: run at it, jump and wall-run up.
+            // a wall on an axis direction: run into it, jump against it and run up it.
             if walked {
                 continue;
             }
             let lands = |s: &Sim| self.snap(s.land).filter(|&j| j != i);
             let hop = if col.raycast(p + Vec3::Y * 1.4, dir, 1.0).is_none() {
-                simulate(col, p, dir, true, 0.0, want, Vec3::ZERO, REACH)
-                    .filter(|s| lands(s).is_some())
+                simulate(col, p, dir, true, None, want, REACH).filter(|s| lands(s).is_some())
             } else {
                 None
             }
-            .map(|s| (s, 1.3, 1.5));
+            .map(|s| (s, 1.3, 1.5, Vec3::ZERO));
             let climb = || {
-                if k % 2 == 0 && col.raycast(p + Vec3::Y, dir, CLIMB_LEAD + 1.0).is_some() {
-                    simulate(col, p, dir, true, CLIMB_LEAD, want, Vec3::ZERO, REACH)
+                if k % 2 == 0 && col.raycast(p + Vec3::Y, dir, RUN * DT * 24.0).is_some() {
+                    simulate(col, p, dir, false, Some(false), want, REACH)
                         .filter(|s| lands(s).is_some())
-                        .map(|s| (s, 1.5, 4.0))
+                        .map(|s| (s, 1.5, 4.0, dir))
                 } else {
                     None
                 }
             };
-            // Failing that, a pit or gap between side walls: jump off the ledge, turn into the
-            // wall at a glancing angle and wall-run along it (the sim sets the landing).
+            // Failing that, a pit or gap between side walls: run into a side wall at a run's
+            // angle, jump against it and run along it (the sim sets the landing).
             let side_run = || {
                 if col
                     .raycast(p + dir * 0.9 + Vec3::Y * 0.5, Vec3::NEG_Y, 1.2)
@@ -1118,13 +1154,14 @@ impl Nav {
                     col.raycast(p + Vec3::Y, wall, SIDE_WALL)?;
                     SIDE_ANGLES.into_iter().find_map(|a| {
                         let turn = Quat::from_rotation_y(s * a) * dir;
-                        simulate(col, p, dir, true, 0.0, want, turn, SIDE_REACH)
+                        simulate(col, p, turn, false, Some(true), want, SIDE_REACH)
                             .filter(|s| s.side && lands(s).is_some())
-                            .map(|s| (s, turn))
+                            .map(|s| (s, 1.5, 6.0, turn))
                     })
                 })
             };
-            if let Some((sim, per_m, fixed)) = hop.or_else(climb)
+            // A wall run's link holds its heading (`turn`, nonzero) from the jump to the landing.
+            if let Some((sim, per_m, fixed, turn)) = hop.or_else(climb).or_else(side_run)
                 && let Some(j) = lands(&sim)
             {
                 let d = p.distance(self.nodes[j as usize]);
@@ -1133,21 +1170,8 @@ impl Nav {
                     kind: Kind::Jump,
                     cost: d * per_m + fixed,
                     takeoff: sim.takeoff,
-                    turn: Vec3::ZERO,
-                    hold: 0.0,
-                    kick: None,
-                });
-            } else if let Some((sim, turn)) = side_run()
-                && let Some(j) = lands(&sim)
-            {
-                let d = p.distance(self.nodes[j as usize]);
-                out.push(Link {
-                    to: j,
-                    kind: Kind::Jump,
-                    cost: d * 1.5 + 6.0,
-                    takeoff: sim.takeoff,
                     turn,
-                    hold: sim.secs + 0.3,
+                    hold: if turn == Vec3::ZERO { 0.0 } else { sim.secs },
                     kick: None,
                 });
             }
@@ -1258,7 +1282,7 @@ impl Nav {
 /// Nav file magic and layout version. Bump `FORMAT` whenever the layout or what [`Nav::new`]
 /// finds changes: files made by an older build are then refused and the nav is built instead.
 const MAGIC: u32 = u32::from_le_bytes(*b"GZNV");
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 /// The box of the map's vertices in Bevy metres: what the nav samples.
 fn bounds(map: &Map) -> (Vec3, Vec3) {
@@ -1617,10 +1641,10 @@ mod tests {
         println!("TOTAL {ok_all}/{all}");
     }
 
-    /// Mansion's wall kick links ([`Kind::Kick`]; needs the retail install, `GUNZ_GAME=<dir>`):
-    /// there is at least one, and a bot that replays it on the clock ([`Kick::input`] by the sum
-    /// of the frame times, as `bot.rs` does) lands on the island at 30..240 Hz and within +-1 ms
-    /// of jitter at 60 Hz, though the search used 1/60 s steps only.
+    /// The wall kick links ([`Kind::Kick`]; needs the retail install, `GUNZ_GAME=<dir>`) of
+    /// Castle and Town: each map has at least one, and a bot that replays it on the clock
+    /// ([`Kick::inputs`] by the sum of the frame times, as `bot.rs` does) lands on the island at
+    /// 30..240 Hz and within +-1 ms of jitter at 60 Hz, though the search used 1/60 s steps only.
     /// `cargo test --release kick_links -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -1628,42 +1652,45 @@ mod tests {
         let Some(vfs) = crate::mrs::retail() else {
             return;
         };
-        let rs = map::find_rs(&vfs, "mansion").unwrap();
-        let col = MapCollision::load(&vfs, &rs).unwrap();
-        let map = map::load(&vfs, &rs).unwrap();
-        let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
-        for v in &map.vertices {
-            let p = Vec3::from(to_bevy(v.pos)) * SCALE;
-            (min, max) = (min.min(p), max.max(p));
-        }
-        let mut nav = Nav::floors(&col, min, max);
-        let island = nav.islands();
-        nav.add_kicks(&col);
-        let mut rng = 12345u32;
-        let mut jitter = move || {
-            rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
-            1.0 / 60.0 + ((rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.002
-        };
-        let mut links = 0;
-        for (i, ls) in nav.links.iter().enumerate() {
-            for (l, k) in ls.iter().filter_map(|l| Some((l, l.kick?))) {
-                links += 1;
-                let from = nav.nodes[i];
-                let run = |dt: &mut dyn FnMut() -> f32| nav.kick_lands(&col, &island, from, &k, dt);
-                for hz in [30.0, 60.0, 144.0, 240.0] {
-                    let to = run(&mut || 1.0 / hz);
-                    println!(
-                        "{from:.2} -> {:.2} at {hz} Hz: {to:?}",
-                        nav.nodes[l.to as usize]
-                    );
-                    assert!(to.is_some(), "{from:?} at {hz} Hz");
-                }
-                let ok = (0..40).filter(|_| run(&mut jitter).is_some()).count();
-                println!("{from:.2} jitter +-1 ms: {ok}/40");
-                assert!(ok >= 36);
+        for name in ["castle", "town"] {
+            let rs = map::find_rs(&vfs, name).unwrap();
+            let col = MapCollision::load(&vfs, &rs).unwrap();
+            let map = map::load(&vfs, &rs).unwrap();
+            let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
+            for v in &map.vertices {
+                let p = Vec3::from(to_bevy(v.pos)) * SCALE;
+                (min, max) = (min.min(p), max.max(p));
             }
+            let mut nav = Nav::floors(&col, min, max);
+            let island = nav.islands();
+            nav.add_kicks(&col);
+            let mut rng = 12345u32;
+            let mut jitter = move || {
+                rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                1.0 / 60.0 + ((rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.002
+            };
+            let mut links = 0;
+            for (i, ls) in nav.links.iter().enumerate() {
+                for (l, k) in ls.iter().filter_map(|l| Some((l, l.kick?))) {
+                    links += 1;
+                    let from = nav.nodes[i];
+                    let run =
+                        |dt: &mut dyn FnMut() -> f32| nav.kick_lands(&col, &island, from, &k, dt);
+                    for hz in [30.0, 60.0, 144.0, 240.0] {
+                        let to = run(&mut || 1.0 / hz);
+                        println!(
+                            "{name} {from:.2} -> {:.2} at {hz} Hz: {to:?}",
+                            nav.nodes[l.to as usize]
+                        );
+                        assert!(to.is_some(), "{name} {from:?} at {hz} Hz");
+                    }
+                    let ok = (0..40).filter(|_| run(&mut jitter).is_some()).count();
+                    println!("{name} {from:.2} jitter +-1 ms: {ok}/40");
+                    assert!(ok >= 36);
+                }
+            }
+            assert!(links > 0, "{name} has no wall kick link");
         }
-        assert!(links > 0, "Mansion has no wall kick link");
     }
 
     /// A three-node graph with every link shape (walk, jump with a turn, kick).

@@ -101,16 +101,19 @@ const WALL_SPARK: f32 = 1.3;
 /// A guard covers this half-angle in front of the guarder (degrees, *inferred*).
 const GUARD_HALF: f32 = 90.0;
 /// Knockback of the blows in horizontal m/s and launch speed (*inferred*; `zeffect.xml` has none
-/// for blades). The actor controller starts the blast chain on `Push.y >= 5`.
+/// for blades). The actor controller starts the blast chain on `Push.y >= 5`. The uppercut's
+/// are **observed** (replays: the victim of a special melee command `10036` type 1 leaves 0.23 s
+/// later at 1 700 cm/s up and 299 cm/s across, 124 launches; it rises 5.8 m), and so is a juggle:
+/// a slash on a launched body that is still in the air resets its vertical speed to about 1 m/s
+/// (10 hits) and an uppercut throws it up at full force again (9); the guides' juggle "can be
+/// continued infinitely".
 const FLINCH_PUSH: f32 = 1.5;
 const KNOCKDOWN_PUSH: f32 = 3.5;
-const UPPERCUT_UP: f32 = 7.0;
+const UPPERCUT_UP: f32 = 17.0;
 const UPPERCUT_BACK: f32 = 3.0;
 const MASSIVE_UP: f32 = 5.5;
 const MASSIVE_BACK: f32 = 5.0;
-/// Air juggle: a hit on an actor already in the blast chain lifts it again, at most this often.
-const JUGGLE_UP: f32 = 5.5;
-const MAX_JUGGLE: u8 = 3;
+const JUGGLE_UP: f32 = 1.0;
 /// Seconds after a switch-cancelled air slash during which switching back to the blade needs no
 /// draw delay (flash step / quick slash; *inferred*).
 const FLASH_WINDOW: f32 = 1.5;
@@ -1082,21 +1085,17 @@ fn resolve(
                 None => None,
                 Some(((_, vm), _)) if vm.blast && vm.grounded => None,
                 Some(((_, vm), vstate)) if vm.blast => {
-                    if vstate.juggle < MAX_JUGGLE {
-                        vstate.juggle += 1;
-                        debug!(
-                            "t={now:.2} melee: tech: juggle {label} x{} ({})",
-                            vstate.juggle, s.blow.name
-                        );
-                        let up = if s.blow.effect == Effect::Launch {
-                            UPPERCUT_UP
-                        } else {
-                            JUGGLE_UP
-                        };
-                        Some(Vec3::Y * up + flat * FLINCH_PUSH)
+                    vstate.juggle = vstate.juggle.saturating_add(1);
+                    debug!(
+                        "t={now:.2} melee: tech: juggle {label} x{} ({})",
+                        vstate.juggle, s.blow.name
+                    );
+                    let up = if s.blow.effect == Effect::Launch {
+                        UPPERCUT_UP
                     } else {
-                        None
-                    }
+                        JUGGLE_UP
+                    };
+                    Some(Vec3::Y * up + flat * FLINCH_PUSH)
                 }
                 Some(((_, vm), vstate)) => match s.blow.effect {
                     Effect::Flinch | Effect::Knockdown => {

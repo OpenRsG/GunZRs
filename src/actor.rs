@@ -69,6 +69,11 @@ pub const FALL: f32 = 30.0;
 /// samples; a gun's 900 cm/s), and in the air it zeroes the vertical speed, then normal gravity
 /// pulls (the first sample after an air dash is `-g * dt` within 0.3 m/s, rising or falling).
 pub const DASH_BURST: f32 = 0.3;
+/// A ground dash runs out after its clip: the speed eases to the walk speed at this many m/s^2
+/// (**observed**: the sampled speed after a ground dash with nothing pressed after it is 999 cm/s
+/// to 0.30 s, then 940, 590, 440, 250, 90 at 0.35-0.60 s, 0 from 0.65 s; 293 dashes; with the
+/// 0.33 s clip about 4.5 m in all).
+const DASH_STOP: f32 = 40.0;
 /// A jump pressed this long before landing jumps on landing.
 const JUMP_BUFFER: f32 = 0.15;
 /// Wall kick: horizontal speed away from the wall and takeoff speed up (**observed**: the
@@ -466,6 +471,8 @@ struct Tech {
     small: bool,
     /// Extended lunge: the velocity the lunge slides at until its hit frame.
     slide: Option<Vec3>,
+    /// A ground dash is running out (`DASH_STOP`).
+    coast: bool,
 }
 
 impl Default for Tech {
@@ -486,6 +493,7 @@ impl Default for Tech {
             guard_at: f32::MAX,
             small: false,
             slide: None,
+            coast: false,
         }
     }
 }
@@ -2031,6 +2039,7 @@ fn drive(
                 total: secs,
             };
             a.restart = true;
+            a.tech.coast = a.grounded;
         }
 
         // A jump pressed against a wall (touched within `WALL_GRACE`, there at chest height unless
@@ -2418,9 +2427,18 @@ fn drive(
             // idle is already at run speed, the first after running is 0); no air control
             // (**observed**: 95 % of 68 000 falling sample pairs keep their horizontal velocity
             // exactly, standing jumps stay at 0)
-            _ if a.grounded => hv = wish,
+            _ if a.grounded => {
+                hv = if a.tech.coast {
+                    approach(hv, wish, DASH_STOP * dt)
+                } else {
+                    wish
+                }
+            }
             _ => {}
         }
+        a.tech.coast &= a.grounded
+            && (matches!(a.state, State::Tumble { .. })
+                || matches!(a.state, State::Free) && hv != wish);
         // extended lunge: the lunge goes on at the dash's velocity until its hit frame
         if let Some(v) = a.tech.slide
             && matches!(a.state, State::Action { clip: "uppercut", t, cancel_from, .. } if t < cancel_from)

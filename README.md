@@ -112,7 +112,7 @@ Defaults follow the original game's `config.xml`; C, T, F5-F9, `[` and `]` are t
 |---|---|
 | Mouse | Aim (cursor is grabbed) |
 | W A S D | Run (full speed at once, stops at once); double-tap a direction to dash |
-| C | Dash in the held direction (forward if none), at run speed; in the air it stops your rise or fall |
+| C | Dash in the held direction (forward if none), at run speed; on the ground it then runs out (about 4.5 m from standing); in the air it stops your rise or fall |
 | Space | Jump; touching a wall in the air: wall kick; pressed right against a wall with W held: wall run (up it when facing it, along it when you meet it at an angle) |
 | Left mouse, left Ctrl | Attack (hold for automatic guns, chain slashes into a combo; with a blade, hold until the charge completes for a massive: the next slash throws it) |
 | Right mouse | Alternative fire: the sword's uppercut (flip), the dagger's lunge |

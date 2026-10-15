@@ -108,9 +108,9 @@ const SUPER_FALL: f32 = 1.5;
 const FLY_WINDOW: f32 = 0.5;
 /// Wall kicks per time in the air (**port limit**: the slash cancel keeps the actor at the wall
 /// and every kick gives a fresh 14 m/s up, so mashing jump + attack climbed any wall or hung
-/// under a roof without end). Two cover every guide technique (wall spring then flying, wall
-/// cancel, multi wall jump, hells climb).
-const KICKS: u8 = 2;
+/// under a roof without end). Three keep the longest chain in the technique scripts (wall
+/// spring, then two advanced wall cancels).
+const KICKS: u8 = 3;
 /// Climb speed (m/s) of a wall hang with forward + jump held.
 const HANG_CLIMB: f32 = 4.0;
 /// Seconds a hang may climb (2 m), and only one hang per time in the air: hanging, kicking

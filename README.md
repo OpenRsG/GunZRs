@@ -184,7 +184,7 @@ shop) so does the D-style one. Each input sequence was played headless and its l
 |---|---|
 | Dash, air dash | C or a double tap: a 16 m/s burst with the game's dash effect; one in the air per jump; a slash out of a dash, a wall kick or a jump gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
 | Dash cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
-| Flying / wall climbing | Wall kick, slash, jump off the wall again at any point of the slash (a jump pressed up to 0.15 s early counts); two kicks per jump, so mashing jump + attack no longer climbs a wall without end (flash climb: slash, switch to a gun and back, jump) |
+| Flying / wall climbing | Wall kick, slash, jump off the wall again at any point of the slash (a jump pressed up to 0.15 s early counts); three kicks per jump, so mashing jump + attack no longer climbs a wall without end (flash climb: slash, switch to a gun and back, jump) |
 | Switch cancel | Switch weapons during an air slash: slash shot (jump, slash, switch to a gun, shoot), flash step (slash, gun, back to the blade: no draw delay) |
 | Reload shot, shimmer shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon, a dagger or sword too |
 | Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |

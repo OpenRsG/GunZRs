@@ -106,6 +106,11 @@ const GRAV_CANCEL_VY: f32 = 4.0;
 const SUPER_FALL: f32 = 1.5;
 /// Seconds after a slash cancelled a wall state during which a jump kicks off the wall again.
 const FLY_WINDOW: f32 = 0.5;
+/// Wall kicks per time in the air (**port limit**: the slash cancel keeps the actor at the wall
+/// and every kick gives a fresh 14 m/s up, so mashing jump + attack climbed any wall or hung
+/// under a roof without end). Two cover every guide technique (wall spring then flying, wall
+/// cancel, multi wall jump, hells climb).
+const KICKS: u8 = 2;
 /// Climb speed (m/s) of a wall hang with forward + jump held.
 const HANG_CLIMB: f32 = 4.0;
 /// Seconds a hang may climb (2 m), and only one hang per time in the air: hanging, kicking
@@ -445,8 +450,8 @@ struct Tech {
     hold_spent: bool,
     /// Seconds of continuous falling.
     fall: f32,
-    /// Kicked off a wall since touching the ground (a further wall run is a multi wall run).
-    kicked: bool,
+    /// Wall kicks since touching the ground (after the first a wall run is a multi wall run).
+    kicks: u8,
     /// The running reload began right after a shot.
     rs: bool,
     /// Last shot's time and slot (`usize::MAX` = none).
@@ -477,7 +482,7 @@ impl Default for Tech {
             hold: 0.0,
             hold_spent: false,
             fall: 0.0,
-            kicked: false,
+            kicks: 0,
             rs: false,
             shot_at: f32::MIN,
             last_shot: usize::MAX,
@@ -2080,6 +2085,7 @@ fn drive(
             && let Some((n, t)) = a.wall
             && g.wall
             && now - t < WALL_GRACE
+            && a.tech.kicks < KICKS
             // out of a kick only off another wall (multi wall run: jump twice)
             && !matches!(a.state, State::Wall { n: from, .. } if from.dot(n) > 0.5)
         {
@@ -2107,6 +2113,11 @@ fn drive(
             } else if now - a.tech.ss_at < TECH_SHOT {
                 debug!("t={now:.2} tech: flash climb {who} (wall jump after a switch cancel)");
             }
+            debug!(
+                "t={now:.2} wall kick {}/{KICKS} {who} y={:.2}",
+                a.tech.kicks + 1,
+                tf.translation.y
+            );
             a.state = State::Wall {
                 anim,
                 left: secs,
@@ -2118,7 +2129,8 @@ fn drive(
             a.tech.jump_at = f32::MIN;
             // every kick is a fresh jump: another wall run, air dash and gravity cancel
             a.wall_spent = false;
-            (a.tech.kicked, a.tech.dashed, a.tech.hold_spent) = (true, false, false);
+            (a.tech.dashed, a.tech.hold_spent) = (false, false);
+            a.tech.kicks += 1;
             // a puff of dust off the wall where the feet pushed (the ring's plane on the wall)
             vfx.write(Vfx::Elu {
                 name: "ef_dust_1m",
@@ -2211,7 +2223,7 @@ fn drive(
                     WALL_RUN_SIDE
                 },
             };
-            if a.tech.kicked {
+            if a.tech.kicks > 0 {
                 debug!("t={now:.2} tech: multi wall run {who}");
             }
             a.wall_spent = true;
@@ -2537,8 +2549,7 @@ fn drive(
             a.air = 0.0;
             a.wall_spent = false;
             a.hang_spent = false;
-            (a.tech.dashed, a.tech.hold_spent, a.tech.kicked, a.tech.fall) =
-                (false, false, false, 0.0);
+            (a.tech.dashed, a.tech.hold_spent, a.tech.kicks, a.tech.fall) = (false, false, 0, 0.0);
         } else {
             a.air += dt;
             let fall = if a.vel.y < 0.0 { a.tech.fall + dt } else { 0.0 };

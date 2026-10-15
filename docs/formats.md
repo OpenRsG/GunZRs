@@ -2421,7 +2421,9 @@ No new file format; **observed** = read from retail data, **inferred** = chosen 
   the same charge. A full charge is held for `MASSIVE_HOLD` 6 s (the blade glints with `ef_sword_flash` every
   0.35 s, a port cue: the retail data has no charge-glow file) and the next click throws it: on the ground `slash`
   (hit at frame 12: the wind-up), in the air `jump_slash1` (hit at frame 9, then the actor is locked, no dash or
-  kick, until it lands and plays `jump_slash2`), with the `massive_swing` effect. The blow: 160 deg, reach x1.2,
+  kick, until it lands and plays `jump_slash2`), with the `massive_swing` effect (a dust eruption about 4 m across,
+  spawned on the thrower; it plays its whole 30-frame animation like every effect, and its meshes fade out within 2 m of
+  the camera, a port choice so your own massive does not fill the screen: `effect::NearFade`). The blow: 160 deg, reach x1.2,
   vertical reach x2 (2.4 m: an air massive thrown 1.4 m up still reaches a standing target), double damage
   (community wiki), throws victims back into the blast chain (`MASSIVE_UP` 5.5, `MASSIVE_BACK` 5 m/s). Checked on the
   training dummies (`--mode training`): ground and air massive each `hits Dummy 1 for 60` (katana 30 x 2).

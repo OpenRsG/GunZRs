@@ -12,6 +12,7 @@ use crate::{
     view::{self, SCALE},
 };
 use bevy::{
+    camera::primitives::Aabb,
     ecs::system::SystemParam,
     image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     mesh::skinning::SkinnedMeshInverseBindposes,
@@ -230,7 +231,7 @@ impl Plugin for FxPlugin {
         app.insert_resource(Clock(self.0))
             .init_resource::<TxaRegistry>()
             .add_plugins(AnimPlugin)
-            .add_systems(Update, (tag_txa, flip_txa, fade_nodes).chain());
+            .add_systems(Update, (tag_txa, flip_txa, fade_nodes, near_fade).chain());
     }
 }
 
@@ -487,6 +488,68 @@ fn fade_nodes(
             if let Some(mut m) = materials.get_mut(&handle.0) {
                 m.base_color = want;
                 if blend {
+                    m.alpha_mode = AlphaMode::Blend;
+                }
+            }
+        }
+    }
+}
+
+/// An effect whose meshes fade out as the camera comes within [`NEAR`] m of them (port choice,
+/// not retail: the 4 m `massive_swing` dust spawned on the player would fill the screen).
+#[derive(Component)]
+pub struct NearFade;
+
+/// Distance (m) from a mesh's bounds at which a [`NearFade`] effect is fully drawn; inside its
+/// bounds it is gone.
+const NEAR: f32 = 2.0;
+
+/// Multiplies the node alpha of [`fade_nodes`] by the camera's distance to each mesh's bounds.
+#[allow(clippy::type_complexity)]
+fn near_fade(
+    mut commands: Commands,
+    roots: Query<Entity, With<NearFade>>,
+    children: Query<&Children>,
+    mut meshes: Query<(
+        &mut MeshMaterial3d<StandardMaterial>,
+        &Aabb,
+        &GlobalTransform,
+        &ChildOf,
+        Has<OwnMaterial>,
+    )>,
+    alphas: Query<&NodeAlpha>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(eye) = camera.iter().next().map(GlobalTransform::translation) else {
+        return;
+    };
+    for root in &roots {
+        for e in children.iter_descendants(root) {
+            let Ok((mut handle, aabb, at, parent, own)) = meshes.get_mut(e) else {
+                continue;
+            };
+            let to = at.affine();
+            let local = to.inverse().transform_point3(eye);
+            let (lo, hi) = (aabb.min(), aabb.max());
+            let off = local - local.clamp(Vec3::from(lo), Vec3::from(hi));
+            let near = (to.transform_vector3(off).length() / NEAR).min(1.0);
+            let alpha = alphas.get(parent.parent()).map_or(1.0, |a| a.0) * near;
+            let Some(cur) = materials.get(&handle.0) else {
+                continue;
+            };
+            if (cur.base_color.alpha() - alpha).abs() < 0.01 {
+                continue;
+            }
+            if !own {
+                let copy = cur.clone();
+                handle.0 = materials.add(copy);
+                commands.entity(e).insert(OwnMaterial);
+            }
+            if let Some(mut m) = materials.get_mut(&handle.0) {
+                m.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);
+                // an alpha-tested mesh would only thin out: blend it while faded
+                if alpha < 1.0 && matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)) {
                     m.alpha_mode = AlphaMode::Blend;
                 }
             }

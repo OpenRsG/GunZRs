@@ -463,7 +463,7 @@ impl Fx {
                     };
                     let life = ani
                         .as_ref()
-                        .map_or(0.5, |(a, _)| a.max_frame as f32 / 160.0 + 0.1);
+                        .map_or(0.5, |(a, _)| a.max_frame as f32 / crate::ani::FPS + 0.1);
                     Ok(Cached { elu, ani, life })
                 };
                 load().map_err(|e| warn!("effect {name}: {e}")).ok()
@@ -476,7 +476,9 @@ impl Fx {
         let model = self
             .loader
             .spawn(assets, commands, "sfx/", &c.elu, c.ani.clone(), at);
-        commands.entity(model.root).insert(Lifetime(c.life));
+        commands
+            .entity(model.root)
+            .insert((Lifetime(c.life), crate::effect::NearFade));
         Some(model.root)
     }
 

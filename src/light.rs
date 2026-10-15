@@ -215,6 +215,7 @@ fn actor_materials(
     meshes: Query<(Entity, Ref<MeshMaterial3d<StandardMaterial>>)>,
     parents: Query<&ChildOf>,
     actors: Query<(), With<Motor>>,
+    effects: Query<(), With<crate::effect::NearFade>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut was: Local<bool>,
 ) {
@@ -231,6 +232,10 @@ fn actor_materials(
         let mut up = e;
         let mut under = false;
         for _ in 0..8 {
+            // an effect on an actor (a massive's dust, a dash) keeps its own unlit look
+            if effects.contains(up) {
+                break;
+            }
             if actors.contains(up) {
                 under = true;
                 break;

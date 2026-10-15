@@ -242,6 +242,7 @@ const WARM: &[&str] = &[
     "flame_mg",
     "flame_shotgun",
     "ef_sword_flash",
+    "massive_swing",
     "sword_damage1",
     "sword_damage2",
     "sword_damage3",

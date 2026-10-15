@@ -52,6 +52,7 @@ pub enum Action {
     Dash,
     Fire,
     Guard,
+    AltFire,
     Reload,
     PrevWeapon,
     NextWeapon,
@@ -71,7 +72,7 @@ pub enum Action {
     SensUp,
 }
 
-const N: usize = 25;
+const N: usize = 26;
 
 impl Action {
     pub const ALL: [Action; N] = [
@@ -83,6 +84,7 @@ impl Action {
         Action::Dash,
         Action::Fire,
         Action::Guard,
+        Action::AltFire,
         Action::Reload,
         Action::PrevWeapon,
         Action::NextWeapon,
@@ -118,9 +120,9 @@ const fn m(b: MouseButton) -> Option<Bind> {
 /// Profile key, label and default bindings of each [`Action`], in its order. The defaults are
 /// the retail `config.xml` ones (DirectInput scan codes; its alternates 256..259 are **inferred**
 /// to be wheel up, wheel down, left and right button: USEWEAPON 29/258, USEWEAPON2 259,
-/// PREVOUSWEAPON 16/256, NEXTWEAPON 18/257). USEWEAPON2 and DEFENCE are one guard here. Dash
-/// (retail AUTODASH_LEFT/RIGHT, unbound there) tumbles the held direction, forward if none;
-/// T and F5..F9 stay as the second taunt/emote keys this port had before rebinding.
+/// PREVOUSWEAPON 16/256, NEXTWEAPON 18/257; DEFENCE 42 is left shift). Dash (retail
+/// AUTODASH_LEFT/RIGHT, unbound there) tumbles the held direction, forward if none; T and F5..F9
+/// stay as the second taunt/emote keys this port had before rebinding.
 const TABLE: [(&str, &str, [Option<Bind>; 2]); N] = [
     ("forward", "Forward", [k(KeyCode::KeyW), None]),
     ("back", "Back", [k(KeyCode::KeyS), None]),
@@ -133,11 +135,8 @@ const TABLE: [(&str, &str, [Option<Bind>; 2]); N] = [
         "Fire",
         [m(MouseButton::Left), k(KeyCode::ControlLeft)],
     ),
-    (
-        "guard",
-        "Guard",
-        [m(MouseButton::Right), k(KeyCode::ShiftLeft)],
-    ),
+    ("guard", "Guard", [k(KeyCode::ShiftLeft), None]),
+    ("alt_fire", "Alt. fire", [m(MouseButton::Right), None]),
     ("reload", "Reload", [k(KeyCode::KeyR), None]),
     (
         "prev_weapon",
@@ -183,6 +182,7 @@ const GROUPS: [(&str, &[Action]); 3] = [
         &[
             Action::Fire,
             Action::Guard,
+            Action::AltFire,
             Action::Reload,
             Action::PrevWeapon,
             Action::NextWeapon,
@@ -512,6 +512,8 @@ impl Controls {
             "mouse_accel" => self.accel = num(ACCEL)?,
             "mouse_accel_cap" => self.accel_cap = num(CAP)?,
             "mouse_raw" => self.raw = flag()?,
+            // the default before the alternative fire had its own key (right mouse is now that)
+            "bind_guard" if v.trim() == "MouseRight,ShiftLeft" => {}
             _ => {
                 let Some(i) = k
                     .strip_prefix("bind_")

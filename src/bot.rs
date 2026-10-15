@@ -138,7 +138,7 @@ const MOVES: [(&str, f32, Need, &str); 15] = [
         "juggle",
         0.5,
         Need::Close,
-        "guard:0.1;guard+attack:0.05;wait:0.25;guard:0.1;jump:0.05;w+dash:0.06;w+attack:0.05;wait:0.12;guard:0.3",
+        "alt:0.05;wait:0.25;guard:0.1;jump:0.05;w+dash:0.06;w+attack:0.05;wait:0.12;guard:0.3",
     ),
     (
         "slashshot",
@@ -174,7 +174,7 @@ const MOVES: [(&str, f32, Need, &str); 15] = [
         "extended flip",
         0.3,
         Need::Close,
-        "guard+w:0.1;guard+w+attack:0.05;w:0.25;w+dash:0.1;wait:0.3",
+        "w+alt:0.1;w:0.25;w+dash:0.1;wait:0.3",
     ),
     (
         "wall cancel",
@@ -203,7 +203,7 @@ const MOVES: [(&str, f32, Need, &str); 15] = [
 ];
 
 /// The D-style techniques of a bot that holds a dagger (same form as [`MOVES`]; the dagger has no
-/// guard, so its guard key is the lunge and the blade moves above stay with the sword).
+/// guard, so its lunge is the alternative fire `alt` and the blade moves above stay with the sword).
 const DAGGER_MOVES: [(&str, f32, Need, &str); 10] = [
     (
         "dagger train",
@@ -233,7 +233,7 @@ const DAGGER_MOVES: [(&str, f32, Need, &str); 10] = [
         "extended lunge",
         0.4,
         Need::Close,
-        "w+dash+guard:0.1;wait:0.5",
+        "w+dash+alt:0.1;wait:0.5",
     ),
     (
         "dagger flash",
@@ -350,9 +350,17 @@ struct BotAi {
     /// Gun technique in progress and seconds until the next may start.
     combo: Option<Combo>,
     combo_cd: f32,
-    /// Seconds an uppercut (guard + click) is still held, and until the next one may start.
+    /// Seconds the alternative-fire press (a blade's uppercut, a dagger's lunge) is still held,
+    /// and until the next launch may be rolled.
     launch: f32,
     launch_cd: f32,
+    juggle_cd: f32,
+    /// What the bot has seen the enemy do (for [`react_time`]): seconds its swing chain has run
+    /// and since it last swung, seconds it has held the guard, seconds it has been airborne.
+    seen_swing: f32,
+    idle_swing: f32,
+    seen_guard: f32,
+    seen_air: f32,
     /// Wall hang climb in progress (seconds in, the wall's outward normal) and its cooldown.
     climb: Option<(f32, Vec3)>,
     climb_cd: f32,
@@ -423,6 +431,11 @@ impl BotAi {
             combo_cd: 3.0,
             launch: 0.0,
             launch_cd: 2.0,
+            juggle_cd: 0.0,
+            seen_swing: 0.0,
+            idle_swing: 0.0,
+            seen_guard: 0.0,
+            seen_air: 0.0,
             climb: None,
             climb_cd: 3.0,
             moves: None,
@@ -571,6 +584,19 @@ fn turn(cur: f32, goal: f32, max: f32) -> f32 {
     cur + d.clamp(-max, max)
 }
 
+/// Seconds a bot needs to react to what it sees the enemy do (a swing, a raised guard, a launch):
+/// 0.55 s at skill 0 to 0.35 s at NORMAL to 0.15 s at 1 (*inferred*; human visual reaction is
+/// 0.2-0.3 s).
+fn react_time(skill: f32) -> f32 {
+    0.15 + 0.4 * (1.0 - skill)
+}
+
+/// How far a skill reaches into the techniques (butterflies, launches, K/D-style moves): none up
+/// to 0.3, everything at 1.0. *Inferred* difficulty curve.
+fn tech_rank(skill: f32) -> f32 {
+    ((skill - 0.3) / 0.7).clamp(0.0, 1.0)
+}
+
 /// Distance (metres) a gun is best used from. *Inferred* from the weapon classes.
 fn gun_range(k: WeaponKind) -> Option<f32> {
     use WeaponKind::*;
@@ -648,8 +674,9 @@ fn is_smoke(load: &Loadout, data: &ActorData, i: usize) -> bool {
                 .is_some_and(|w| w.kind == WeaponKind::Smoke)
     })
 }
+
 /// Seconds a butterfly holds the guard, which must end before the blade's next blow is ready
-/// (katana: strike 0.17 s, ready 0.33 s) or the held click would become the guard's uppercut.
+/// (katana: strike 0.17 s, ready 0.33 s) so that the held click chains the next blow at once.
 /// *Inferred* from `melee.rs`.
 const BUTTERFLY_GUARD: f32 = 0.1;
 /// Seconds a bot holds a mine before it clicks (the draw delay and a little more), and how
@@ -794,6 +821,7 @@ fn bot_ai(
     };
     let dt = time.delta_secs();
     let skill = skill.map_or(0.5, |s| s.0.clamp(0.0, 1.0));
+    let (tech, react_t) = (tech_rank(skill), react_time(skill));
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
     // A* is the one heavy step: one replan starts per frame and all searches share a budget of
     // node expansions (about 2 ms), so a long search spreads over several frames.
@@ -1280,7 +1308,7 @@ fn bot_ai(
             _ => face,
         };
         let face = kicking.map_or(face, |(_, k, _)| k.run);
-        ai.yaw = turn(ai.yaw, face, (3.0 + 6.0 * skill) * dt);
+        ai.yaw = turn(ai.yaw, face, (2.0 + 5.0 * skill) * dt);
         let (s, c) = ai.yaw.sin_cos();
         let mut walk = Vec2::new(
             mv.dot(Vec3::new(c, 0.0, -s)),
@@ -1400,7 +1428,7 @@ fn bot_ai(
                     .raycast(pos + world * 2.5 + Vec3::Y * 0.5, Vec3::NEG_Y, 2.5)
                     .is_some();
             if clear && rnd(&mut ai.rng) < 0.3 + 0.6 * skill {
-                if dash && motor.grounded && rnd(&mut ai.rng) < skill - 0.2 {
+                if dash && motor.grounded && rnd(&mut ai.rng) < 0.8 * tech {
                     // skilled blades jump first and dash in the air (jump dash)
                     debug!("bot {name}: jump dash");
                     (hop, ai.jd) = (true, 0.6);
@@ -1426,7 +1454,7 @@ fn bot_ai(
             && a.time >= a.cancel_from
         {
             ai.air_cd = 1.5;
-            if rnd(&mut ai.rng) < 0.6 * skill {
+            if rnd(&mut ai.rng) < 0.6 * tech {
                 debug!("bot {name}: dash break after {}", a.clip);
                 ai.tap = Some((Vec2::new(ai.strafe, 0.0), 0.0));
             }
@@ -1534,11 +1562,11 @@ fn bot_ai(
             // second; a fresh one every frame shook the gun (and the spectator camera).
             ai.aim_t -= dt;
             if ai.aim_t <= 0.0 {
-                let e = 1.5 - skill;
+                let e = 2.0 - 1.7 * skill;
                 ai.aim_t = 0.3;
                 ai.aim_goal = Vec2::new(
-                    (rnd(&mut ai.rng) - 0.5) * 0.18 * e,
-                    (rnd(&mut ai.rng) - 0.5) * 0.1 * e,
+                    (rnd(&mut ai.rng) - 0.5) * 0.3 * e,
+                    (rnd(&mut ai.rng) - 0.5) * 0.16 * e,
                 );
             }
             ai.aim = ai.aim.lerp(ai.aim_goal, (12.0 * dt).min(1.0));
@@ -1550,15 +1578,36 @@ fn bot_ai(
         }
 
         ai.react -= dt;
-        // Trigger. A melee bot raises its guard against a swing, answers it with the guard's
-        // uppercut, slashes out of a forward dash, and holds `attack` (a charge, which ignores
-        // the guard) against a guarding enemy; a gun bot holds fire when a friend stands in line.
+        // Trigger. A melee bot raises its guard against a swing it has watched for its reaction
+        // time (the first blow of a chain usually lands; a fast slash is over before a NORMAL
+        // bot has reacted), slashes out of a forward dash, and keeps slashing at a guarding enemy
+        // once it has seen the guard (each blocked slash hands that enemy a massive charge); a gun
+        // bot holds fire when a friend stands in line.
         ai.guard_t -= dt;
         ai.parry_cd -= dt;
+        let see = seen.is_some();
+        let blow = see && foe_acting.is_some_and(|a| is_blow(a.clip));
+        ai.idle_swing = if blow { 0.0 } else { ai.idle_swing + dt };
+        if blow {
+            ai.seen_swing += dt;
+        } else if ai.idle_swing > 0.4 {
+            ai.seen_swing = 0.0;
+        }
+        ai.seen_guard = if see && foe_guard {
+            ai.seen_guard + dt
+        } else {
+            0.0
+        };
         let swung = foe_acting.is_some_and(|a| is_blow(a.clip) && a.time < a.secs * 0.7);
-        if melee && seen.is_some() && dist <= reach + 1.0 && swung && ai.parry_cd <= 0.0 {
+        if melee
+            && see
+            && dist <= reach + 1.0
+            && swung
+            && ai.seen_swing >= react_t
+            && ai.parry_cd <= 0.0
+        {
             ai.parry_cd = 0.8;
-            if rnd(&mut ai.rng) < 0.3 + 0.6 * skill {
+            if rnd(&mut ai.rng) < 0.8 * skill {
                 ai.guard_t = 0.7;
                 debug!("bot {name}: guard against {:?}", foe_acting.map(|a| a.clip));
             }
@@ -1566,7 +1615,7 @@ fn bot_ai(
         // Butterfly: right after its own slash lands (the cancel window of the blow, `Acting`
         // `cancel_from`), a melee bot raises the guard for `BUTTERFLY_GUARD` seconds, which
         // `melee.rs` takes as the guard cancel of the recovery, then lets the held click start the
-        // next combo blow. Rolled once per blow: 15 % + 50 % x skill (*inferred*).
+        // next combo blow. Rolled once per blow: 5 % + 60 % x technique rank (*inferred*).
         ai.bf_cd -= dt;
         if let Some(t) = ai.bf {
             ai.bf = (t + dt < BUTTERFLY_GUARD).then_some(t + dt);
@@ -1588,7 +1637,7 @@ fn bot_ai(
             && a.time >= a.cancel_from
         {
             ai.bf_cd = 0.6;
-            if rnd(&mut ai.rng) < 0.15 + 0.5 * skill {
+            if rnd(&mut ai.rng) < 0.05 + 0.6 * tech {
                 (ai.bf, ai.bf_cd) = (Some(0.0), 1.2);
                 debug!("bot {name}: butterfly after {} at {:.2}s", a.clip, a.time);
             }
@@ -1620,37 +1669,45 @@ fn bot_ai(
             && !butterfly
             && (engaged && (melee || ai.firing) && clear && !(intent.guard && swung)
                 || slash && dist <= reach + 2.5);
-        if melee && foe_guard && engaged && !blind && !butterfly {
+        if melee && foe_guard && ai.seen_guard >= react_t && engaged && !blind && !butterfly {
             intent.attack = true;
         }
         if press.is_some() {
             intent.attack = true;
         }
-        // Launch and juggle: a blade holds guard + click for an uppercut; an enemy already in the
-        // air (launched, falling) is launched again so that it stays up. Skilled bots only.
+        // Launch and juggle: a press of the alternative fire is a blade's uppercut (a dagger's
+        // lunge); an enemy already in the air is launched again once the bot has noticed it, so
+        // that it stays up. Rolled rarely at NORMAL, more with the technique rank.
         ai.launch -= dt;
         ai.launch_cd -= dt;
+        ai.juggle_cd -= dt;
         let foe_air = foe_motor.is_some_and(|m| m.blast && !m.grounded);
-        if melee && !blind && seen.is_some() && ai.react <= 0.0 && ai.launch <= 0.0 {
-            if foe_air && dist <= reach + 0.3 && rnd(&mut ai.rng) < 0.2 + 0.7 * skill {
-                debug!("bot {name}: juggle (uppercut on an airborne enemy)");
-                ai.launch = 0.35;
+        ai.seen_air = if see && foe_air {
+            ai.seen_air + dt
+        } else {
+            0.0
+        };
+        if melee && !blind && see && ai.react <= 0.0 && ai.launch <= 0.0 {
+            if foe_air && ai.seen_air >= react_t && dist <= reach + 0.3 && ai.juggle_cd <= 0.0 {
+                ai.juggle_cd = 0.6;
+                if rnd(&mut ai.rng) < 0.7 * tech {
+                    debug!("bot {name}: juggle (uppercut on an airborne enemy)");
+                    ai.launch = 0.1;
+                }
             } else if !foe_air
                 && !foe_guard
                 && dist <= reach
-                && ai.launch_cd <= 0.0
                 && motor.grounded
+                && ai.launch_cd <= 0.0
             {
                 ai.launch_cd = (3.0 + 3.0 * rnd(&mut ai.rng)) * (1.5 - skill);
-                if rnd(&mut ai.rng) < 0.1 + 0.5 * skill {
-                    debug!("bot {name}: launch (guard + click)");
-                    ai.launch = 0.35;
+                if rnd(&mut ai.rng) < 0.05 + 0.6 * tech {
+                    debug!("bot {name}: launch (alt)");
+                    ai.launch = 0.1;
                 }
             }
         }
-        if ai.launch > 0.0 && melee && !blind {
-            (intent.guard, intent.attack) = (true, true);
-        }
+        intent.alt = ai.launch > 0.0 && melee && !blind;
         // Lay the mine once it is in hand and loaded.
         if let (Some(t), Some(s)) = (ai.lay, mine_slot)
             && loadout.current == s
@@ -1678,7 +1735,7 @@ fn bot_ai(
         };
         ai.combo_cd -= dt;
         ai.ss_cd -= dt;
-        let chance = 0.1 + 0.6 * skill;
+        let chance = 0.05 + 0.65 * tech;
         if ai.combo.is_none() && !scripted && !blind && ai.throw.is_none() && ai.lay.is_none() {
             // an air slash, or a launch that has hit (insta-kill: switch to the gun, shoot the
             // enemy in the air), can be switch-cancelled
@@ -1812,7 +1869,7 @@ fn bot_ai(
                 Need::Guns => guns.len() >= 2 && (2.0..12.0).contains(&dist) && floor,
                 Need::Wall => wall.is_some() && (!keys.contains('G') || !guns.is_empty()),
             };
-            if skill >= min && fits && rnd(&mut ai.rng) < 0.3 + 0.6 * skill {
+            if skill >= min && fits && rnd(&mut ai.rng) < 0.05 + 0.85 * tech {
                 let slot = |i: Option<&usize>| i.map_or(String::new(), |i| (i + 1).to_string());
                 let keys = keys
                     .replace('B', &slot(Some(&b)))
@@ -1845,7 +1902,7 @@ fn bot_ai(
             }
         }
         if scripted {
-            (intent.attack, intent.guard, intent.reload) = (false, false, false);
+            (intent.attack, intent.guard, intent.alt, intent.reload) = (false, false, false, false);
         }
 
         ai.log_t -= dt;

@@ -1275,7 +1275,11 @@ the player characters. Quest monsters play it (see "NPC sounds" below).
   1.5 m or more above the victim's feet is a headshot (**inferred**: retail counts headshot kills but
   has no head zone in the data). Clan wars add each side's emblem. LAN protocol 3 carries the
   headshot flag with each kill.
-- **Coverage** (headless run log): surface sets 35/35, voices 13/13, misc cues 33/33, narrator
+- **Swings** (**observed** `sound/effect/effect.xml`): `fx2/MAL02,05,06,07,08` and `FEM02,05,06,07,08` are commented
+  out, so the retail game loads no short voice besides the `*_shot_01..04` pain grunts; a swing plays only
+  `blade_swing`. The port used to shout `mal06/07` on every other swing (**inferred** as exertion), which a player
+  heard as being hit; it no longer does (`mal02`/`fem02` still cry for the Cry emote).
+- **Coverage** (headless run log): surface sets 35/35, voices 9/9, misc cues 33/33, narrator
   25/25, hit beeps + character voices 17/17, zitem `snd_fire/reload/dryfire` 19/19 (`swing`, the
   one name without a file, is aliased to `blade_swing`: **inferred**), weapon items with a
   fire sound 159/159 (mines now `we_trap_fire`), map ambiences 2/2 (Mansion) and 3/3 (Dungeon)
@@ -1616,7 +1620,13 @@ No new file format; how the retail character animations are used (**observed** =
   `normal.y` >= 0.3. Result: Catacomb 46/52, Mansion 0.30 m 304/332, Castle 0.40-0.45 m
   ~120/125, frame-rate independent; 0.9 m+ ledges stay blocked.
 - Wall run (**inferred** from the clip names `runLW/RW/W` + `_down`, `runW_downF/B`): in the air
-  with forward held, touching a wall and at least 0.5 m above the floor, once per jump. Side
+  with forward held, touching a wall and at least 0.5 m above the floor, once per jump, and only
+  within `RUN_UP_WINDOW` 0.2 s (up a wall) / `RUN_SIDE_WINDOW` 0.4 s (along one, the rising part of a jump) of a jump press (the takeoff, or a press in the air; `actor::wall_run`,
+  shared with the nav simulations): the guides start a wall run with the jump itself ("dash
+  towards wall at angle → jump"), and a wall met later in a flight is bumped into, not run on (a
+  player report: jumping next to a wall ran on it; a forward jump 2.6 m from a Mansion wall now bumps
+  it instead of running up it). Facing the wall (`fwd·n < -0.7`) runs up it,
+  a glancing angle (`< 0.1`) along it, facing away does not run (was `< 0.3` at any time). Side
   wall: runs 2 s at `RUN` along it with 10 % gravity (**observed** in replays: dv/dt -250 cm/s^2,
   a run lasts 0.4-2.1 s), then `*_down` with full gravity and no 6 m/s limit (**observed**: dv/dt
   -2500 cm/s^2 down to -12 m/s in 556 samples; was 45 % / 6 m/s, inferred); facing the wall:
@@ -1628,12 +1638,12 @@ No new file format; how the retail character animations are used (**observed** =
   ceiling for up to 9 frames while `runW` kept playing (**port rule**, **inferred**; the replays
   do not say what the original does there). Jump during a wall run = wall kick.
 - Guard (**observed** clips `guard_start`, `guard_idle`, `guard_block1/2`, `guard_cancel`;
-  melee motion types with them only): right mouse / script key `guard` on the ground. The actor
+  melee motion types with them only): left Shift (retail DEFENCE 42) / script key `guard` on the ground. The actor
   carries `Guarding` while raised and is rooted for as long as any guard clip plays on the ground
   (a butterfly's guard too; in the air it keeps its momentum). `melee.rs` asks for the next guard
   clip a frame before the controller's action ends (`clip_over`), so the body never runs free
   between `guard_start` and `guard_idle`. Combat writes `Blocked(entity)` to play a
-  block clip. In the air against a wall the same key is the wall hang ("K-style and D-style techniques"); a dagger has no guard, its press is the lunge.
+  block clip. In the air against a wall the same key is the wall hang ("K-style and D-style techniques"); a dagger has no guard.
   Camera: swept sphere (0.25 m) instead of a ray, and it ducks under low ceilings.
 - Weapon use: shots at `delay` ms; magazine / reserve from `magazine` and `maxbullet - magazine`
   (**inferred** that `maxbullet` counts the magazine); a reload lasts the character's `reload`
@@ -1827,22 +1837,22 @@ the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=d
 | Jump cancel (dash cooldown) | A jump from a ground tumble ends it (jump no longer waits for the tumble); the air dash is still unspent | `tech: jump cancel` |
 | Jump buffer | A jump pressed up to `JUMP_BUFFER` 0.15 s before landing jumps on landing (triple butterfly: jump, slash, block three times) | - |
 | Dash cancel (slash) | A slash out of a tumble gives the air dash back and ends the burst (horizontal speed down to the run speed at most); `melee.rs` starts slashes from a tumble after `DASH_SLASH` 0.05 s | `tech: dash cancel` |
-| Dash shot (half step, yoyo step) | A gun shot during a tumble fires, cuts the tumble (the body keeps its speed) and gives the air dash back, like a slash does (the yoyo half and quarter dash again after their shot) | `tech: dash shot` |
+| Dash shot (half step, yoyo step) | A gun shot during a tumble fires and the tumble goes on (the half step "allows a player to move while shooting"; a player report: the shot used to cut the dash); it gives the air dash back like a slash does, and a reload may start out of the tumble (the yoyo half and quarter shoot, reload and dash again) | `tech: dash shot` |
 | Super dash | The air dash is always available after `SUPER_FALL` 1.5 s of falling | `tech: super dash` |
-| Wall slash cancel, flying | A slash during a wall kick, wall run or hang cancels it (full control, switch, guard); the actor stays at the wall (0.5 m/s into it) and a jump within `FLY_WINDOW` 0.5 s kicks off it again; a kick restores wall run, air dash and gravity cancel | `tech: wall slash cancel`, `tech: wall flying` |
+| Wall slash cancel, flying | A slash during a wall kick, wall run or hang cancels it (full control, switch, guard); the actor stays at the wall (0.5 m/s into it) and a jump within `FLY_WINDOW` 0.5 s kicks off it again, at any point of the air slash ("once you begin the slash, press jump"; it waited for the hit frame before, which made the move a matter of mashing jump + attack), and an air jump is buffered `JUMP_BUFFER` 0.15 s like a ground one; a kick restores wall run, air dash and gravity cancel | `tech: wall slash cancel`, `tech: wall flying` |
 | Wall cancel, advanced wall cancel | A kick may also start from a tumble: wall jump, slash, dash back to the wall, kick again (with a switch to a gun and back between slash and dash: the advanced one). The wall run that a dash into a wall with forward held would start waits a frame after the dash | `tech: wall cancel` |
 | Multi wall jump | During a kick's flight a jump kicks off another wall (normals more than 60 degrees apart): multi wall run, wall run, slash, dash to another wall, jump twice | `tech: multi wall jump` |
 | Flash climb | After a switch cancel (below) a wall jump inside `TECH_SHOT` 1.5 s | `tech: flash climb` |
 | Switch cancel (slash shot, quick slash / flash step) | While an air slash plays, a weapon switch is accepted and cancels the slash; the gun drawn so has no draw delay (slash shot, half step, forbidden step). Switching back to the blade within `FLASH_WINDOW` 1.5 s has no draw delay and no blade delay. A switch is also accepted during a tumble (the tumble goes on) | `tech: switch cancel`, `tech: slash shot`, `tech: flash step` |
 | Reload shot, shimmer shot | A reload started within `RS_WINDOW` 0.5 s of a shot, cancelled by a switch, skips the `SWITCH_DELAY` 0.3 s of the next weapon, a blade included (`Actor::quick_draw`; the magazine stays as it was): reload shot, shimmer shot (gun, shot, reload, dagger, dash), jump shot dash, yoyo half and quarter (stab right after the reload cancel) | `tech: reload cancel`, `tech: reload shot` |
 | Swapshot | Every loadout slot has its own fire delay (`Actor::ready`); a shot from another gun within 0.6 s of the last shot | `tech: swapshot` |
-| Gravity cancel | A slash started in the air at a rising speed <= 4 m/s (near the top of a jump, or falling) zeroes the vertical speed and the gravity for 0.25 s, once per jump | `tech: gravity cancel` |
-| Wall hang, wall hang cancel | Guard held (Shift / right mouse) in the air with any weapon that allows wall moves (a gun's guard has no other use; rocket launchers and machine guns block wall moves), a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, height pinned, pressed into the wall, faces it; plays `runW_downF`). It lasts exactly as long as the guard is held: no time limit and no slide-off (the capsule pressed into a leaning wall would creep up or down it, so its height is held). Forward + jump held climbs at 4 m/s (plays `runW`); a jump without forward kicks off the wall (`jumpwall*`, as from a wall run); releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel` |
-| Multi wall run, aerial wall run | A wall run may start from a tumble or a cancelled action, and a kick restores the once-per-jump wall run (`wall_spent`) | `tech: multi wall run` |
-| Block cancel (quadruple butterfly) | A guard pressed `BLOCK_CANCEL` 0.05 s or more into a slash (combo, finisher, air or dive slash; not the uppercut, the landing slam or a charged swing), before its hit frame, lands the slash at once and goes on as the butterfly guard; the dash pressed with it (a double tap whose second tap comes with the guard, or Dash + guard) leaves the guard at once. The item `delay` (katana 329 ms) still spaces the slashes. A guard held from before the slash is not a press | `tech: block cancel` |
+| Gravity cancel | An air slash (`attack_Jump`, a dagger's `attackS`; not the air massive) started at a rising speed <= 4 m/s (near the top of a jump, or falling) zeroes the vertical speed and the gravity for 0.25 s, once per jump | `tech: gravity cancel` |
+| Wall hang, wall hang cancel | Guard held (Shift) in the air with any weapon that allows wall moves (a gun's guard has no other use; rocket launchers and machine guns block wall moves), a wall touched within 0.1 s, 0.5 m of air below: `State::Hang` (no gravity, height pinned, pressed into the wall, faces it; plays `runW_downF`). It lasts as long as the guard is held, at most `HANG_SECS` 1.2 s, with no slide-off (the capsule pressed into a leaning wall would creep up or down it, so its height is held). Forward + jump held climbs at 4 m/s (plays `runW`); a jump without forward kicks off the wall (`jumpwall*`, as from a wall run); releasing the guard, losing the wall or landing ends it; out of a wall run or a kick's flight it cancels their locked state | `tech: wall hang`, `tech: wall hang cancel` |
+| Multi wall run, aerial wall run | A wall run may start from a tumble or a cancelled action within its window of a jump press, and a kick restores the once-per-jump wall run (`wall_spent`) | `tech: multi wall run` |
+| Block cancel (quadruple butterfly) | A guard pressed `BLOCK_CANCEL` 0.05 s or more into a slash (combo, finisher or air slash; not the uppercut or a massive), before its hit frame, lands the slash at once and goes on as the butterfly guard; the dash pressed with it (a double tap whose second tap comes with the guard, or Dash + guard) leaves the guard at once. The item `delay` (katana 329 ms) still spaces the slashes. A guard held from before the slash is not a press | `tech: block cancel` |
 | Extended flip | A dash out of the uppercut once its blade has landed | `tech: extended flip` |
 | Butterfly | The guard that cancels a blow's recovery (`melee.rs`, from `Phase::Blow` after the hit frame or `Phase::Recover`) is an ordinary rooted guard (`ActionMove::Locked`): holding it on the ground does not move the actor (it was a movable `Control(1.0)` "slide" guard that kept running in the guard pose, a user-reported glitch after mashing attack and guard); dash and jump leave it as before (the guard action is cancellable at once) | `tech: butterfly`, `tech: recovery cancel` |
-| Air butterfly, double / triple BF | The same guard also cancels an air slash (`attack_Jump`, `jump_slash1`) in the air once its hit frame is past (`air_bf`): the guard clips play as a rooted action (no steering), the actor keeps its momentum in the air and may air-dash (the slash gave the dash back), kick a wall or slash again (a click with the air guard up is another air slash, not an uppercut); the guard goes on as the normal guard after landing while the button is held. JUMP, DASH, SLASH, BLOCK and JUMP, SLASH, BLOCK, DASH, SLASH, BLOCK repeat as long as the slash delay allows | `tech: air butterfly` |
+| Air butterfly, double / triple BF | The same guard also cancels an air slash (`attack_Jump`) in the air once its hit frame is past (`air_bf`): the guard clips play as a rooted action (no steering), the actor keeps its momentum in the air and may air-dash (the slash gave the dash back), kick a wall or slash again (a click with the air guard up is another air slash); the guard goes on as the normal guard after landing while the button is held. JUMP, DASH, SLASH, BLOCK and JUMP, SLASH, BLOCK, DASH, SLASH, BLOCK repeat as long as the slash delay allows | `tech: air butterfly` |
 | Quick launch | The same guard cancel after an uppercut | `tech: quick launch` |
 | Insta-kill | After the hit frame of an uppercut (`Acting::cancel_from`) a weapon switch is accepted on the ground as well and cancels the launch recovery (the gun still has the 0.3 s draw delay: the launched actor is airborne for about 0.5 s) | `tech: insta-kill`, `tech: insta-kill shot` |
 | Light step / silent jump | A dash that comes out of a slash (the actor is in a blow action) starts its tumble clip without the clip's `fx_dash` cue (`Tech::silent`) | `tech: light step` |
@@ -1851,7 +1861,7 @@ the `tech:` log lines (`RUST_LOG=gunz::actor=debug,gunz::melee=debug,gunz::bot=d
 | Dagger stab (air) | The dagger has only `attackS` (no `attack_Jump`): the click stabs on the ground and in the air (it used to dive with `jump_slash1`, 1.3 s). Every slash rule applies to it: a stab out of a dash gives the air dash back (dagger train, hop, flash), gravity cancel, wall slash cancel (wall cancel, wall raid), switch cancel | `tech: dash cancel`, `tech: gravity cancel`, `tech: wall slash cancel` |
 | Dagger train, hop, flash, float step, gear tap, triple stab | Dash + stab on the ground (the stab roots the actor: `ActionMove::Root`); jump + dash + stab; a second dash to the other side + stab in the same jump (two or three dashes per jump through the dash cancel); dash, stab, jump out of the stab (float step; the jump takes over once the blade has landed); dash, jump (gear tap: jump cancel); float step plus two more dash + stab | `tech: dash cancel`, `tech: float step`, `tech: jump cancel` |
 | Hells climb, wall raid | Wall hang (guard), forward + jump climbs, a stab out of the hang or the wall run is a wall slash cancel and a jump within `FLY_WINDOW` kicks off again (`wall flying`). The port limits (one hang per jump, 1.2 s, 2 m of climbing) stay, so the climb cannot repeat forever | `tech: wall hang cancel`, `tech: wall slash cancel`, `tech: wall flying` |
-| Lunge | A dagger has no guard (no `guard_idle`): its guard press is the alternative fire (`Melee::lunge_until`, remembered `BUFFER` 0.4 s like a click) and starts, on the ground, the `uppercut` clip (1.5 s, hit at frame 10) as `LUNGE`: it launches (`blast_dagger`) like the flip. The clip's root motion comes after its hit frame: the blade lands where the actor stood (reach 1.9 m + 0.35 m capsule = 2.25 m), then the body travels 5.1 m | `melee ...: lunge strikes at ... at (x, z)`, `idle at (x, z)` |
+| Lunge | A dagger has no guard (no `guard_idle`): its alternative fire (`alt`, right mouse: `Melee::alt_until`, remembered `BUFFER` 0.4 s like a click) starts, on the ground, the `uppercut` clip (1.5 s, hit at frame 10) as `LUNGE`: it launches (`blast_dagger`) like the flip. The clip's root motion comes after its hit frame: the blade lands where the actor stood (reach 1.9 m + 0.35 m capsule = 2.25 m), then the body travels 5.1 m | `melee ...: lunge strikes at ... at (x, z)`, `idle at (x, z)` |
 | Extended lunge (E-lunge) | A lunge that starts in a dash (tumble running), or on the press that starts one (a direction's second tap, or Dash, with the alternative fire the same frame: `Actor::dash_wanted`), is `E_LUNGE`: it slides on at the dash's horizontal velocity and direction, not the facing (`Tech::slide`: the tumble's current speed, or `DASH` 16 m/s for the same-press case), until its hit frame, and its reach doubles (`reach` 2.0: 3.8 m + 0.35 m). Both numbers are **inferred** from the guides' "about 2x range, about 4x distance"; the slide direction is the dash's, so a lunge forward, sideways or backwards each travels 5 m before it strikes (a wall stops it; turning the camera meanwhile aims the blade and the clip's root motion elsewhere, which is the curved E-lunge's extra manoeuvrability; its larger hitbox is not modelled) | `tech: extended lunge ... slides at`, `melee: extended lunge strikes` |
 | Dagger machine | A stab flinches its victim for the `damage` clip (0.33 s) and the plain dagger's `delay` is 0.326 s (0.356 s for the 38-damage ones), so a stab every 0.326 s lands inside the last flinch: the victim stays locked, as the guide says (the 0.356 s daggers leave a 0.02 s gap: "the delay times decide") | `melee: tech: dagger machine` |
 | Dagger juggle | The lunge launches and a stab that hits the airborne victim lifts it again (the juggle rule above) | `melee: tech: juggle` |
@@ -1862,21 +1872,26 @@ Not done: Walk Charge (needs the chat box: outside the game's rules) and macros;
 massive's recoil and a turned hitbox: no such mechanics here); the curved E-lunge's larger hitbox; Fade Shot (gun, tumble,
 shot, reload, dagger, dash) is the same chain as the shimmer and yoyo shots.
 
-Network (`src/net.rs`): the snapshot carries `Intent::dash` (flag bit 6); every other state is derived from the `Intent`
-the host already gets every frame (`walk` taps for the dash, `jump`, `guard`, `slot` through `current`, `reload`,
-`attack`), so a remote actor plays the techniques through the same controller; its position is the client's.
+Network (`src/net.rs`, protocol `VERSION` 4): the snapshot carries `Intent::dash` (flag bit 6) and `Intent::alt` (bit 7); every
+other state is derived from the `Intent` the host already gets every frame (`walk` taps for the dash, `jump`, `guard`, `slot`
+through `current`, `reload`, `attack`), so a remote actor plays the techniques through the same controller; its position is the client's.
 
-Bots (`bot.rs`, all rolled per opportunity and scaled with `--skill`; **inferred** odds): *jump dash* (skill - 0.2
-of the forward dashes of a blade: jump, then dash in the air, slash from it), *dash break* (60 % x skill: dash
-sideways after an air slash), *air butterfly* (the butterfly roll below, now also after `attack_Jump` / `jump_slash1`),
-*slash shot* (10 % + 60 % x skill after an air slash lands: switch to a gun with ammo, click), *insta-kill* (the same
-roll after an uppercut that hit while the enemy is in the air), *reload shot* and *swapshot* (the same odds, with
-two guns at 3-30 m: reload shots above skill 0.5),
-*launch* (10 % + 50 % x skill while next to a standing enemy, guard + click) and *juggle* (20 % + 70 % x skill:
-uppercut again on an enemy in the air; `Intent` guard + attack, quick launch through the butterfly roll that now also
-covers `uppercut`), and *hang climb* (skill >= 0.3, an enemy 2-7 m above within 7 m and no walkable way, a wall within
-1.4 m towards it: jump, guard in the air, forward + jump until the feet pass the enemy's; gives up after 4 s). Wall
-kick scripts of the route stay untouched (a bot in a kick script never slashes).
+Bots (`bot.rs`, all rolled per opportunity and scaled with `--skill`; **inferred** odds). Two curves pace them like a
+person (a player report: the bots were "a little too incredible"): `react_time` = 0.15 + 0.4 x (1 - skill) s (0.35 s
+at NORMAL 0.5) before the bot acts on what it saw the enemy start (a swing chain, a raised guard, a launched body), and
+`tech_rank` = (skill - 0.3) / 0.7 clamped to 0..1 (0.29 at NORMAL) for the techniques: *jump dash* (0.8 x rank of the
+forward dashes of a blade: jump, then dash in the air, slash from it), *dash break* (60 % x rank: dash sideways after
+an air slash), *air butterfly* (the butterfly roll below, also after `attack_Jump`), *slash shot* (5 % + 65 % x rank
+after an air slash lands: switch to a gun with ammo, click), *insta-kill* (the same roll after an uppercut that hit
+while the enemy is in the air), *reload shot* and *swapshot* (the same odds, with two guns at 3-30 m: reload shots
+above skill 0.5), *launch* (5 % + 60 % x rank while next to a standing enemy: a 0.1 s press of the alternative fire)
+and *juggle* (70 % x rank, at most every 0.6 s, once the enemy has been in the air for `react_time`: the same press;
+quick launch through the butterfly roll that also covers `uppercut`), and *hang climb* (skill >= 0.3, an enemy 2-7 m
+above within 7 m and no walkable way, a wall within 1.4 m towards it: jump, guard in the air, forward + jump until the
+feet pass the enemy's; gives up after 4 s). Wall kick scripts of the route stay untouched (a bot in a kick script
+never slashes). Measured against the old odds (`.local/bots/`, Mansion 1v1, 40 runs per skill): at NORMAL juggles 71
+-> 0, launches 7 -> 2, butterflies 49 -> 29, guard decisions 76 -> 38, gun damage on an idle player 12+ m away in
+8 x 60 s 133 -> 60; at skill 1 about as strong as before.
 
 *Technique moves* (`bot.rs` `MOVES`): the 15 guide techniques below as `--script` key strings that a bot plays
 through `Script::play` (`B`, `G`, `H` become the blade's and two guns' slots). Every 1.5-4.5 s x (1.6 - skill) in a
@@ -1885,7 +1900,7 @@ blade fight one move is drawn; it runs when the skill reaches its rank (butterfl
 step and flash step 0.6, advanced wall cancel and multi wall run 0.7, quadruple butterfly and forbidden step 0.85),
 what it needs is there (the enemy within reach for the blade moves, a gun with ammo and the enemy 2-12 m away for the
 gun moves, two guns for the forbidden step, a tall wall 1.5-4 m ahead which the bot turns to for the wall moves,
-ground 2.5 m ahead) and a roll of 30 % + 60 % x skill passes. Observed in two runs each of `gunz-play Mansion --mode
+ground 2.5 m ahead) and a roll of 5 % + 85 % x `tech_rank` passes. Observed (before the pacing above) in two runs each of `gunz-play Mansion --mode
 tdm --bots 8 --skill S --script wait:90 --time 90` (`RUST_LOG=gunz::bot=debug`, `bot X: move NAME`): skill 0 none,
 skill 0.5 6 and 2 moves (wall cancel, half step, juggle, double butterfly, wall hang cancel), skill 1 23 (12 of the 15
 kinds, forbidden step and advanced wall cancel among them) and 7.
@@ -2170,11 +2185,12 @@ the executable is packed).
   (default 0.5) scales reaction (0.6-1.2 s x (1.5 - skill)), aim error (+-5 deg x (1.5 - skill)), turn
   rate, hop/tumble rates, the retreat threshold and the odds of the moves below. Idle bots wander
   between spawn points. `RUST_LOG=gunz::bot=debug` prints per-bot state every 2 s.
-- **GunZ moves** (inferred, `bot.rs`): a blade bot guards when an enemy blow starts (`Acting` clip
-  `attack*`/`slash`/`uppercut`/`jump_slash*` in its first 70 %; chance 30 % + 60 % x skill per swing, guard
-  0.7 s), answers with `attack` while guarding (the guard's uppercut) once the blow is over, holds
-  `attack` against a guarding enemy (the held click charges a massive swing, which ignores the guard),
-  and **K-style dashes**: 3-8 m from an enemy it double-taps forward and slashes from 0.35 s into the
+- **GunZ moves** (inferred, `bot.rs`): a blade bot guards when an enemy blow it has watched for `react_time` is
+  still in its first 70 % (`Acting` clip `attack*`/`slash`/`uppercut`/`jump_slash*`; chance 80 % x skill per swing,
+  guard 0.7 s; a single fast slash usually lands on a NORMAL bot), holds `attack` against an enemy whose guard it
+  has seen up for `react_time` (each blocked slash hands that enemy a massive charge; bots never charge one themselves),
+  and its turn rate is 2 + 5 x skill rad/s; gun aim errs by up to 0.15 x (2 - 1.7 x skill) rad sideways. Plus
+  **K-style dashes**: 3-8 m from an enemy it double-taps forward and slashes from 0.35 s into the
   dash. Flashbang (`projectile::Flashed`): the bot sees nothing, stumbles at half speed, never attacks
   or jumps; smoke (`projectile::smoke_blocks`) and walls cut its sight. A bot short of health (< 70 %),
   armour (< 50 %) or ammo (a gun without spare magazine) walks to the nearest ready `WorldItem` of that
@@ -2202,9 +2218,9 @@ the executable is packed).
   Perf with 8 bots (`--bots 8 --mode tdm --script wait:40`, `GUNZ_FRAMETIMES=1`): `[perf] play:
   frames=2459 p50=16.7 p99=16.8 max=222.0` (one load hitch, the graph build is 1.0 s).
 - **Butterfly** (inferred, `bot.rs`): after its own `attack1..4` has reached `Acting::cancel_from` (the
-  hit frame), a melee bot rolls 15 % + 50 % x skill once per blow and raises the guard for 0.1 s
+  hit frame), a melee bot rolls 5 % + 60 % x `tech_rank` once per blow and raises the guard for 0.1 s
   (`melee.rs` takes it as the guard cancel of the recovery, and the 0.1 s ends before the weapon's next
-  blow is ready, or the held click would turn into the guard's uppercut), then the held `attack`
+  blow is ready), then the held `attack`
   starts the next combo blow. The existing guard against incoming slashes is unchanged.
 
 Verification (headless, `.local/shots/bots/`, all `gunz-play GAME MAP ... --time T --shot`):
@@ -2352,14 +2368,28 @@ No new file format; **observed** = read from retail data, **inferred** = chosen 
 - **Hit frame** (**inferred**): the frame of the fastest sword-hand tip (`R Finger0Nub`, FK on the `.ani` keys) is
   when the blade lands (katana `attack1..4` 5/7/10/10, `uppercut` 8, `slash` 12); no entry = 45 % of the clip.
   Logs show the strike at exactly that frame: `attack1` at +0.167 s, `attack2` +0.233, `attack3` +0.333.
-- **Controls** (same `Intent` for player and bots): click = next combo blow `attack1..4` (4th knocks down) with
-  `_ret` recovery between; click buffered 0.4 s. `attack` held 0.5 s from the click = `charge` (2 s clip); released
-  at >= 0.4 s = `slash` (massive: 160 deg, reach x1.2, +50 % at 1.2 s, throws victims into the blast chain, ignores
-  the guard). `guard` held = `guard_start` -> `guard_idle`, blocks frontal (+-90 deg) melee with `guard_block1/2`
-  (after `guard_block1` the `guard_block1_ret` return clip plays, motion types 1, 13, 14, 15; `block2` has none),
-  `guard_cancel` on release; `attack` while guarding = `uppercut` (launch `Push.y` 7, blast_fall).
+- **Controls** (same `Intent` for player and bots; retail `config.xml` USEWEAPON, USEWEAPON2, DEFENCE): click = next
+  combo blow `attack1..4` (4th knocks down) with `_ret` recovery between; click buffered 0.4 s. In the air every click
+  is the air slash `attack_Jump`, rising or falling (it used to be the dive `jump_slash1` when falling, which locked
+  the actor until it landed: a player report, "the Throw Massive animation ... butterfly impossible"). The
+  alternative fire (`alt`, right mouse; buffered 0.4 s) on the ground = `uppercut` (launch `Push.y` 7, blast_fall),
+  also straight out of a guard or a blow's recovery; a dagger's is the lunge. `guard` held (left Shift) =
+  `guard_start` -> `guard_idle`, blocks frontal (+-90 deg) melee, a massive too, with `guard_block1/2` (after
+  `guard_block1` the `guard_block1_ret` return clip plays, motion types 1, 13, 14, 15; `block2` has none),
+  `guard_cancel` on release; a click while guarding on the ground waits for the guard to come down.
+- **Massive** (the guides: "hold the left button on the mouse until the hilt is fully glowing"; "the other way to
+  get a massive" is a successful block; **inferred** timings): `attack` held 0.5 s from the click = `charge` (2 s
+  clip); at 1.2 s into it the charge is full (`fx_chargecomplete`). A blocked slash (not a massive) gives the guarder
+  the same charge. A full charge is held for `MASSIVE_HOLD` 6 s (the blade glints with `ef_sword_flash` every
+  0.35 s, a port cue: the retail data has no charge-glow file) and the next click throws it: on the ground `slash`
+  (hit at frame 12: the wind-up), in the air `jump_slash1` (hit at frame 9, then the actor is locked, no dash or
+  kick, until it lands and plays `jump_slash2`), with the `massive_swing` effect. The blow: 160 deg, reach x1.2,
+  vertical reach x2 (2.4 m: an air massive thrown 1.4 m up still reaches a standing target), double damage
+  (community wiki), throws victims back into the blast chain (`MASSIVE_UP` 5.5, `MASSIVE_BACK` 5 m/s). Checked on the
+  training dummies (`--mode training`): ground and air massive each `hits Dummy 1 for 60` (katana 30 x 2).
+  Releasing before the charge is full plays `cancel` (the void slash's reset) and holds nothing.
 - **Cancels** (**inferred** windows): guard during a recovery = butterfly (combo continues for 0.9 s after);
-  jump or tumble once the blade has landed = K-style (`attack_Jump` / `jump_slash1` from the air, combo continues 0.9 s).
+  jump or tumble once the blade has landed = K-style (`attack_Jump` from the air, combo continues 0.9 s).
   Reach 2.55 m, arc 45 deg half-angle for katana slashes; vertical reach 1.2 m.
 - Verification (headless, `.local/melee/run.sh NAME SCRIPT TIME --bots N --bots-ahead M --skill 0`, shots and logs in
   `.local/shots/Melee/`): `combo4` (4 hits at +0.17/0.23/0.33/0.35 s of each clip), `uppercut_b` (Push y 7 launch),
@@ -2510,19 +2540,22 @@ USEWEAPON2 259, PREVOUSWEAPON 16 (Q) alt 256, NEXTWEAPON 18 (E) alt 257, FORWARD
 TAUNT/BOW/WAVE/LAUGH/CRY/DANCE 79/80/81/75/76/77 (numpad 1 2 3 4 5 6), DEFENCE 42 (left Shift),
 MOUSESENSITIVITYDEC/INC 26/27 ([ ]), AUTODASH_LEFT/RIGHT unbound. Codes 256..259 are **inferred** to be wheel
 up, wheel down, left and right mouse button (they sit where a mouse action belongs). The port keeps those
-defaults with USEWEAPON2 and DEFENCE as one Guard (right mouse, left Shift), adds Dash (C: the held direction's
-tumble, forward if none) and keeps T and F5..F9 as second taunt/emote keys. Esc is not rebindable.
+defaults: Guard is DEFENCE (left Shift), Alt. fire is USEWEAPON2 (right mouse: the sword's uppercut, the dagger's
+lunge; they used to be one Guard on both, with the uppercut on guard + click, which a player found "outta wack"
+and left no key for the flip). It adds Dash (C: the held direction's tumble, forward if none) and keeps T and
+F5..F9 as second taunt/emote keys. Esc is not rebindable.
 
 Profile keys (missing ones keep the default): `mouse_sens` (0.1..5, times 0.0025 rad per count: 8 cm per 360 at
 800 DPI at 1), `mouse_vertical` (0.5..2, vertical speed relative to horizontal), `mouse_invert` (0|1),
 `mouse_accel` (0..1) and `mouse_accel_cap` (1..4): the gain is `min(1 + 0.05·accel·v, cap)` with `v` the frame's
 mouse speed in counts per millisecond (**inferred** curve, the linear Quake-style one), `mouse_raw` (0|1, browser
 only: asks the pointer lock for `unadjustedMovement`; the desktop build reads raw device motion anyway), and
-`bind_NAME=FIRST,SECOND` per action (`forward back left right jump dash fire guard reload prev_weapon next_weapon
-melee primary secondary item1 item2 score taunt bow wave laugh cry dance sens_down sens_up`), each a Bevy
+`bind_NAME=FIRST,SECOND` per action (`forward back left right jump dash fire guard alt_fire reload prev_weapon
+next_weapon melee primary secondary item1 item2 score taunt bow wave laugh cry dance sens_down sens_up`), each a Bevy
 `KeyCode` name (`KeyW`, `ShiftLeft`, `Numpad1`, ...), `MouseLeft|MouseRight|MouseMiddle|MouseBack|MouseForward`,
-`WheelUp|WheelDown` or `-`. Binding an input takes it off any other action. The browser's touch controls hold
-actions directly (`controls::Pad`), so they work whatever the keys are bound to.
+`WheelUp|WheelDown` or `-`. A saved `bind_guard=MouseRight,ShiftLeft` (the old shared default) is ignored, so old
+profiles get the split defaults. Binding an input takes it off any other action. The browser's touch controls
+hold actions directly (`controls::Pad`; FLIP is the alternative fire), so they work whatever the keys are bound to.
 
 ### Explosions (`src/boom.rs`, `gfx::Knob::Explosions`, `light.rs`; **not retail**)
 

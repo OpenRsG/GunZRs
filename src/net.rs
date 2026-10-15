@@ -31,7 +31,7 @@ use std::{
 /// TCP port of the host, and the UDP port it answers LAN probes on.
 pub const PORT: u16 = 7790;
 const MAGIC: &[u8; 4] = b"GZRS";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 const PROBE: &[u8] = b"GZRS?";
 const ANSWER: &[u8] = b"GZRS!";
 /// A peer that lets this much unsent data pile up has stalled: it is dropped.
@@ -230,7 +230,7 @@ impl Snap {
     fn write(&self, w: &mut W) {
         let i = &self.intent;
         let flags = [
-            i.jump, i.attack, i.reload, i.guard, i.taunt, self.dead, i.dash,
+            i.jump, i.attack, i.reload, i.guard, i.taunt, self.dead, i.dash, i.alt,
         ]
         .iter()
         .enumerate()
@@ -279,6 +279,7 @@ impl Snap {
             reload: bit(2),
             slot: None,
             guard: bit(3),
+            alt: bit(7),
             taunt: bit(4),
             dash: bit(6),
             emote: match emote {

@@ -330,8 +330,11 @@ pub struct Intent {
     pub reload: bool,
     /// Weapon slot to switch to.
     pub slot: Option<usize>,
-    /// Guard held (right mouse; melee weapons only): see [`Guarding`].
+    /// Guard held (DEFENCE, left shift; melee weapons only): see [`Guarding`].
     pub guard: bool,
+    /// Alternative fire held (USEWEAPON2, right mouse; the controller acts on the press): the
+    /// sword's uppercut, the dagger's lunge.
+    pub alt: bool,
     /// Dash held (the controller acts on the press): a tumble towards the held direction
     /// (forward if none), the same as a double tap of that direction.
     pub dash: bool,

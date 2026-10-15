@@ -113,9 +113,10 @@ Defaults follow the original game's `config.xml`; C, T, F5-F9, `[` and `]` are t
 | Mouse | Aim (cursor is grabbed) |
 | W A S D | Run (full speed at once, stops at once); double-tap a direction to dash |
 | C | Dash: a 16 m/s burst in the held direction (forward if none) |
-| Space | Jump; near a wall in the air: wall kick; along a wall with W held: wall run |
-| Left mouse, left Ctrl | Attack (hold for automatic guns, chain slashes into a combo) |
-| Right mouse, left Shift | Guard (melee) |
+| Space | Jump; near a wall in the air: wall kick; jumping with W held right at a wall: wall run (up it when facing it, along it at a glancing angle) |
+| Left mouse, left Ctrl | Attack (hold for automatic guns, chain slashes into a combo; with a blade, hold until the charge completes for a massive: the next slash throws it) |
+| Right mouse | Alternative fire: the sword's uppercut (flip), the dagger's lunge |
+| Left Shift | Guard (melee); a slash you block gives you a massive charge |
 | R | Reload |
 | 1-5, Q / E, wheel | Switch weapon (Q and wheel up: previous; E and wheel down: next) |
 | Tab | Scoreboard |
@@ -183,18 +184,19 @@ shop) so does the D-style one. Each input sequence was played headless and its l
 |---|---|
 | Dash, air dash | C or a double tap: a 16 m/s burst with the game's dash effect; one in the air per jump; a slash out of a dash, a wall kick or a jump gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
 | Dash cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
-| Flying / wall climbing | Wall kick, slash, jump off the wall again, repeat (flash climb: slash, switch to a gun and back, jump) |
+| Flying / wall climbing | Wall kick, slash, jump off the wall again at any point of the slash (a jump pressed up to 0.15 s early counts), repeat (flash climb: slash, switch to a gun and back, jump) |
 | Switch cancel | Switch weapons during an air slash: slash shot (jump, slash, switch to a gun, shoot), flash step (slash, gun, back to the blade: no draw delay) |
 | Reload shot, shimmer shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon, a dagger or sword too |
 | Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |
-| Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump |
-| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift / right mouse) with any weapon that allows wall moves: you cling for up to 1.2 s, once per jump; forward + jump climbs up to 2 m, jump alone kicks off the wall, letting go drops |
+| Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump; every air slash is the quick `attack_Jump` swing, rising or falling |
+| Massive | Hold attack with a sword until the charge completes (a chime, the blade glints), or block a slash: you hold a massive charge for 6 s and the next slash throws it, double damage and a knock-back; on the ground with a wind-up, in the air at once, locked in the throw until you land. A guard facing it stops it |
+| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift) with any weapon that allows wall moves: you cling for up to 1.2 s, once per jump; forward + jump climbs up to 2 m, jump alone kicks off the wall, letting go drops |
 | Butterfly | Slash, then guard before the recovery ends: the guard cancels the recovery (it roots you like any guard); jump or dash out of it |
 | Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block; jump, slash, block, dash, slash, block; or jump, slash, block three times (a jump pressed just before landing is kept) |
 | Block cancel (quadruple BF) | Guard during a slash lands the hit at once and goes straight to the guard; press guard with the next direction for the glitch rhythm |
-| Quick launch, juggle | Uppercut (guard + attack), guard to cancel its recovery; an uppercut on an airborne launched enemy keeps them up; flip, block, jump, dash, slash, block |
+| Quick launch, juggle | Uppercut (right mouse), guard to cancel its recovery; an uppercut on an airborne launched enemy keeps them up; flip, block, jump, dash, slash, block |
 | Extended flip | Dash right out of the uppercut |
-| Half step, reload half step, forbidden step | A shot during a dash fires and ends the dash; mix with slashes, switches and reloads |
+| Half step, reload half step, forbidden step | A shot during a dash fires and the dash goes on (it gives the air dash back); reload out of it, mix with slashes and switches |
 | Wall cancel, advanced wall cancel | Dash back into a wall and kick off it again (with a switch cancel in between for the advanced one) |
 | Multi wall run | Dash at a wall at about 45 degrees and jump twice: a second kick off another wall |
 | Wall hang cancel | Guard against a wall ends a wall run or a kick's flight in a hang |
@@ -202,7 +204,7 @@ shop) so does the D-style one. Each input sequence was played headless and its l
 | Insta-kill | Uppercut, then switch to a gun right after it hits and shoot the airborne enemy |
 | Light step | A dash right after a slash makes no dash sound |
 
-D-style (dagger; it has no guard, so the right mouse / Shift is its alternative fire):
+D-style (dagger; it has no guard, its alternative fire on the right mouse is the lunge):
 
 | Technique | How |
 |---|---|
@@ -211,7 +213,7 @@ D-style (dagger; it has no guard, so the right mouse / Shift is its alternative 
 | Float step, gear tap, triple stab | Dash, stab, jump; dash, jump; float step then two more dash + stab |
 | Wall cancel, hells climb, wall raid | Kick, stab, dash back at the wall, kick again; hang, forward + jump, stab, jump; wall run, stab, jump at once |
 | Shimmer shot, jump shot dash | Gun, shot, reload, dagger, dash; the same after a jump |
-| Yoyo step, yoyo half and quarter, blink step | Jump with the gun, dash at the top, shot, reload; then dagger, dash to the other side, stab, dash (a shot cuts a dash and gives it back); blink step: jump with the dagger, dash, switch to the gun, shot |
+| Yoyo step, yoyo half and quarter, blink step | Jump with the gun, dash at the top, shot, reload; then dagger, dash to the other side, stab, dash (a shot in a dash gives the air dash back); blink step: jump with the dagger, dash, switch to the gun, shot |
 | Lunge, extended lunge | Alternative fire on the ground lunges and launches. Start it in a dash, or on the press of a direction's second tap (or Dash): the lunge slides about 5 m in the dash's direction (forward, sideways, backwards) before it strikes, with twice the reach (a target 8 m away is hit; a plain lunge reaches 2.25 m) |
 | Dagger machine, dagger juggle | Stab every 0.33 s and the target stays flinched; stab a launched target to keep it up |
 | Block tap | A guarded stab recoils you; look all the way up or down while stabbing and it does not |
@@ -221,7 +223,9 @@ Not in: Walk Charge (needs the chat box) and macros, Ghost Evade, Magic Switch, 
 
 Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly (dagger carriers: the dagger
 train), up to the quadruple butterfly and forbidden step (yoyo half) from 0.85; the better the bot, the
-more often it tries them. They also climb a wall with a hang to reach an enemy on a ledge.
+more often it tries them. They also climb a wall with a hang to reach an enemy on a ledge. Bots react
+like people: a NORMAL bot needs about 0.35 s to guard against a swing it sees coming (0.15 s at skill 1),
+aims guns with a visible error and saves launches and juggles for the higher skills.
 
 ## Game modes
 

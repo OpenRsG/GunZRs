@@ -405,7 +405,7 @@ const SURFACE_FAMILIES: [&str; 5] = [
 const SURFACE_FILES: [&str; 10] = [
     "con", "drt", "met", "wod", "pnt", "snd", "snw", "wat", "gls", "fsh",
 ];
-const VOICES: [&str; 13] = [
+const VOICES: [&str; 9] = [
     "mal_shot_01",
     "mal_shot_02",
     "mal_shot_03",
@@ -414,10 +414,6 @@ const VOICES: [&str; 13] = [
     "fem_shot_02",
     "fem_shot_03",
     "fem_shot_04",
-    "mal06",
-    "mal07",
-    "fem06",
-    "fem07",
     "death01_a_male",
 ];
 const MISC: [&str; 33] = [
@@ -795,14 +791,10 @@ fn combat_sounds(
         if let Some(name) = fire_sound(item) {
             sfx.play(name, local, here);
         }
-        if item.kind == "melee" {
-            // A short shout on about every other swing (**inferred**: `mal06/07`, `fem06/07`
-            // are the 0.3-0.6 s voice clips).
-            if sfx.sounds.rand(2) == 0 {
-                let n = 6 + sfx.sounds.rand(2);
-                sfx.play(&format!("{}0{n}", voice(woman(f.shooter))), local, here);
-            }
-        } else if item.weapon.as_ref().is_some_and(|w| w.slug_output) {
+        // No voice on a swing: the retail `effect.xml` comments out `MAL05..08`/`FEM05..08`,
+        // the only short voice clips besides the pain grunts (`*_shot_*`), so a swing makes
+        // only the blade's whoosh (`fire_sound`).
+        if item.weapon.as_ref().is_some_and(|w| w.slug_output) {
             let stem = sfx.surfaced("fx_slugdrop", sfx.surface(feet(f.shooter), None));
             later
                 .0

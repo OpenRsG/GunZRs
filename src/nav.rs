@@ -11,7 +11,7 @@
 use crate::{
     actor::{
         FALL, GRAVITY, HEIGHT, JUMP, RADIUS, RUN, RUN_GRAVITY, SLIDE_GRAVITY, WALL_GRACE,
-        WALL_LOSE, WALL_MIN_HEIGHT, WALL_OUT, WALL_RUN_SIDE, WALL_RUN_UP, WALL_UP, climb,
+        WALL_LOSE, WALL_MIN_HEIGHT, WALL_OUT, WALL_RUN_SIDE, WALL_RUN_UP, WALL_UP, climb, wall_run,
     },
     col::{MapCollision, STEP, WALKABLE},
     combat::yaw_of,
@@ -38,13 +38,14 @@ const DT: f32 = 1.0 / 30.0;
 /// covers the deepest map (Stairway: 8 more routes than 8 m).
 const REACH: f32 = 6.5;
 const DROP: f32 = 20.0;
-/// A wall climb jumps when the wall is this close (metres): the jump peaks at the wall.
+/// A wall climb jumps when the wall is this close (metres): the wall run up it must begin within
+/// `RUN_UP_WINDOW` of the jump.
 const CLIMB_LEAD: f32 = 2.0;
-/// A side wall run needs a wall within this distance (metres) at the side of the run-up, the jump
-/// turns into it by one of these angles (radians; glancing, so the controller's wall run is a
-/// side one, `fwd.dot(n) >= -0.7`) and may carry this far (`WALL_RUN_SIDE` x `RUN` = 12.6 m).
-/// *Inferred* values.
-const SIDE_WALL: f32 = 4.0;
+/// A side wall run needs a wall within this distance (metres) at the side of the run-up (the jump
+/// must meet it within `RUN_SIDE_WINDOW`), the jump turns into it by one of these angles (radians;
+/// glancing, so the controller's wall run is a side one, `fwd.dot(n) >= -0.7`) and may carry this
+/// far (`WALL_RUN_SIDE` x `RUN` = 12.6 m). *Inferred* values.
+const SIDE_WALL: f32 = 2.0;
 const SIDE_ANGLES: [f32; 2] = [0.35, 0.6];
 const SIDE_REACH: f32 = 14.0;
 /// A node is taken for a landing spot within this horizontal distance and height difference.
@@ -332,12 +333,11 @@ fn simulate(
             } else if run.is_none()
                 && !spent
                 && let Some((n, _)) = wall
-                && face.dot(n) < 0.3
+                && let Some(along) = wall_run(face, n, t)
                 && col
                     .raycast(pos + Vec3::Y * 0.05, Vec3::NEG_Y, WALL_MIN_HEIGHT)
                     .is_none()
             {
-                let along = face.dot(n) >= -0.7;
                 (run, spent, side) = (
                     Some((n, if along { WALL_RUN_SIDE } else { WALL_RUN_UP }, along)),
                     true,
@@ -388,8 +388,9 @@ struct Pawn {
     hv: Vec3,
     vy: f32,
     grounded: bool,
-    /// Last wall touched in the air: outward normal and time.
+    /// Last wall touched in the air: outward normal and time; when jump was last pressed.
     wall: Option<(Vec3, f32)>,
+    leap: f32,
     spent: bool,
     air: Air,
     t: f32,
@@ -406,6 +407,7 @@ impl Pawn {
             vy: 0.0,
             grounded: true,
             wall: None,
+            leap: f32::MIN,
             spent: false,
             air: Air::Free,
             t: 0.0,
@@ -417,6 +419,9 @@ impl Pawn {
     fn step(&mut self, col: &MapCollision, yaw: f32, jump: bool) {
         let face = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
         let now = self.t;
+        if jump {
+            self.leap = now;
+        }
         let lost = now - self.wall.map_or(f32::MIN, |w| w.1) > WALL_LOSE;
         match &mut self.air {
             Air::Kick(left) => {
@@ -455,12 +460,11 @@ impl Pawn {
             && !jump
             && let Some((n, t)) = self.wall
             && now - t < 0.1
-            && face.dot(n) < 0.3
+            && let Some(along) = wall_run(face, n, now - self.leap)
             && col
                 .raycast(self.pos + Vec3::Y * 0.05, Vec3::NEG_Y, WALL_MIN_HEIGHT)
                 .is_none()
         {
-            let along = face.dot(n) >= -0.7;
             self.air = Air::Run(n, along, if along { WALL_RUN_SIDE } else { WALL_RUN_UP });
             self.spent = true;
             self.vy = if along {
@@ -819,7 +823,8 @@ impl Nav {
     }
 
     /// A [`Kick`] from a standstill at `p`, running at the perch: jump at the ticks that leave
-    /// 0.5..2.2 m to the wall, face the run heading or 0.4 rad to either side in the air, wall-run
+    /// 0.5..1.8 m to the wall (so the wall run starts well inside `RUN_UP_WINDOW` at any frame rate),
+    /// face the run heading or 0.4 rad to either side in the air, wall-run
     /// up the wall and kick off it ([`Nav::kick_wall`]). The first script that lands on an island
     /// floor and keeps doing so from every start `KICK_TOL` metres off is taken.
     fn kick_run(
@@ -834,7 +839,7 @@ impl Nav {
         let mut pw = Pawn::new(p);
         for jump in 0..KICK_JUMP {
             let rest = (pw.pos - perch.at).dot(perch.n);
-            if (0.5..=2.2).contains(&rest) && jump % 2 == 0 {
+            if (0.5..=1.8).contains(&rest) && jump % 2 == 0 {
                 let mut q = pw;
                 q.step(col, run, true);
                 for b in [0.0, 0.4, -0.4] {
@@ -906,7 +911,8 @@ impl Nav {
     }
 
     /// The island floor node a standstill at `from` and `k` lands on, also from every start
-    /// `KICK_TOL` metres to either side.
+    /// `KICK_TOL` metres to either side and at 30, 144 and 240 Hz (the wall run must begin inside
+    /// `RUN_UP_WINDOW` of the jump, so a script proved at one frame time alone can miss at another).
     fn kick_replay(
         &self,
         col: &MapCollision,
@@ -914,21 +920,42 @@ impl Nav {
         from: Vec3,
         k: &Kick,
     ) -> Option<u32> {
-        let go = |from: Vec3| {
-            let mut q = Pawn::new(from);
-            for n in 0..=k.kick {
-                let (yaw, jump) = k.input(n);
-                q.step(col, yaw, jump);
+        let to = self.kick_lands(col, island, from, k, &mut || PDT)?;
+        ([30.0, 144.0, 240.0].iter().all(|hz| {
+            self.kick_lands(col, island, from, k, &mut || 1.0 / hz)
+                .is_some()
+        }) && (0..8).all(|c| {
+            let a = c as f32 * TAU / 8.0;
+            let off = Vec3::new(a.cos(), 0.0, a.sin()) * KICK_TOL;
+            self.kick_lands(col, island, from + off, k, &mut || PDT)
+                .is_some()
+        }))
+        .then_some(to)
+    }
+
+    /// The island floor node `k` from a standstill at `from` lands on when every frame lasts
+    /// `dt()` seconds and a jump is pressed on the frame that reaches its tick (as `bot.rs` plays
+    /// the script by the clock).
+    fn kick_lands(
+        &self,
+        col: &MapCollision,
+        island: &[bool],
+        from: Vec3,
+        k: &Kick,
+        dt: &mut dyn FnMut() -> f32,
+    ) -> Option<u32> {
+        let mut q = Pawn::new(from);
+        let (mut t, mut next) = (0.0f32, 0u32);
+        loop {
+            let tick = (t / PDT + 1e-3) as u32;
+            let jump = (next..=tick).any(|n| k.input(n).1);
+            q.dt = dt();
+            q.step(col, k.input(tick).0, jump);
+            (t, next) = (t + q.dt, tick + 1);
+            if tick >= k.kick {
+                return self.lands(col, island, from, q, k.wall);
             }
-            self.lands(col, island, from, q, k.wall)
-        };
-        let to = go(from)?;
-        (0..8)
-            .all(|c| {
-                let a = c as f32 * TAU / 8.0;
-                go(from + Vec3::new(a.cos(), 0.0, a.sin()) * KICK_TOL).is_some()
-            })
-            .then_some(to)
+        }
     }
 
     /// The pawn `q` (just kicked, facing `yaw`) falls to a floor; then it walks to the floor
@@ -1622,21 +1649,7 @@ mod tests {
             for (l, k) in ls.iter().filter_map(|l| Some((l, l.kick?))) {
                 links += 1;
                 let from = nav.nodes[i];
-                let run = |dt: &mut dyn FnMut() -> f32| {
-                    let mut q = Pawn::new(from);
-                    let (mut t, mut next) = (0.0f32, 0u32);
-                    loop {
-                        let tick = (t / PDT + 1e-3) as u32;
-                        let jump = (next..=tick).any(|n| k.input(n).1);
-                        q.dt = dt();
-                        q.step(&col, k.input(tick).0, jump);
-                        (t, next) = (t + q.dt, tick + 1);
-                        if tick >= k.kick {
-                            break;
-                        }
-                    }
-                    nav.lands(&col, &island, from, q, k.wall)
-                };
+                let run = |dt: &mut dyn FnMut() -> f32| nav.kick_lands(&col, &island, from, &k, dt);
                 for hz in [30.0, 60.0, 144.0, 240.0] {
                     let to = run(&mut || 1.0 / hz);
                     println!(

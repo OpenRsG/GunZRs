@@ -356,7 +356,8 @@
   }
 
   #reload,
-  #swap {
+  #swap,
+  #alt {
    width: 52px;
    height: 52px
   }
@@ -706,6 +707,9 @@
   <button class="ctl" id="guard" data-k="8"><svg viewBox="0 0 24 24">
     <path d="M12 2.5l7.5 3v6c0 4.8-3.3 8.5-7.5 10-4.2-1.5-7.5-5.2-7.5-10v-6z" />
    </svg><b>GUARD</b></button>
+  <button class="ctl" id="alt" data-k="15"><svg viewBox="0 0 24 24">
+    <path d="M6 20c0-8 4-14 12-16M18 4l-1 5M18 4l-5 0" />
+   </svg><b>FLIP</b></button>
   <button class="ctl" id="reload" data-k="9"><svg viewBox="0 0 24 24">
     <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v4.5H15" />
    </svg><b>RELOAD</b></button>
@@ -864,12 +868,13 @@
   // They write `gunzTouch`; the game reads it once per frame (`src/web.rs` `touch` has the
   // layout): [0..2] look drag, [2..12] held stick W A S D, jump, fire, guard, reload, scores,
   // pause (3 = pressed, 2 = released before the game saw it), [12] next weapon, [13] dash,
-  // [14] aim assist strength. The settings live in this browser (`gunzrs.touch`).
+  // [14] aim assist strength, [15] held alt fire (uppercut, lunge). The settings live in this
+  // browser (`gunzrs.touch`).
   const touch = matchMedia("(pointer: coarse)").matches || new URLSearchParams(location.search).has("touch");
   let playing = false; // a match is on screen (its controls may show)
   let showControls = () => { }; // shows or hides them (set below with them)
   if (touch) {
-   const T = globalThis.gunzTouch = new Float32Array(15);
+   const T = globalThis.gunzTouch = new Float32Array(16);
    const LOOK = 2.2;  // look speed at sensitivity 1: mouse counts per dragged CSS pixel (times the game's own)
    const TRAVEL = 52; // stick travel in CSS pixels at size 1
    const KEY = "gunzrs.touch";
@@ -885,6 +890,7 @@
    // player moved keeps its spot as fractions of the screen (`cfg.pos`), its size in `cfg.scale`.
    const HOME = {
     fire: [76, 82], jump: [180, 54], dash: [172, 142], guard: [96, 182], reload: [32, 186], swap: [262, 44],
+    alt: [258, 112],
     gear: [192, -30], scores: [140, -30], pause: [88, -30], stick: [-150, 125]
    };
    const probe = document.createElement("div");

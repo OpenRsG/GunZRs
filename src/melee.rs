@@ -1,15 +1,20 @@
-//! Melee combat: the sword state machine (slash combo, jump/dive slash, uppercut, charged
-//! massive, guard) and its hit resolution. Per actor a [`Melee`] component decides which
-//! retail clip plays when (`ActionRequest` to the actor controller) and when the blade lands
-//! (`Strike`); [`resolve`] turns a strike into `Damage`, `Blocked`, knockback `Push` and the
-//! victim's flinch. Constants marked *inferred* are not in the retail data (the executable is
-//! packed): docs/formats.md "Melee".
+//! Melee combat: the sword state machine (slash combo, air slash, uppercut, massive, guard) and
+//! its hit resolution. Per actor a [`Melee`] component decides which retail clip plays when
+//! (`ActionRequest` to the actor controller) and when the blade lands (`Strike`); [`resolve`]
+//! turns a strike into `Damage`, `Blocked`, knockback `Push` and the victim's flinch. Constants
+//! marked *inferred* are not in the retail data (the executable is packed): docs/formats.md
+//! "Melee".
 //!
-//! Controls (the same `Intent` bots write): a click (`attack` pressed) slashes, `attack`
-//! held from the click charges; `guard` held raises the guard; `attack` while guarding is the
-//! uppercut. Bots hold `attack` to chain slashes. A dagger has no guard: its `guard` press is the
-//! alternative fire, a lunge on the ground (its `uppercut` clip launches); its click stabs
-//! (`attackS`) on the ground and in the air.
+//! Controls (the same `Intent` bots write; retail `config.xml` USEWEAPON, USEWEAPON2, DEFENCE): a
+//! click (`attack` pressed) slashes, `attack` held from the click charges a massive; an `alt`
+//! press is the alternative fire, the sword's uppercut and the dagger's lunge (its `uppercut`
+//! clip launches); `guard` held raises the guard. Bots hold `attack` to chain slashes. A dagger
+//! has no guard; its click stabs (`attackS`) on the ground and in the air.
+//!
+//! Massive (the guides: hold the button "until the hilt is fully glowing"; a blocked slash gives
+//! the guarder one too): a full charge is held for [`MASSIVE_HOLD`] seconds and the next click
+//! throws it, on the ground the `slash` clip (a wind-up), in the air `jump_slash1`, locked until
+//! the actor lands (`jump_slash2`).
 
 use crate::{
     actor::{Actor, ActorData, ActorSet},
@@ -79,12 +84,12 @@ const RETURNS: [&str; 4] = ["attack1_ret", "attack2_ret", "attack3_ret", "attack
 const BUFFER: f32 = 0.4;
 /// Seconds `attack` must be held from the click before the charge starts (*inferred*).
 const CHARGE_HOLD: f32 = 0.5;
-/// Charge needed for a massive swing, and for the full-power one, seconds into the `charge` clip
-/// (*inferred*; the clip is 2 s).
-const CHARGE_MIN: f32 = 0.4;
+/// Seconds into the `charge` clip at which the massive charge is full (*inferred*; the clip is 2 s).
 const CHARGE_FULL: f32 = 1.2;
-/// Extra damage of a fully charged massive swing (*inferred*).
-const MASSIVE_BONUS: f32 = 0.5;
+/// Seconds a massive charge is held before it wears off (*inferred*).
+const MASSIVE_HOLD: f32 = 6.0;
+/// Seconds between the glints of a held massive charge on the blade (port cue, *inferred*).
+const GLINT: f32 = 0.35;
 /// Seconds after a cancelled blow during which the combo continues (K-style dash/jump cancels,
 /// butterfly guard cancels; *inferred*).
 const CANCEL_COMBO: f32 = 0.9;
@@ -139,17 +144,19 @@ enum Effect {
     Knockdown,
     /// Thrown up into the blast chain.
     Launch,
-    /// Thrown back into the blast chain; ignores the guard.
+    /// Thrown back into the blast chain.
     Massive,
 }
 
-/// One kind of blow. `reach` multiplies the item's `range`, `arc` is the swing width in degrees
-/// and `damage` multiplies the item's `damage` (all *inferred*).
+/// One kind of blow. `reach` multiplies the item's `range`, `arc` is the swing width in degrees,
+/// `tall` multiplies the vertical reach `REACH_Y` and `damage` multiplies the item's `damage` (all
+/// *inferred*).
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Blow {
     name: &'static str,
     reach: f32,
     arc: f32,
+    tall: f32,
     damage: f32,
     effect: Effect,
 }
@@ -158,6 +165,7 @@ const SLASH: Blow = Blow {
     name: "slash",
     reach: 1.0,
     arc: 90.0,
+    tall: 1.0,
     damage: 1.0,
     effect: Effect::Flinch,
 };
@@ -172,19 +180,6 @@ const AIR: Blow = Blow {
     arc: 100.0,
     ..SLASH
 };
-const DIVE: Blow = Blow {
-    name: "dive slash",
-    reach: 1.1,
-    arc: 120.0,
-    damage: 1.2,
-    ..SLASH
-};
-const SLAM: Blow = Blow {
-    name: "landing slam",
-    arc: 120.0,
-    damage: 0.6,
-    ..SLASH
-};
 const UPPERCUT: Blow = Blow {
     name: "uppercut",
     reach: 0.9,
@@ -192,15 +187,18 @@ const UPPERCUT: Blow = Blow {
     effect: Effect::Launch,
     ..SLASH
 };
+/// The massive does double damage (community wiki "Massive"; *inferred* multiplier) and reaches
+/// the floor from the height an air massive is thrown at.
 const MASSIVE: Blow = Blow {
     name: "massive",
     reach: 1.2,
     arc: 160.0,
+    tall: 2.0,
+    damage: 2.0,
     effect: Effect::Massive,
-    ..SLASH
 };
-/// The dagger's alternative fire (guard key, on the ground): its `uppercut` clip is a lunge that
-/// launches (`blast_dagger`); *inferred*.
+/// The dagger's alternative fire (on the ground): its `uppercut` clip is a lunge that launches
+/// (`blast_dagger`); *inferred*.
 const LUNGE: Blow = Blow {
     name: "lunge",
     arc: 70.0,
@@ -275,18 +273,22 @@ pub struct Melee {
     /// When `attack` went down.
     down_at: f32,
     prev_attack: bool,
-    /// The current blow already struck / charge already announced full / power of a charged blow.
+    /// The current blow already struck.
     struck: bool,
-    charged: bool,
-    power: f32,
+    /// A massive charge is held until this time (0: none; infinite while the charge button is
+    /// still down) and the next glint of it.
+    massive: f32,
+    glint: f32,
     /// Alternates `guard_block1/2` and `damage/damage2`.
     alt: bool,
     /// Until when drawing the blade again after an air slash was switch-cancelled is instant.
     flash: f32,
     /// The guard went up in the air (air butterfly): it may stay up there until the actor lands.
     air_guard: bool,
-    /// A dagger's guard press (alternative fire) is pending until this time.
-    lunge_until: f32,
+    /// An alternative fire press (uppercut, lunge) is pending until this time, and whether `alt`
+    /// was held last frame.
+    alt_until: f32,
+    prev_alt: bool,
     /// Air hits taken since landing.
     juggle: u8,
     /// Item last seen in hand (weapon switches restart the state).
@@ -310,7 +312,6 @@ struct Strike {
     attacker: Entity,
     item: u32,
     blow: Blow,
-    power: f32,
 }
 
 fn init(mut commands: Commands, q: Query<Entity, (With<Loadout>, Without<Melee>)>) {
@@ -327,7 +328,6 @@ enum Next {
         ret: Option<&'static str>,
         dive: bool,
         combo: usize,
-        power: f32,
     },
     Guard(Stage),
     Charge,
@@ -347,6 +347,7 @@ fn drive(
     mut strikes: MessageWriter<Strike>,
     mut fire: MessageWriter<Fire>,
     mut sound: MessageWriter<ActorSound>,
+    mut vfx: MessageWriter<Vfx>,
     mut actors: Query<(
         Entity,
         &mut Melee,
@@ -378,6 +379,8 @@ fn drive(
             m.guard_at = now;
         }
         m.prev_guard = intent.guard;
+        let alt_press = intent.alt && !m.prev_alt;
+        m.prev_alt = intent.alt;
         if !motor.blast && motor.grounded {
             m.juggle = 0;
         }
@@ -423,8 +426,27 @@ fn drive(
             m.queued_until = now + BUFFER;
         }
         let queued = now < m.queued_until;
-        if guard_press && w.kind == WeaponKind::Dagger {
-            m.lunge_until = now + BUFFER;
+        if alt_press {
+            m.alt_until = now + BUFFER;
+        }
+        // a held massive charge wears off (a charge cut short by a hit or a switch is held from
+        // then); while held, the blade glints
+        if m.massive == f32::INFINITY && m.phase != Phase::Charge {
+            m.massive = now + MASSIVE_HOLD;
+        }
+        if m.massive > 0.0 && now >= m.massive {
+            m.massive = 0.0;
+            debug!("t={now:.2} melee {who}: the massive charge wore off");
+        }
+        if m.massive > now && now >= m.glint {
+            m.glint = now + GLINT;
+            for r in actor.weapon_roots() {
+                vfx.write(Vfx::On {
+                    name: "ef_sword_flash",
+                    on: r,
+                    at: Transform::IDENTITY,
+                });
+            }
         }
         let grounded = motor.grounded;
         let guard_ok = intent.guard && grounded && !motor.wall && secs("guard_idle").is_some();
@@ -454,7 +476,6 @@ fn drive(
                     attacker: e,
                     item,
                     blow,
-                    power: m.power,
                 });
             }
             m.phase = Phase::Idle;
@@ -468,19 +489,23 @@ fn drive(
             && now >= m.ready
             && !queued
             && secs("charge").is_some();
-        let blow_from = |m: &Melee, power: f32| plan(&data, woman, motion, m, now, motor, power);
+        let blow_from = |m: &Melee| plan(&data, woman, motion, m, now, motor);
         let free = motor.tumble.is_none_or(|t| t > DASH_SLASH);
-        // the dagger's alternative fire on the ground: the `uppercut` clip as a lunge, the extended
-        // one when a dash is on (`Actor::dash_wanted`: the same press) or just began
+        // the alternative fire on the ground (`uppercut` clip): the sword's uppercut, the dagger's
+        // lunge, the extended one when a dash is on (`Actor::dash_wanted`: the same press) or just
+        // began
         let extended = motor.tumble.is_some() || actor.dash_wanted(now, intent).is_some();
-        let lunge =
-            (now < m.lunge_until && grounded && secs("uppercut").is_some()).then_some(Next::Blow {
-                blow: if extended { E_LUNGE } else { LUNGE },
+        let alt_blow =
+            (now < m.alt_until && grounded && secs("uppercut").is_some()).then_some(Next::Blow {
+                blow: match (w.kind == WeaponKind::Dagger, extended) {
+                    (false, _) => UPPERCUT,
+                    (true, false) => LUNGE,
+                    (true, true) => E_LUNGE,
+                },
                 clip: "uppercut",
                 ret: None,
                 dive: false,
                 combo: 0,
-                power: 0.0,
             });
 
         let next = match m.phase {
@@ -488,10 +513,10 @@ fn drive(
             Phase::Idle => {
                 if guard_ok {
                     Some(Next::Guard(Stage::Start))
-                } else if lunge.is_some() && now >= m.ready {
-                    lunge
+                } else if alt_blow.is_some() && now >= m.ready {
+                    alt_blow
                 } else if queued && now >= m.ready {
-                    blow_from(m, 0.0)
+                    blow_from(m)
                 } else if charge_ready {
                     Some(Next::Charge)
                 } else {
@@ -504,10 +529,10 @@ fn drive(
                 ret,
                 dive,
             } => {
-                let cancel_guard = guard_ok || air_bf && (blow == AIR || blow == DIVE);
-                // block cancel: slashes only (not the uppercut, the slam or a charged swing)
+                let cancel_guard = guard_ok || air_bf && blow == AIR;
+                // block cancel: slashes only (not the uppercut or a massive)
                 let block_cancel = cancel_guard
-                    && [SLASH, FINISHER, AIR, DIVE].contains(&blow)
+                    && [SLASH, FINISHER, AIR].contains(&blow)
                     && m.guard_at >= m.t0
                     && t >= BLOCK_CANCEL;
                 if !m.struck && (t >= strike || block_cancel) {
@@ -522,7 +547,6 @@ fn drive(
                         attacker: e,
                         item,
                         blow,
-                        power: m.power,
                     });
                     debug!(
                         "t={now:.2} melee {who}: {} strikes at {t:.3}s (hit frame {:.1}) at ({:.2}, {:.2})",
@@ -537,19 +561,16 @@ fn drive(
                 } else if cancel_guard {
                     // butterfly: the guard cancels the recovery
                     Some(Next::Guard(Stage::Start))
-                } else if lunge.is_some() && now >= m.ready {
-                    lunge
+                } else if alt_blow.is_some() && now >= m.ready && !dive {
+                    alt_blow
                 } else if queued && now >= m.ready && !dive {
-                    blow_from(m, 0.0)
-                } else if dive && grounded && secs("jump_slash2").is_some() {
+                    blow_from(m)
+                } else if dive && grounded {
+                    // the air massive lands: `jump_slash2`, then the actor is free again
                     m.combo_until = now;
-                    Some(Next::Blow {
-                        blow: SLAM,
+                    Some(Next::Recover {
                         clip: "jump_slash2",
-                        ret: None,
-                        dive: false,
-                        combo: 0,
-                        power: 0.0,
+                        act_from: 0.0,
                     })
                 } else if t >= m.secs && !(dive && !grounded) {
                     // (no recovery clip over a dash or jump that already took the body)
@@ -571,8 +592,10 @@ fn drive(
             Phase::Recover { act_from } => {
                 if t >= act_from && guard_ok {
                     Some(Next::Guard(Stage::Start))
+                } else if t >= act_from && alt_blow.is_some() && now >= m.ready {
+                    alt_blow
                 } else if t >= act_from && queued && now >= m.ready {
-                    blow_from(m, 0.0)
+                    blow_from(m)
                 } else if t >= act_from && charge_ready {
                     Some(Next::Charge)
                 } else if t >= m.secs {
@@ -582,30 +605,26 @@ fn drive(
                 }
             }
             Phase::Charge => {
-                if !m.charged && t >= CHARGE_FULL {
-                    m.charged = true;
+                if m.massive != f32::INFINITY && t >= CHARGE_FULL {
+                    // full: held until the button goes up, then for `MASSIVE_HOLD`
+                    m.massive = f32::INFINITY;
                     sound.write(ActorSound {
                         actor: e,
                         cue: Cue::Anim("fx_chargecomplete".into()),
                     });
+                    debug!("t={now:.2} melee {who}: massive charged");
                 }
                 if !intent.attack || t >= m.secs {
-                    if t >= CHARGE_MIN {
-                        let power = ((t - CHARGE_MIN) / (CHARGE_FULL - CHARGE_MIN)).clamp(0.0, 1.0);
-                        secs("slash").map(|_| Next::Blow {
-                            blow: MASSIVE,
-                            clip: "slash",
-                            ret: None,
-                            dive: false,
-                            combo: 0,
-                            power,
-                        })
+                    // released early: no charge (the void slash's reset)
+                    m.massive = if m.massive == f32::INFINITY {
+                        now + MASSIVE_HOLD
                     } else {
-                        Some(Next::Recover {
-                            clip: "cancel",
-                            act_from: 0.15,
-                        })
-                    }
+                        m.massive
+                    };
+                    Some(Next::Recover {
+                        clip: "cancel",
+                        act_from: 0.15,
+                    })
                 } else {
                     None
                 }
@@ -614,7 +633,7 @@ fn drive(
                 let over = clip_over(t, dt, m.secs, acting.is_none());
                 if stage == Stage::Release {
                     if queued && now >= m.ready {
-                        blow_from(m, 0.0)
+                        blow_from(m)
                     } else if t >= m.secs {
                         Some(Next::Idle)
                     } else {
@@ -624,17 +643,10 @@ fn drive(
                     Some(Next::Guard(Stage::Release))
                 } else if queued && now >= m.ready && !grounded {
                     // click while the guard is up in the air: another air slash
-                    blow_from(m, 0.0)
-                } else if queued && now >= m.ready {
-                    // guard + click: uppercut
-                    secs("uppercut").map(|_| Next::Blow {
-                        blow: UPPERCUT,
-                        clip: "uppercut",
-                        ret: None,
-                        dive: false,
-                        combo: 0,
-                        power: 0.0,
-                    })
+                    blow_from(m)
+                } else if alt_blow.is_some() && now >= m.ready {
+                    // uppercut straight out of the guard
+                    alt_blow
                 } else if stage == Stage::Block
                     && over
                     && m.alt
@@ -686,7 +698,6 @@ fn drive(
                 ret,
                 dive,
                 combo,
-                power,
             } => {
                 let Some(len) = secs(clip) else {
                     m.phase = Phase::Idle;
@@ -708,19 +719,34 @@ fn drive(
                     dive,
                 };
                 m.struck = false;
-                m.power = power;
                 m.combo = combo;
                 m.combo_until = f32::INFINITY;
                 m.queued_until = 0.0;
-                m.lunge_until = 0.0;
+                m.alt_until = 0.0;
                 m.ready = now + w.delay as f32 / 1000.0;
-                // K-style: a jump or dash may cut the recovery once the blade has landed.
+                // K-style: a jump or dash may cut the recovery once the blade has landed; the air
+                // massive keeps the actor locked until it lands.
                 let moving = if dive || clip == "attack_Jump" {
                     ActionMove::Control(1.0)
                 } else {
                     ActionMove::Root
                 };
-                go(m, &mut req, clip, len, moving, strike);
+                go(
+                    m,
+                    &mut req,
+                    clip,
+                    len,
+                    moving,
+                    if dive { f32::INFINITY } else { strike },
+                );
+                if blow == MASSIVE {
+                    m.massive = 0.0;
+                    vfx.write(Vfx::On {
+                        name: "massive_swing",
+                        on: e,
+                        at: Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+                    });
+                }
                 let origin = tf.translation + Vec3::Y;
                 let dir = Quat::from_rotation_y(intent.yaw) * Vec3::NEG_Z;
                 fire.write(Fire {
@@ -786,7 +812,6 @@ fn drive(
                 };
                 debug!("t={now:.2} melee {who}: charge ({len:.2}s)");
                 m.phase = Phase::Charge;
-                m.charged = false;
                 go(m, &mut req, "charge", len, ActionMove::Locked, 0.0);
             }
             Next::Recover { clip, act_from } => match secs(clip) {
@@ -833,8 +858,9 @@ fn sync_guard(commands: &mut Commands, e: Entity, phase: Phase, has: bool) {
     }
 }
 
-/// The blow a click starts: a combo slash on the ground (`attack1..4`, the single `attackS` of
-/// daggers), `attack_Jump` rising / `jump_slash1` falling in the air.
+/// The blow a click starts: a held massive charge (`slash` on the ground, `jump_slash1` in the
+/// air), else a combo slash on the ground (`attack1..4`, the single `attackS` of daggers) or the
+/// air slash `attack_Jump` (a dagger stabs in the air as on the ground).
 fn plan(
     data: &ActorData,
     woman: bool,
@@ -842,76 +868,45 @@ fn plan(
     m: &Melee,
     now: f32,
     motor: &Motor,
-    power: f32,
 ) -> Option<Next> {
     let has = |c: &str| data.clip_secs(woman, motion, c).is_some();
+    let blow = |blow, clip: &'static str, ret, dive, combo| {
+        has(clip).then_some(Next::Blow {
+            blow,
+            clip,
+            ret,
+            dive,
+            combo,
+        })
+    };
+    let massive = if motor.grounded {
+        blow(MASSIVE, "slash", None, false, 0)
+    } else {
+        blow(MASSIVE, "jump_slash1", None, true, 0)
+    };
+    if m.massive > now && massive.is_some() {
+        return massive;
+    }
     if !motor.grounded {
-        // a dagger stabs in the air as on the ground (no `attack_Jump`, only `attackS`)
-        if !has("attack_Jump") && has("attackS") {
-            return Some(Next::Blow {
-                blow: SLASH,
-                clip: "attackS",
-                ret: None,
-                dive: false,
-                combo: 0,
-                power,
-            });
-        }
-        return if motor.vel.y > 0.0 && has("attack_Jump") {
-            Some(Next::Blow {
-                blow: AIR,
-                clip: "attack_Jump",
-                ret: None,
-                dive: false,
-                combo: m.combo,
-                power,
-            })
-        } else if has("jump_slash1") {
-            Some(Next::Blow {
-                blow: DIVE,
-                clip: "jump_slash1",
-                ret: None,
-                dive: true,
-                combo: m.combo,
-                power,
-            })
-        } else if has("attack_Jump") {
-            Some(Next::Blow {
-                blow: AIR,
-                clip: "attack_Jump",
-                ret: None,
-                dive: false,
-                combo: m.combo,
-                power,
-            })
-        } else {
-            None
-        };
+        return blow(AIR, "attack_Jump", None, false, m.combo)
+            .or_else(|| blow(SLASH, "attackS", None, false, 0));
     }
     let n = ATTACKS.iter().take_while(|c| has(c)).count();
     if n == 0 {
-        return has("attackS").then_some(Next::Blow {
-            blow: SLASH,
-            clip: "attackS",
-            ret: None,
-            dive: false,
-            combo: 0,
-            power,
-        });
+        return blow(SLASH, "attackS", None, false, 0);
     }
     let i = if now < m.combo_until && m.combo < n {
         m.combo
     } else {
         0
     };
-    Some(Next::Blow {
-        blow: if n > 1 && i == n - 1 { FINISHER } else { SLASH },
-        clip: ATTACKS[i],
-        ret: Some(RETURNS[i]),
-        dive: false,
-        combo: (i + 1) % n,
-        power,
-    })
+    blow(
+        if n > 1 && i == n - 1 { FINISHER } else { SLASH },
+        ATTACKS[i],
+        Some(RETURNS[i]),
+        false,
+        (i + 1) % n,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -926,6 +921,7 @@ fn resolve(
     mut impact: MessageWriter<Impact>,
     mut req: MessageWriter<ActionRequest>,
     mut vfx: MessageWriter<Vfx>,
+    mut sound: MessageWriter<ActorSound>,
     mut hits: MessageWriter<crate::slashfx::Hit>,
     mut melee: Query<&mut Melee>,
     actors: Query<
@@ -963,13 +959,7 @@ fn resolve(
         let fwd = Quat::from_rotation_y(intent.yaw) * Vec3::NEG_Z;
         let range = w.range.unwrap_or(150) as f32 * 0.01 * s.blow.reach;
         let half = w.angle.map_or(s.blow.arc, |a| a as f32).to_radians() * 0.5;
-        let amount = w.damage as f32
-            * s.blow.damage
-            * if s.blow.effect == Effect::Massive {
-                1.0 + MASSIVE_BONUS * s.power
-            } else {
-                1.0
-            };
+        let amount = w.damage as f32 * s.blow.damage;
         let mut landed = 0;
         let mut recoil = false;
         for (e, tg, vi, vm, vteam, guarding, protected, vload, vshape, npc, vname) in &actors {
@@ -989,7 +979,7 @@ fn resolve(
                 half.to_degrees(),
                 p.y - centre.y,
             );
-            if dist - vr > range || (p.y - centre.y).abs() > REACH_Y {
+            if dist - vr > range || (p.y - centre.y).abs() > REACH_Y * s.blow.tall {
                 continue;
             }
             if dist > vr && fwd.angle_between(to) > half {
@@ -1013,10 +1003,11 @@ fn resolve(
             let mut state = melee.get_mut(e).ok();
             let mut body = vi.zip(vm).zip(state.as_deref_mut());
 
-            // Guard: blocks every blow from the front except a massive swing.
+            // Guard: blocks every blow from the front, a massive too (the guides: "you MUST have
+            // a block fully up to avoid a massive"). A blocked slash gives the guarder a massive
+            // charge.
             if let Some(((vi, vm), vstate)) = body.as_mut()
                 && guarding
-                && s.blow.effect != Effect::Massive
                 && (Quat::from_rotation_y(vi.yaw) * Vec3::NEG_Z).angle_between(-flat)
                     <= GUARD_HALF.to_radians()
             {
@@ -1047,6 +1038,14 @@ fn resolve(
                     "t={now:.2} melee: {} blocked by {label} ({clip})",
                     aname.map_or("?", |n| n.as_str())
                 );
+                if s.blow.effect != Effect::Massive && vstate.massive <= now {
+                    (vstate.massive, vstate.glint) = (now + MASSIVE_HOLD, now);
+                    sound.write(ActorSound {
+                        actor: e,
+                        cue: Cue::Anim("fx_chargecomplete".into()),
+                    });
+                    debug!("t={now:.2} melee: {label} gets a massive charge from the block");
+                }
                 recoil = true;
                 continue;
             }

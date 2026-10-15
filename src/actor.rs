@@ -146,6 +146,28 @@ pub const WALL_LOSE: f32 = 0.15;
 /// A wall run needs at least this much air under the feet (a step against a leaning stair
 /// riser also lifts the capsule for a few frames).
 pub const WALL_MIN_HEIGHT: f32 = 0.5;
+/// A wall run starts only this soon after a jump press, up a wall / along one: the guides start
+/// one with the jump itself ("dash towards wall at angle → jump"), so a wall met later in a flight
+/// is bumped into, not run on. Up a wall the wall must be close (about 2 m at run speed); along
+/// one the contact may come while the jump still rises (the apex is 0.36 s up). **Inferred.**
+pub const RUN_UP_WINDOW: f32 = 0.2;
+pub const RUN_SIDE_WINDOW: f32 = 0.4;
+
+/// Whether touching a wall (outward normal `n`) `since` seconds after a jump press starts a wall
+/// run for an actor facing `face` (forward held): `Some(true)` along it (a side run, facing it at
+/// a glancing angle), `Some(false)` up it (facing it); `None` when the jump was too long ago or
+/// the actor faces away from the wall.
+pub fn wall_run(face: Vec3, n: Vec3, since: f32) -> Option<bool> {
+    let d = face.dot(n);
+    let along = d >= -0.7;
+    let window = if along {
+        RUN_SIDE_WINDOW
+    } else {
+        RUN_UP_WINDOW
+    };
+    (since < window && d < 0.1).then_some(along)
+}
+
 /// Seconds within which a second tap of a direction is a tumble.
 const DOUBLE_TAP: f32 = 0.3;
 /// Seconds after touching a wall in the air during which a jump is a wall kick.
@@ -437,9 +459,11 @@ struct Tech {
     ik_at: f32,
     /// The next tumble clip starts without its dash sound (a dash right after a slash).
     silent: bool,
-    /// Dash held last frame; when jump was last pressed (a jump buffered before landing).
+    /// Dash held last frame; when jump was last pressed (a jump buffered before landing) and
+    /// when a jump last left the ground or was pressed in the air (a wall run follows only that).
     prev_dash: bool,
     jump_at: f32,
+    leap: f32,
     /// The capsule is the small phantom one (tumble, lunge).
     small: bool,
     /// Extended lunge: the velocity the lunge slides at until its hit frame.
@@ -463,6 +487,7 @@ impl Default for Tech {
             silent: false,
             prev_dash: false,
             jump_at: f32::MIN,
+            leap: f32::MIN,
             small: false,
             slide: None,
         }
@@ -980,6 +1005,7 @@ struct Held {
     reload: bool,
     slot: Option<usize>,
     guard: bool,
+    alt: bool,
     taunt: bool,
     emote: Option<&'static str>,
     /// Scripts hold the scoreboard through the [`Pad`].
@@ -990,8 +1016,9 @@ struct Held {
 
 /// Scripted player input for headless runs (`gunz-play --script`): `;`-separated steps
 /// `KEYS:SECONDS` run one after another, or `yaw=DEG` / `pitch=DEG` (instant). `KEYS` is
-/// `+`-joined from `w a s d jump attack guard reload taunt bow wave cry laugh dance tab dash
-/// 1..9 wait` (the emote keys are F5-F9 on the keyboard; `dash` is the Dash action).
+/// `+`-joined from `w a s d jump attack guard alt reload taunt bow wave cry laugh dance tab dash
+/// 1..9 wait` (the emote keys are F5-F9 on the keyboard; `dash` is the Dash action, `alt` the
+/// alternative fire).
 #[derive(Resource)]
 pub struct Script {
     steps: Vec<Step>,
@@ -1042,6 +1069,7 @@ impl Script {
                         "jump" => step.held.jump = true,
                         "attack" => step.held.attack = true,
                         "guard" => step.held.guard = true,
+                        "alt" => step.held.alt = true,
                         "taunt" => step.held.taunt = true,
                         "reload" => step.held.reload = true,
                         "tab" => step.held.tab = true,
@@ -1114,6 +1142,7 @@ impl Held {
         intent.dash = self.dash;
         intent.attack = self.attack;
         intent.guard = self.guard;
+        intent.alt = self.alt;
         intent.taunt = self.taunt;
         intent.emote = self.emote;
         intent.reload = self.reload;
@@ -1187,6 +1216,7 @@ fn player_input(
                 jump: r.pressed(Action::Jump),
                 attack: r.pressed(Action::Fire),
                 guard: r.pressed(Action::Guard),
+                alt: r.pressed(Action::AltFire),
                 reload: r.pressed(Action::Reload),
                 slot,
                 taunt: r.pressed(Action::Taunt),
@@ -1704,7 +1734,7 @@ fn drive(
         let jump_edge = intent.jump && !a.prev_jump;
         a.prev_jump = intent.jump;
         if jump_edge {
-            a.tech.jump_at = now;
+            (a.tech.jump_at, a.tech.leap) = (now, now);
         }
         let emote = if intent.taunt {
             Some("taunt")
@@ -1763,7 +1793,12 @@ fn drive(
                     }
                     _ => {}
                 }
-                if !a.grounded && !a.tech.hold_spent && a.vel.y <= GRAV_CANCEL_VY {
+                // (an air slash, not the air massive's throw)
+                if !a.grounded
+                    && !a.tech.hold_spent
+                    && a.vel.y <= GRAV_CANCEL_VY
+                    && r.clip != "jump_slash1"
+                {
                     (a.tech.hold, a.tech.hold_spent, a.vel.y) = (GRAV_HOLD, true, 0.0);
                     debug!("t={now:.2} tech: gravity cancel {who} (air slash holds altitude)");
                 }
@@ -2003,7 +2038,7 @@ fn drive(
             && (cancelable || matches!(a.state, State::Reload { .. } | State::Tumble { .. }))
             && a.grounded
         {
-            a.tech.jump_at = f32::MIN;
+            (a.tech.jump_at, a.tech.leap) = (f32::MIN, now);
             a.vel.y = JUMP;
             a.grounded = false;
             if matches!(a.state, State::Tumble { .. }) {
@@ -2023,11 +2058,21 @@ fn drive(
                 a.state = State::Free;
             }
         } else if alive
-            && jump_edge
+            // buffered like the ground jump, so a press a moment early still kicks
+            && now - a.tech.jump_at < JUMP_BUFFER
             && (cancelable
                 || matches!(
                     a.state,
                     State::WallRun { .. } | State::Tumble { .. } | State::Wall { .. }
+                )
+                // an air slash is left for a kick at once (wall cancel / flying: "once you begin
+                // the slash, press jump"); the air massive stays locked
+                || matches!(
+                    a.state,
+                    State::Action {
+                        clip: "attack_Jump" | "attackS",
+                        ..
+                    }
                 )
                 // a hang with forward held climbs instead
                 || matches!(a.state, State::Hang { .. }) && walk.y <= 0.5)
@@ -2070,6 +2115,7 @@ fn drive(
             a.restart = true;
             a.vel = n * WALL_OUT + Vec3::Y * WALL_UP;
             a.wall = None;
+            a.tech.jump_at = f32::MIN;
             // every kick is a fresh jump: another wall run, air dash and gravity cancel
             a.wall_spent = false;
             (a.tech.kicked, a.tech.dashed, a.tech.hold_spent) = (true, false, false);
@@ -2128,7 +2174,8 @@ fn drive(
             a.restart = true;
         }
 
-        // Wall run: in the air, forward held, touching a wall (once per jump).
+        // Wall run: in the air right after a jump press, forward held, touching a wall (once per
+        // jump).
         if alive
             && (cancelable || matches!(a.state, State::Tumble { .. }))
             && !a.grounded
@@ -2139,7 +2186,7 @@ fn drive(
             && !new_dash
             && let Some((n, t)) = a.wall
             && now - t < 0.1
-            && fwd.dot(n) < 0.3
+            && let Some(along) = wall_run(fwd, n, now - a.tech.leap)
             && col
                 .raycast(
                     tf.translation + Vec3::Y * 0.05,
@@ -2148,7 +2195,7 @@ fn drive(
                 )
                 .is_none()
         {
-            let side = if fwd.dot(n) < -0.7 {
+            let side = if !along {
                 0.0
             } else if right.dot(n) > 0.0 {
                 -1.0
@@ -2201,10 +2248,15 @@ fn drive(
             });
         }
 
-        // Reload.
+        // Reload (also out of a dash: a shot no longer ends one, and the steps shoot, reload and
+        // dash again).
         let s = &load.slots[slot];
         let can_reload = !g.melee && s.magazine < g.magazine && s.reserve > 0;
-        if alive && matches!(a.state, State::Free) && can_reload && intent.reload {
+        if alive
+            && matches!(a.state, State::Free | State::Tumble { .. })
+            && can_reload
+            && intent.reload
+        {
             begin_reload(a, e, &g, s, item_name(&data.items, item), now, &mut sound);
         }
 
@@ -2223,9 +2275,12 @@ fn drive(
                     a.ready[slot] = now + g.delay * mods.map_or(1.0, |m| m.shot_delay);
                     a.shot = true;
                     if matches!(a.state, State::Tumble { .. }) {
-                        a.state = State::Free;
+                        // the dash goes on (half step: "allows the player to move while
+                        // shooting"); the shot gives the air dash back like a slash does
                         a.tech.dashed = false;
-                        debug!("t={now:.2} tech: dash shot {who} (the shot cuts the dash)");
+                        debug!(
+                            "t={now:.2} tech: dash shot {who} (fired mid-dash, the dash goes on)"
+                        );
                     }
                     {
                         let t = &mut a.tech;

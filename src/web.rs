@@ -137,14 +137,16 @@ const HELD: [Action; 9] = [
     Action::Score,
 ];
 const PAUSE: usize = 11;
-/// Taps after the held controls, cleared once read; then the aim assist strength (0..=1).
+/// Taps after the held controls, cleared once read; then the aim assist strength (0..=1); then
+/// the alternative fire, held like [`HELD`].
 const NEXT_WEAPON: usize = 12;
 const DASH: usize = 13;
 const AIM_ASSIST: usize = 14;
+const ALT: usize = 15;
 
-/// The page's touch controls (`globalThis.gunzTouch`, a `Float32Array(15)`; absent without a
+/// The page's touch controls (`globalThis.gunzTouch`, a `Float32Array(16)`; absent without a
 /// touch screen, or while the player uses a mouse and keyboard on one): `[0..2]` is the look drag in pixels since the last frame, then [`HELD`],
-/// pause, next weapon, dash and the aim assist strength (`Settings::aim_assist`). They hold
+/// pause, next weapon, dash, the aim assist strength (`Settings::aim_assist`) and alt fire. They hold
 /// actions in the [`Pad`], so they work whatever the keys are bound to. The look drag replaces
 /// the mouse motion: the browser also reports every finger's movement (the stick's too) as
 /// mouse motion. Runs right after Bevy's input systems, so a touch reaches the game in the
@@ -173,13 +175,13 @@ fn touch(
         commands.insert_resource(crate::game::TouchScreen);
     }
     let v = t.to_vec();
-    if v.len() <= DASH {
+    if v.len() <= ALT {
         return;
     }
     for i in [0, 1, NEXT_WEAPON, DASH] {
         t.set_index(i as u32, 0.0);
     }
-    for i in 2..=PAUSE {
+    for i in (2..=PAUSE).chain([ALT]) {
         match v[i] {
             3.0 => t.set_index(i as u32, 1.0),
             2.0 => t.set_index(i as u32, 0.0),
@@ -199,6 +201,7 @@ fn touch(
     }
     pad.now[Action::NextWeapon as usize] = v[NEXT_WEAPON] != 0.0;
     pad.now[Action::Dash as usize] = v[DASH] != 0.0;
+    pad.now[Action::AltFire as usize] = v[ALT] != 0.0;
     let pause = v[PAUSE] != 0.0;
     if pause != *esc {
         *esc = pause;

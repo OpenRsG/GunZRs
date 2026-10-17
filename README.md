@@ -112,8 +112,8 @@ Defaults follow the original game's `config.xml`; C, T, F5-F9, `[` and `]` are t
 |---|---|
 | Mouse | Aim (cursor is grabbed) |
 | W A S D | Run (full speed at once, stops at once); double-tap a direction to dash |
-| C | Dash in the held direction (forward if none), at run speed; on the ground it then runs out (about 4.5 m from standing); in the air it stops your rise or fall |
-| Space | Jump; touching a wall in the air: wall kick; pressed right against a wall with W held: wall run (up it when facing it, along it when you meet it at an angle) |
+| C | Dash: a 16 m/s burst in the held direction (forward if none) |
+| Space | Jump; near a wall in the air: wall kick; jumping with W held right at a wall: wall run (up it when facing it, along it at a glancing angle) |
 | Left mouse, left Ctrl | Attack (hold for automatic guns, chain slashes into a combo; with a blade, hold until the charge completes for a massive: the next slash throws it) |
 | Right mouse | Alternative fire: the sword's uppercut (flip), the dagger's lunge |
 | Left Shift | Guard (melee); a slash you block gives you a massive charge |
@@ -175,24 +175,22 @@ results pay XP and bounty; spend the bounty in the SHOP tab and equip items in I
 ### K-style and D-style techniques
 
 The original game's bug-born movement tech works as ordinary features, always on, for you and the
-bots. The movement under them (dash, air dash, wall kick, wall runs, wall hang, launches, no air
-control) is measured from public replays of the original; the cancel windows are estimates (see
-`docs/formats.md` "Replays" and "K-style and D-style techniques"). With the default loadout (katana,
-revolver, rifle) and the keys above, every technique of the usual K-style guide works; with a dagger
-in a slot (`--loadout 2000000,2050000,2100001`, or the dagger from the shop) so does the D-style one.
-Each input sequence was played headless and its log checked:
+bots (timings are estimates, see `docs/formats.md` "K-style and D-style techniques"). With the
+default loadout (katana, revolver, rifle) and the keys above, every technique of the usual K-style
+guide works; with a dagger in a slot (`--loadout 2000000,2050000,2100001`, or the dagger from the
+shop) so does the D-style one. Each input sequence was played headless and its log checked:
 
 | Technique | How |
 |---|---|
-| Dash, air dash | C or a double tap: a dash at run speed with the game's dash effect; in the air it stops your rise or fall and you keep its speed until you land (there is no steering in the air); one in the air per jump, a slash or a shot gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
+| Dash, air dash | C or a double tap: a 16 m/s burst with the game's dash effect; one in the air per jump; a slash out of a dash, a wall kick or a jump gives it back; after falling for 1.5 s you can dash in the air without limit (super dash) |
 | Dash cancel | Slash during a dash, a wall kick or a wall run to cancel it: full control, switch, guard, jump or dash again |
-| Wall climbing (wall cancel, flying) | Wall kick, slash at once (it ends the flip), dash back into the wall, kick again: about 3 m higher each time, as long as you keep it up (flash climb: slash, switch to a gun and back, dash). Mashing jump + attack alone does not climb: the kick throws you off the wall |
+| Flying / wall climbing | Wall kick, slash, jump off the wall again at any point of the slash (a jump pressed up to 0.15 s early counts); three kicks per jump, so mashing jump + attack no longer climbs a wall without end (flash climb: slash, switch to a gun and back, jump) |
 | Switch cancel | Switch weapons during an air slash: slash shot (jump, slash, switch to a gun, shoot), flash step (slash, gun, back to the blade: no draw delay) |
 | Reload shot, shimmer shot | Shoot, tap reload, switch weapon, shoot: the reload cancels the draw delay of the next weapon, a dagger or sword too |
 | Swapshot | Shoot, switch to the other gun, shoot: each gun keeps its own fire delay |
-| Gravity cancel | A slash in the air gives the air dash back and a dash stops your fall: slash, dash near the top of a jump or just before landing to hang on |
+| Gravity cancel | An air slash near the top of a jump (or falling) holds your height for a moment, once per jump; every air slash is the quick `attack_Jump` swing, rising or falling |
 | Massive | Hold attack with a sword until the charge completes (a chime, the blade glints), or block a slash: you hold a massive charge for 6 s and the next slash throws it, double damage and a knock-back; on the ground with a wind-up, in the air at once, locked in the throw until you land. A guard facing it stops it |
-| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift) with any weapon that allows wall moves: after 0.4 s you cling for as long as you hold it; jump with forward held goes straight up (hold guard again to hang higher: wall climbing), jump alone flips off, letting go drops |
+| Wall hang | In the air against a wall, or running up or along one, hold guard (Shift) with any weapon that allows wall moves: you cling for up to 1.2 s, once per jump; forward + jump climbs up to 2 m, jump alone kicks off the wall, letting go drops |
 | Butterfly | Slash, then guard before the recovery ends: the guard cancels the recovery (it roots you like any guard); jump or dash out of it |
 | Air butterfly (BF, double / triple BF) | The same guard cancels an air slash in the air: jump, dash, slash, block; jump, slash, block, dash, slash, block; or jump, slash, block three times (a jump pressed just before landing is kept) |
 | Block cancel (quadruple BF) | Guard during a slash lands the hit at once and goes straight to the guard; press guard with the next direction for the glitch rhythm |
@@ -200,9 +198,9 @@ Each input sequence was played headless and its log checked:
 | Extended flip | Dash right out of the uppercut |
 | Half step, reload half step, forbidden step | A shot during a dash fires and the dash goes on (it gives the air dash back); reload out of it, mix with slashes and switches |
 | Wall cancel, advanced wall cancel | Dash back into a wall and kick off it again (with a switch cancel in between for the advanced one) |
-| Wall run, multi wall run | Run into a wall at about 30 degrees and press jump against it: you run along it for up to 2 s, then jump off at 35 degrees; facing it, you run up it (3.3 m) and jump up (forward held) or flip back. In the air a jump against a wall at a run's angle starts another run (dash at a wall at an angle, jump) |
+| Multi wall run | Dash at a wall at about 45 degrees and jump twice: a second kick off another wall |
 | Wall hang cancel | Guard against a wall ends a wall run or a kick's flight in a hang |
-| Wall spring | Jump out of a side wall run: you leave at run speed, 35 degrees off the wall |
+| Wall spring | Jump out of a wall run: a plain kick off the wall |
 | Insta-kill | Uppercut, then switch to a gun right after it hits and shoot the airborne enemy |
 | Light step | A dash right after a slash makes no dash sound |
 
@@ -213,21 +211,19 @@ D-style (dagger; it has no guard, its alternative fire on the right mouse is the
 | Stab | Click, on the ground and in the air; it cancels dashes, wall runs and hangs like a slash does |
 | Dagger train, hop, flash | Dash + stab; jump + dash + stab; then a second dash to the other side + stab in the same jump |
 | Float step, gear tap, triple stab | Dash, stab, jump; dash, jump; float step then two more dash + stab |
-| Wall cancel, hells climb, wall raid | Kick, stab, dash back at the wall, kick again; hang, jump up with forward held, hang again; side wall run, stab, jump at once: another run |
+| Wall cancel, hells climb, wall raid | Kick, stab, dash back at the wall, kick again; hang, forward + jump, stab, jump; wall run, stab, jump at once |
 | Shimmer shot, jump shot dash | Gun, shot, reload, dagger, dash; the same after a jump |
 | Yoyo step, yoyo half and quarter, blink step | Jump with the gun, dash at the top, shot, reload; then dagger, dash to the other side, stab, dash (a shot in a dash gives the air dash back); blink step: jump with the dagger, dash, switch to the gun, shot |
-| Lunge, extended lunge | Alternative fire on the ground lunges and launches. Start it in a dash, or on the press of a direction's second tap (or Dash): the lunge slides on in the dash's direction (forward, sideways, backwards) at the dash's speed before it strikes, with twice the reach (a plain lunge reaches 2.25 m) |
+| Lunge, extended lunge | Alternative fire on the ground lunges and launches. Start it in a dash, or on the press of a direction's second tap (or Dash): the lunge slides about 5 m in the dash's direction (forward, sideways, backwards) before it strikes, with twice the reach (a target 8 m away is hit; a plain lunge reaches 2.25 m) |
 | Dagger machine, dagger juggle | Stab every 0.33 s and the target stays flinched; stab a launched target to keep it up |
 | Block tap | A guarded stab recoils you; look all the way up or down while stabbing and it does not |
 | Phantom | A dash or a lunge halves your hitbox for its duration |
 
-Not in: Walk Charge (needs the chat box) and macros, Ghost Evade, Magic Switch, Massive Tap, and the glitches whose cause the
-guides do not explain: the slide dance (moon walk), the wall-run pause on stairs, the player elevator, the dash's
-invulnerable frames.
+Not in: Walk Charge (needs the chat box) and macros, Ghost Evade, Magic Switch, Massive Tap.
 
 Bots use the techniques by skill: at skill 0 none, from 0.2 the butterfly (dagger carriers: the dagger
 train), up to the quadruple butterfly and forbidden step (yoyo half) from 0.85; the better the bot, the
-more often it tries them. They also run up a wall to reach an enemy on a ledge. Bots react
+more often it tries them. They also climb a wall with a hang to reach an enemy on a ledge. Bots react
 like people: a NORMAL bot needs about 0.35 s to guard against a swing it sees coming (0.15 s at skill 1),
 aims guns with a visible error and saves launches and juggles for the higher skills.
 
@@ -276,7 +272,7 @@ data does not hold follow public descriptions of the original and are marked **i
 | Clans | Create, rename and leave a clan in the CLAN tab (level 10, 20,000 bounty), pick one of the 52 retail emblems and 9 backgrounds, bot members, ranking against 13 generated rival clans; the Clan War mode (4 against 4, elimination rounds) shows both clans' emblems and moves the clan's points |
 | Quests | Quest, challenge quest and survival scenarios: sectors, monster waves, bosses, portals, drops and rewards; sacrifice items unlock special scenarios, a random dice roll picks the route, quest items stay in your inventory, level limits and challenge time bonuses |
 | Monsters | 76 quest monsters and 48 scripted actors from the data, with their skills (missiles, area attacks, heals, summons, critical hits, camera shake) and state-machine AI |
-| Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, wall runs up and along walls, precise wall kicks up to some otherwise unreachable floors, for bots carrying a blade; Mansion's top floor is out of their reach since the 1:1 movement pass), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall climbs) and D-style moves with a dagger (dagger flash, float step, yoyo half, E-lunge, dagger machine), grenade and smoke throws, pickups, retreating, skill level |
+| Bots | Random gamer tags (distinct within a match); path-finding over the map (stairs, jumps, drops, climbs, side wall runs, precise wall kicks up to otherwise unreachable floors such as Mansion's top, for bots carrying a blade), weapon choice by range, guarding, butterfly, K-style techniques scaled with skill (jump dash, slash shot, reload shot, swapshot, launch and juggle, wall hang climbs) and D-style moves with a dagger (dagger flash, float step, yoyo half, E-lunge, dagger machine), grenade and smoke throws, pickups, retreating, skill level |
 | Profile and shop | Offline profile with levels, XP and bounty; a shop with 215 items, their icons and stats; inventory and equipment |
 | Menus and HUD | One look throughout (`src/ui.rs`, rules in [`DESIGN.md`](DESIGN.md)): dark angular panels, an ember-orange accent, a hazard band, Big Shoulders / Chakra Petch / JetBrains Mono type. Main menu (MATCH, PLAYER, SHOP, INVENTORY, CLAN, CONTROLS, GRAPHICS & SOUND, quest picker) with F1-F7 tabs, a player strip (bounty, medals, XP bar, level badge), a map grid with the chosen map as a hero panel, segmented steppers, toasts for confirmations, an animated 3D character in a viewport with dash and slash trail demos, Enter to start and Esc twice to quit; a loading screen, and a pause menu, end screen and Blitzkrieg class select in the same style; START and RESUME are brushed orange metal (a shader with bevel, reflections and a moving highlight). HUD (size adjustable on the GRAPHICS & SOUND page): mode, map and KILLS / DEATHS / K/D top left; a compass with your bearing, your score, the clock and the leader's score (team scores in team modes) and the mode's status line top centre; name, level, segmented armour and a health bar on a dark backing whose orange trail lags behind damage bottom left, with a pulsing red edge and CRITICAL at low health; weapon slots with their keys, the weapon's name, fire mode and type, magazine, reserve, round pips and RELOAD prompts bottom right; a crosshair that opens with running, jumping and shots, hit and kill markers, floating damage numbers (orange for headshots), damage direction arcs, status effect timers, a ranked scoreboard with K/D; a sliding kill feed at the top right with weapon tags, HEADSHOT tags and clan emblems in a clan war; ELIMINATED and the victim's name under the crosshair when you kill; a combo meter at the left with its multiplier, score and "+N" popups, and multikill and killing-spree banners; an ELIMINATED death screen over a grey view with the killer, their weapon, the damage you took, the health the killer has left, their hits and a respawn bar; round banners; end-of-match screen with XP and bounty earned |
 | Sound and music | 400 of the install's 453 sound files play: weapon sounds, surface footsteps, jumps and landings, voices (pain, death, emotes, taunts, the falling scream), the announcer (kills, headshots, multikills and sprees, round countdown, start, final round, results), status-effect and flashbang sounds, quest monsters' sounds on their animation frames (`animationevent.xml`), interface sounds (hover, click, shop, toasts, pause, loading, end screen, level up), map ambience, background music with crossfades; synthesized combo, kill and killing-spree sounds and your own hit sound (`custom/hitsound.wav` next to the profile). Music, effects and announcer volume sliders on the GRAPHICS & SOUND page (0 = off), and on Linux the output device (any PulseAudio / PipeWire sink, switched live through `pactl`). Which file belongs to which event is mostly read from file names (**inferred**; list and the 53 unused files in `docs/formats.md`) |
@@ -294,7 +290,7 @@ data does not hold follow public descriptions of the original and are marked **i
 | Quest extras | The challenge quest's gacha reward items (ids from 3000000) are not in the item data, so they cannot be given; the quest `.nav` meshes miss up to 43 % of the spawn points, so monsters use the port's own floor graph; Survival Dungeon's skeletons follow the data's id scheme and a public wiki, but its XP, bounty and drops are not in the data |
 | Music choice | Neither the data nor public sources say which track belongs to which map; the port picks one of the nine in-game tracks per map (fixed, by name) |
 | Korean-only names | 22 monster names exist only in Korean in every locale; the port shows English translations of its own (marked **inferred** in `docs/formats.md`) |
-| Exact feel | Movement is measured from replays of older clients (the original, not the Steam client): run, jump, gravity, dash, wall kick, wall runs, hang and launches. The cancel windows the replays cannot show (how long after a slash a dash may come, the jump buffer) are estimates (listed as **inferred** in `docs/formats.md`) |
+| Exact feel | Movement constants come from replays of older clients, so parity with the Steam client is unproven; the dash speed, the cancel windows and the wall-climb height are estimates (listed as **inferred** in `docs/formats.md`) |
 
 ## In the browser (WebGPU)
 
@@ -386,7 +382,7 @@ part of this repository.
 
 ## Reverse-engineering framework
 
-Local, target-independent investigations with OMP, REA and Ghidra, used for static questions about
+Local, target-independent investigations with REA and Ghidra, used for static questions about
 the retail files.
 
 <details>
@@ -396,12 +392,7 @@ the retail files.
 
 ```sh
 bash scripts/setup-tools.sh
-bash scripts/agent.sh
 ```
-
-The isolated OMP profile is `reverse-engineering`. Its existing profile data was
-preserved during migration. Only REA is registered; AISandbox is denied.
-Other profiles and target installations are unchanged.
 
 ### One function
 
@@ -438,7 +429,7 @@ Original targets remain read-only and are never executed by this command.
 
 ### Several related questions
 
-Use the OMP agent and keep one REA MCP session open: open one selected input,
+Keep one REA MCP session open: open one selected input,
 follow bounded strings/xrefs/functions, reuse returned dossier facets, save a
 snapshot, then close. Warm same-session queries avoid repeated imports. The CLI
 helper is for one-off questions, not a second analysis engine.
@@ -475,13 +466,8 @@ Native paths are stored in ignored `.local/` files. The current runner is
 Linux-oriented; rootless `strace` bootstrap uses signed Arch packages. No Windows
 or macOS host verification is claimed. No system Java setting is changed.
 
-### OMP instructions
-
-`.omp/AGENTS.md` routes tasks, `.omp/RULES.md` supplies short sticky invariants,
-and `.omp/rules/re-workflow.md` describes question-first native investigations.
-Only load instructions relevant to the question. Raw evidence, proprietary input,
-databases, local paths and credentials stay outside Git. See `CREDITS.md` for
-source provenance and licenses.
+Raw evidence, proprietary input, databases, local paths and credentials stay
+outside Git. See `CREDITS.md` for source provenance and licenses.
 
 Static inspection is the default. Running an unknown target or capturing its
 runtime requires separate authorization. The local decompiler runs with your

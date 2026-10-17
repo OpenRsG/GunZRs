@@ -24,12 +24,5 @@
     Authors: the Bold (700) instance of the variable font, subset to Latin with fontTools; license
     `assets/fonts/OFL-JetBrainsMono.txt`.
 
-## Workflow reference
-
-[2010 Rust Rewrite Mashup](https://github.com/chasmlol/2010-rust-rewrite-mashup)
-at `f608f85e407ff1b7689d54a9aafdd16e95711ac4` (Apache-2.0), specifically
-`AGENT.md`, `CONTEXT.md` and `docs/INDEX.md`, informed the private evidence,
-handoff and short-document routing rules. Its runtime code was not copied.
-
 Target programs and their assets remain the property of their respective owners.
 This framework supplies no proprietary targets and grants no rights to them.

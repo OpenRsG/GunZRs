@@ -5,9 +5,7 @@
 //! blows), and falls back to the spawn point farthest from the enemy when hurt.
 
 use crate::{
-    actor::{
-        ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RADIUS, RUN, Script, TOUCH_REACH,
-    },
+    actor::{ActorData, ActorSpawner, ActorSpec, DEFAULT_LOADOUT, RUN, Script},
     col::MapCollision,
     combat::{EYE, HIT_RADIUS, is_melee, rnd, yaw_of},
     game::{
@@ -182,25 +180,25 @@ const MOVES: [(&str, f32, Need, &str); 15] = [
         "wall cancel",
         0.5,
         Need::Wall,
-        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;jump:0.1;wait:0.1;attack:0.05;wait:0.1;w+dash:0.15;jump:0.1;wait:0.4",
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.15;w+dash:0.12;w+jump:0.1;wait:0.4",
     ),
     (
         "advanced wall cancel",
         0.7,
         Need::Wall,
-        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;jump:0.1;wait:0.1;attack:0.05;wait:0.1;G:0.05;B:0.05;w+dash:0.15;jump:0.1;wait:0.4",
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;w+jump:0.1;wait:0.1;attack:0.05;wait:0.1;G:0.05;B:0.05;w+dash:0.12;w+jump:0.1;wait:0.4",
     ),
     (
         "multi wall run",
         0.7,
         Need::Wall,
-        "wait:0.15;w:0.6;w+jump:0.1;w:0.3;w+jump:0.1;w:0.05;w+jump:0.05;w:0.05;w+jump:0.05;w:0.05;w+jump:0.05;wait:0.4",
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.1;attack:0.05;wait:0.15;w+dash:0.12;w+jump:0.05;wait:0.15;w+jump:0.05;wait:0.4",
     ),
     (
         "wall hang cancel",
         0.4,
         Need::Wall,
-        "wait:0.15;w:0.4;w+jump:0.1;w+guard:0.5;guard:0.3;wait:0.2",
+        "wait:0.15;w:0.4;w+jump:0.25;w:0.6;guard:0.4;wait:0.2",
     ),
 ];
 
@@ -1207,34 +1205,16 @@ fn bot_ai(
                 way = Some((np, false, ai.path[t].node));
                 break;
             }
-            // A wall run's link (nonzero `turn`): run in on its heading and jump on touching the
-            // wall (the controller runs on a wall only for a jump pressed against it).
-            let wall_run = takeoff && kick.is_none() && ai.path[t + 1].turn != Vec3::ZERO;
-            if wall_run && near < 1.5 && (np.y - pos.y).abs() < 1.2 {
-                let h = ai.path[t + 1].turn;
-                let touching = [0.0f32, 0.5, -0.5, 1.0, -1.0, 1.57, -1.57]
-                    .iter()
-                    .any(|&a| {
-                        col.raycast(
-                            pos + Vec3::Y * 1.2,
-                            Quat::from_rotation_y(a) * h,
-                            RADIUS + TOUCH_REACH + 0.05,
-                        )
-                        .is_some()
-                    });
-                if touching {
-                    ai.next = t + 1;
-                    hop = true;
-                    ai.air = Some((h, ai.path[t + 1].hold));
-                    debug!("bot {name}: wall run from {pos:.1} heading {h:.2}");
-                } else {
-                    ai.air = Some((h, dt));
-                    way = Some((np, false, ai.path[t].node));
-                    break;
-                }
-            } else if kick.is_none() && !wall_run && near < r && (np.y - pos.y).abs() < 1.2 {
+            if kick.is_none() && near < r && (np.y - pos.y).abs() < 1.2 {
                 ai.next = t + 1;
                 hop |= takeoff;
+                if takeoff && ai.path[t + 1].turn != Vec3::ZERO {
+                    ai.air = Some((ai.path[t + 1].turn, ai.path[t + 1].hold));
+                    debug!(
+                        "bot {name}: side wall run from {pos:.1} heading {:.2}",
+                        ai.path[t + 1].turn
+                    );
+                }
             } else {
                 // Ledge guard stays on unless a drop or jump is imminent.
                 let guard = ai.path[t].kind == Kind::Walk
@@ -1358,11 +1338,9 @@ fn bot_ai(
         }
         if let Some(mut run) = ai.kick {
             let tick = (run.t / PDT + 1e-3) as u32;
-            let p = run.k.inputs(run.next, tick);
-            hop = p.jump;
-            ai.yaw = run.k.yaw(tick);
-            // forward released for the kick: a jump off a run up the wall flips back
-            walk = if p.fwd { Vec2::Y } else { Vec2::ZERO };
+            hop = (run.next..=tick).any(|n| run.k.input(n).1);
+            ai.yaw = run.k.input(tick).0;
+            walk = Vec2::Y;
             ai.kick_hold = 0.5;
             if tick >= run.k.kick {
                 (ai.next, ai.kick) = (run.step, None);
@@ -1506,14 +1484,15 @@ fn bot_ai(
         if !scripted && (ai.throw.is_some() || ai.hold > 0.0 || ai.lay.is_some()) {
             (walk, hop, ai.tap) = (Vec2::ZERO, false, None);
         }
-        // Wall climb: an enemy stands on a ledge above a bot with a blade: run into the wall and
-        // jump against it, so the run up it carries the bot over the ledge.
+        // Wall hang climb (K-style): an enemy stands on a ledge above a bot with a blade: jump
+        // at the wall, hold the guard against it in the air and forward + jump to scale it.
         ai.climb_cd -= dt;
+        let mut hang = false;
         if let Some((t, n)) = ai.climb {
             let top = target.is_none_or(|e| pos.y >= e.y + 0.1);
             if top || t > 2.0 || !melee || scripted || blind {
                 debug!(
-                    "bot {name}: wall climb {} after {t:.1} s at y {:.1}",
+                    "bot {name}: hang climb {} after {t:.1} s at y {:.1}",
                     if top { "done" } else { "gave up" },
                     pos.y
                 );
@@ -1522,11 +1501,8 @@ fn bot_ai(
                 ai.climb = Some((t + dt, n));
                 ai.yaw = yaw_of(-n);
                 walk = Vec2::Y;
-                hop = motor.grounded
-                    && col
-                        .raycast(pos + Vec3::Y * 1.2, -n, RADIUS + TOUCH_REACH + 0.05)
-                        .is_some();
-                (guard, ai.tap) = (false, None);
+                hop = !motor.grounded || t < 0.1 || ((t * 10.0) as u32).is_multiple_of(2);
+                (guard, hang, ai.tap) = (false, !motor.grounded, None);
             }
         } else if melee
             && skill >= 0.3
@@ -1539,7 +1515,7 @@ fn bot_ai(
             && ai.lay.is_none()
             && !blind
             && let Some(e) = seen
-            // the run up a wall climbs 3.3 m
+            // a jump (1.6 m) plus the hang's 2 m climb
             && (2.0..3.5).contains(&(e.y - pos.y))
             && dist < 7.0
         {
@@ -1550,7 +1526,7 @@ fn bot_ai(
                 && h.normal.dot(-d) > 0.5
             {
                 debug!(
-                    "bot {name}: wall climb towards the enemy {:.1} m above",
+                    "bot {name}: hang climb towards the enemy {:.1} m above",
                     e.y - pos.y
                 );
                 ai.climb = Some((
@@ -1667,7 +1643,7 @@ fn bot_ai(
             }
         }
         let butterfly = ai.bf.is_some();
-        intent.guard = butterfly || melee && ai.guard_t > 0.0;
+        intent.guard = butterfly || melee && ai.guard_t > 0.0 || hang;
         let engaged = seen.is_some() && dist <= reach && ai.react <= 0.0;
         ai.burst_t -= dt;
         if ai.burst_t <= 0.0 {
@@ -1905,14 +1881,7 @@ fn bot_ai(
                         script.lead = time.elapsed_secs();
                         ai.moves = Some(Moves {
                             script,
-                            // a side run meets its wall at 30 degrees
-                            yaw: wall.filter(|_| need == Need::Wall).map(|y| {
-                                if what == "multi wall run" {
-                                    y + 0.52
-                                } else {
-                                    y
-                                }
-                            }),
+                            yaw: wall.filter(|_| need == Need::Wall),
                         });
                     }
                     Err(e) => warn!("bot move {what}: {e}"),

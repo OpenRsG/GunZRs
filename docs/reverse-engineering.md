@@ -2,7 +2,7 @@
 
 ## Active stack
 
-OMP profile `reverse-engineering` -> REA 4.1.0 -> Ghidra 12.1.4 with 64-bit JDK 21.
+REA 4.1.0 -> Ghidra 12.1.4 with 64-bit JDK 21.
 `tools/package-lock.json` locks REA and the MCP client. The portable Temurin
 21.0.12.1+1 archive and its vendor SHA-256 are pinned in the native installer.
 Existing Ghidra projects are not adopted or modified by framework sessions.
@@ -86,13 +86,7 @@ Static originals are read-only. Runtime execution, dynamic capture and network
 interaction require explicit authorization. Decompiler processes run with user
 permissions; temporary copies/read-only projects are not an OS security boundary.
 
-## Workflow reference
+## References
 
-Question-local evidence, explicit handoffs and short document routing are inspired
-by `AGENT.md`, `CONTEXT.md` and `docs/INDEX.md` at reference revision
-`f608f85e407ff1b7689d54a9aafdd16e95711ac4`. Test deletion, history resets and clone
-machinery were not adopted.
-
-- [Reference workflow](https://github.com/chasmlol/2010-rust-rewrite-mashup/tree/f608f85e407ff1b7689d54a9aafdd16e95711ac4)
 - [REA Ghidra contract](https://github.com/morluto/rea#ghidra-analysis-provider)
 - [Portable JDK release](https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.12.1%2B1)
